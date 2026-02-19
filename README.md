@@ -13,6 +13,7 @@ Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (`npm install -g @anthropic-ai/claude-code`)
 - `jq` installed (`brew install jq` on macOS)
 - A git repository for your project
+- (Optional) [Gemini CLI](https://github.com/google-gemini/gemini-cli) for `--judge` mode
 
 ## Setup
 
@@ -86,6 +87,8 @@ This creates `prd.json` with user stories structured for autonomous execution.
 ```bash
 ralph [max_iterations]
 ralph --dir ~/myapp 5
+ralph --judge                   # Enable Gemini judge verification
+ralph --judge --judge-max-rejections 3
 ```
 
 Default is 10 iterations.
@@ -105,6 +108,7 @@ Ralph will:
 |------|---------|
 | `ralph.sh` | The bash loop that spawns fresh Claude Code instances |
 | `ralph-prompt.md` | Prompt template for Claude Code |
+| `judge-prompt.md` | Review template for Gemini judge |
 | `prd.json` | User stories with `passes` status (the task list) |
 | `prd.json.example` | Example PRD format for reference |
 | `progress.txt` | Append-only learnings for future iterations |
@@ -155,6 +159,25 @@ Ralph only works if there are feedback loops:
 ### Browser Verification for UI Stories
 
 Frontend stories must include "Verify in browser using rodney" in acceptance criteria. Ralph will use rodney to navigate to the page, interact with the UI, and confirm changes work.
+
+### LLM-as-Judge Verification
+
+When you run Ralph with `--judge`, an independent LLM (Gemini) reviews each story after Claude marks it complete. This creates cross-model verification:
+
+1. Claude implements a story and sets `passes: true`
+2. Gemini reviews the diff against the story's acceptance criteria
+3. If Gemini rejects it, `passes` is set back to `false` and feedback is written for the next Claude iteration
+4. Claude reads the feedback and fixes the issues
+5. After a configurable number of rejections (default: 2), the story is auto-passed and flagged `[HUMAN REVIEW NEEDED]`
+
+**Requirements:**
+- [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed and authenticated
+
+**Flags:**
+- `--judge` — Enable judge verification
+- `--judge-max-rejections <n>` — Max rejections per story before auto-passing (default: 2)
+
+**Failsafe design:** The judge is advisory. If Gemini crashes, returns bad output, or times out, Ralph treats it as a PASS and continues. The judge never blocks progress.
 
 ### Stop Condition
 
