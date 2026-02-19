@@ -8,5 +8,9 @@ progress.txt
 # OS files
 .DS_Store
 
+# Build output
+build/
+ralph
+
 #Claude
 .claude/
