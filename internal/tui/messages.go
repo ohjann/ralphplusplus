@@ -11,6 +11,7 @@ const (
 	phaseClaudeRun
 	phaseJudgeRun
 	phaseDone
+	phaseIdle
 )
 
 // Tick messages

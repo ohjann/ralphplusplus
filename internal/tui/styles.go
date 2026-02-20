@@ -78,4 +78,7 @@ var (
 	styleSuccess = lipgloss.NewStyle().
 			Foreground(colorSuccess).
 			Bold(true)
+
+	styleMuted = lipgloss.NewStyle().
+			Foreground(colorMuted)
 )

@@ -19,7 +19,9 @@ func renderHeader(m *Model, width int) string {
 			storyStr += ": " + m.currentStoryTitle
 		}
 	}
-	if m.phase == phaseDone {
+	if m.phase == phaseIdle {
+		storyStr = "Idle mode"
+	} else if m.phase == phaseDone {
 		if m.allComplete {
 			storyStr = "All stories complete!"
 		} else {
@@ -79,6 +81,8 @@ func renderPhase(p phase) string {
 		return stylePhaseActive.Render("Judge reviewing")
 	case phaseDone:
 		return stylePhaseDone.Render("Done")
+	case phaseIdle:
+		return stylePhaseDone.Render("Idle")
 	default:
 		return ""
 	}

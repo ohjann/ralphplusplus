@@ -13,6 +13,7 @@ type Config struct {
 	RalphHome          string
 	JudgeEnabled       bool
 	JudgeMaxRejections int
+	IdleMode           bool
 
 	// Derived paths
 	PRDFile        string
@@ -40,6 +41,9 @@ func Parse(args []string) (*Config, error) {
 			}
 			cfg.ProjectDir = args[i+1]
 			i += 2
+		case "--idle":
+			cfg.IdleMode = true
+			i++
 		case "--judge":
 			cfg.JudgeEnabled = true
 			i++
@@ -107,6 +111,9 @@ func Parse(args []string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	if c.IdleMode {
+		return nil
+	}
 	if _, err := os.Stat(c.PRDFile); os.IsNotExist(err) {
 		return fmt.Errorf("no prd.json found in %s\nUse the /ralph skill in Claude Code to create one from a PRD", c.ProjectDir)
 	}
@@ -170,6 +177,7 @@ Run the Ralph autonomous agent loop against a prd.json in the current directory.
 
 Options:
   --dir <path>                    Project directory containing prd.json (default: current directory)
+  --idle                          Launch TUI in idle mode (no execution, just display layout)
   --judge                         Enable LLM-as-Judge verification (requires gemini CLI)
   --judge-max-rejections <n>      Max judge rejections per story before auto-passing (default: 2)
   --help, -h                      Show this help message
@@ -181,6 +189,7 @@ Examples:
   ralph                           Run with 10 iterations, prd.json in current dir
   ralph 5                         Run with 5 iterations
   ralph --dir ~/myapp             Run against prd.json in ~/myapp
+  ralph --idle                    Launch TUI without executing the loop
   ralph --judge                   Run with Gemini judge verification
   ralph --judge --judge-max-rejections 3   Allow up to 3 rejections per story
 `)

@@ -83,6 +83,14 @@ func (m *Model) ExitCode() int {
 }
 
 func (m *Model) Init() tea.Cmd {
+	if m.cfg.IdleMode {
+		m.phase = phaseIdle
+		return tea.Batch(
+			m.spinner.Tick,
+			fastTickCmd(),
+			tickCmd(),
+		)
+	}
 	return tea.Batch(
 		archiveCmd(m.cfg),
 		m.spinner.Tick,
@@ -107,7 +115,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			return m, tea.Quit
 		case msg.String() == "q":
-			if m.confirmQuit || m.phase == phaseDone {
+			if m.confirmQuit || m.phase == phaseDone || m.phase == phaseIdle {
 				m.cancel()
 				return m, tea.Quit
 			}
@@ -361,7 +369,7 @@ func (m *Model) View() string {
 		claudeHeight,
 	)
 
-	footer := renderFooter(m.width, m.confirmQuit, m.phase == phaseDone)
+	footer := renderFooter(m.width, m.confirmQuit, m.phase == phaseDone, m.phase == phaseIdle)
 
 	output := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -378,19 +386,18 @@ func (m *Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
-func renderFooter(width int, confirmQuit bool, done bool) string {
+func renderFooter(width int, confirmQuit bool, done bool, idle bool) string {
 	if confirmQuit {
 		return "  " + styleQuitConfirm.Render("Press q again to quit, any other key to cancel")
-	}
-	if done {
-		help := styleSuccess.Render("Run complete — ") +
-			styleKey.Render("q") + styleFooter.Render(": quit  ") +
-			styleKey.Render("tab") + styleFooter.Render(": switch panel  ") +
-			styleKey.Render("j/k") + styleFooter.Render(": scroll")
-		return "  " + help
 	}
 	help := styleKey.Render("q") + styleFooter.Render(": quit  ") +
 		styleKey.Render("tab") + styleFooter.Render(": switch panel  ") +
 		styleKey.Render("j/k") + styleFooter.Render(": scroll")
+	if idle {
+		return "  " + styleMuted.Render("Idle — ") + help
+	}
+	if done {
+		return "  " + styleSuccess.Render("Run complete — ") + help
+	}
 	return "  " + help
 }
