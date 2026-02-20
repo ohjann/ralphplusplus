@@ -2,9 +2,9 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
 )
 
 func newSpinner() spinner.Model {
@@ -14,31 +14,37 @@ func newSpinner() spinner.Model {
 	return s
 }
 
-func renderLogPanel(sp spinner.Model, content string, running bool, width int) string {
-	title := stylePanelTitle.Render("Claude")
+func newClaudeViewport(width, height int) viewport.Model {
+	vp := viewport.New(width, height)
+	vp.SetContent("")
+	return vp
+}
+
+func renderClaudePanel(vp viewport.Model, sp spinner.Model, content string, running bool, active bool, width, height int) string {
+	title := stylePanelTitle.Render("Claude Activity")
+	if running {
+		title = fmt.Sprintf("%s %s", title, sp.View())
+	}
+
+	style := stylePanelBorder
+	if active {
+		style = stylePanelBorderActive
+	}
 
 	innerWidth := width - 4
 	if innerWidth < 0 {
 		innerWidth = 0
 	}
-
-	// Truncate lines to fit width
-	lines := strings.Split(content, "\n")
-	var truncated []string
-	for _, line := range lines {
-		if len(line) > innerWidth && innerWidth > 3 {
-			line = line[:innerWidth-3] + "..."
-		}
-		truncated = append(truncated, line)
-	}
-	body := strings.Join(truncated, "\n")
-
-	prefix := title
-	if running {
-		prefix = fmt.Sprintf("%s %s", title, sp.View())
+	innerHeight := height - 3
+	if innerHeight < 0 {
+		innerHeight = 0
 	}
 
-	panel := prefix + "  " + body
+	vp.Width = innerWidth
+	vp.Height = innerHeight
+	vp.SetContent(content)
 
-	return styleLogPanel.Width(innerWidth).Render(panel)
+	body := title + "\n" + vp.View()
+
+	return style.Width(innerWidth).Height(innerHeight + 1).Render(body)
 }

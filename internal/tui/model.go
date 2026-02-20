@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -17,10 +18,9 @@ import (
 const (
 	panelProgress = iota
 	panelWorktree
+	panelClaude
 	panelCount
 )
-
-const logTailLines = 5
 
 type Model struct {
 	cfg    *config.Config
@@ -38,11 +38,12 @@ type Model struct {
 	allComplete      bool
 	exitCode         int
 	startTime        time.Time
+	confirmQuit      bool
 
 	// Panel content
 	progressContent string
 	worktreeContent string
-	logContent      string
+	claudeContent   string
 
 	// Active panel for scrolling
 	activePanel int
@@ -50,27 +51,30 @@ type Model struct {
 	// Components
 	progressVP  viewport.Model
 	worktreeVP  viewport.Model
+	claudeVP    viewport.Model
 	spinner     spinner.Model
 
 	// Terminal size
 	width  int
 	height int
 
-	// Track if we should auto-scroll progress
+	// Track if we should auto-scroll
 	prevProgressLen int
+	prevClaudeLen   int
 }
 
 func NewModel(cfg *config.Config) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Model{
-		cfg:       cfg,
-		ctx:       ctx,
-		cancel:    cancel,
-		phase:     phaseInit,
-		startTime: time.Now(),
-		spinner:   newSpinner(),
+		cfg:        cfg,
+		ctx:        ctx,
+		cancel:     cancel,
+		phase:      phaseInit,
+		startTime:  time.Now(),
+		spinner:    newSpinner(),
 		progressVP: newProgressViewport(40, 10),
 		worktreeVP: newWorktreeViewport(30, 10),
+		claudeVP:   newClaudeViewport(80, 20),
 	}
 }
 
@@ -99,40 +103,61 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch {
-		case msg.String() == "q" || msg.String() == "ctrl+c":
+		case msg.String() == "ctrl+c":
 			m.cancel()
 			return m, tea.Quit
+		case msg.String() == "q":
+			if m.confirmQuit || m.phase == phaseDone {
+				m.cancel()
+				return m, tea.Quit
+			}
+			m.confirmQuit = true
+			return m, nil
 		case msg.String() == "tab":
 			m.activePanel = (m.activePanel + 1) % panelCount
 			return m, nil
 		case msg.String() == "j" || msg.String() == "down":
-			if m.activePanel == panelProgress {
+			switch m.activePanel {
+			case panelProgress:
 				m.progressVP.LineDown(1)
-			} else {
+			case panelWorktree:
 				m.worktreeVP.LineDown(1)
+			case panelClaude:
+				m.claudeVP.LineDown(1)
 			}
 			return m, nil
 		case msg.String() == "k" || msg.String() == "up":
-			if m.activePanel == panelProgress {
+			switch m.activePanel {
+			case panelProgress:
 				m.progressVP.LineUp(1)
-			} else {
+			case panelWorktree:
 				m.worktreeVP.LineUp(1)
+			case panelClaude:
+				m.claudeVP.LineUp(1)
 			}
 			return m, nil
 		case msg.String() == "pgdown":
-			if m.activePanel == panelProgress {
+			switch m.activePanel {
+			case panelProgress:
 				m.progressVP.ViewDown()
-			} else {
+			case panelWorktree:
 				m.worktreeVP.ViewDown()
+			case panelClaude:
+				m.claudeVP.ViewDown()
 			}
 			return m, nil
 		case msg.String() == "pgup":
-			if m.activePanel == panelProgress {
+			switch m.activePanel {
+			case panelProgress:
 				m.progressVP.ViewUp()
-			} else {
+			case panelWorktree:
 				m.worktreeVP.ViewUp()
+			case panelClaude:
+				m.claudeVP.ViewUp()
 			}
 			return m, nil
+		default:
+			m.confirmQuit = false
 		}
 
 	case spinner.TickMsg:
@@ -140,13 +165,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
 
-	// --- Fast tick: poll log + progress ---
+	// --- Fast tick: poll activity + progress ---
 	case fastTickMsg:
 		cmds = append(cmds, fastTickCmd())
 		cmds = append(cmds, pollProgressCmd(m.cfg.ProgressFile))
 		if m.phase == phaseClaudeRun || m.phase == phaseJudgeRun {
-			logPath := runner.LogFilePath(m.cfg.LogDir, m.iteration)
-			cmds = append(cmds, pollLogCmd(logPath, logTailLines))
+			activityPath := runner.ActivityFilePath(m.cfg.LogDir, m.iteration)
+			cmds = append(cmds, pollActivityCmd(activityPath))
 		}
 
 	// --- Slow tick: poll worktree + prd ---
@@ -169,8 +194,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case worktreeMsg:
 		m.worktreeContent = msg.Content
 
-	case logContentMsg:
-		m.logContent = msg.Content
+	case claudeActivityMsg:
+		m.claudeContent = msg.Content
+		newLen := len(msg.Content)
+		m.claudeVP.SetContent(msg.Content)
+		if newLen > m.prevClaudeLen {
+			m.claudeVP.GotoBottom()
+		}
+		m.prevClaudeLen = newLen
 
 	case prdReloadedMsg:
 		m.completedStories = msg.CompletedCount
@@ -186,19 +217,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phase = phaseDone
 			m.allComplete = true
 			m.exitCode = 0
-			return m, tea.Quit
+			return m, nil
 		}
 		m.iteration++
 		if m.iteration > m.cfg.MaxIterations {
 			m.phase = phaseDone
 			m.allComplete = false
 			m.exitCode = 1
-			return m, tea.Quit
+			return m, nil
 		}
 		m.currentStoryID = msg.StoryID
 		m.currentStoryTitle = msg.StoryTitle
 		m.phase = phaseClaudeRun
-		m.logContent = ""
+		m.claudeContent = ""
+		m.prevClaudeLen = 0
 
 		// Capture revision for judge diff baseline
 		if m.cfg.JudgeEnabled {
@@ -220,7 +252,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phase = phaseDone
 			m.allComplete = true
 			m.exitCode = 0
-			return m, tea.Quit
+			return m, nil
 		}
 
 		// Judge check
@@ -279,15 +311,21 @@ func (m *Model) View() string {
 		return "Loading..."
 	}
 
-	// Layout calculations
+	// Layout: header(3) + top panels + claude activity + footer(1)
+	// Reserve exact line counts for fixed elements
 	headerHeight := 3
 	footerHeight := 1
-	logPanelHeight := 3
-	middleHeight := m.height - headerHeight - footerHeight - logPanelHeight - 1
-
-	if middleHeight < 3 {
-		middleHeight = 3
+	available := m.height - headerHeight - footerHeight
+	if available < 10 {
+		available = 10
 	}
+
+	// Split: 35% top panels, 65% claude activity
+	topHeight := available * 35 / 100
+	if topHeight < 5 {
+		topHeight = 5
+	}
+	claudeHeight := available - topHeight
 
 	progressWidth := m.width * 60 / 100
 	worktreeWidth := m.width - progressWidth
@@ -299,7 +337,7 @@ func (m *Model) View() string {
 		m.progressVP,
 		m.activePanel == panelProgress,
 		progressWidth,
-		middleHeight,
+		topHeight,
 	)
 
 	worktreePanel := renderWorktreePanel(
@@ -307,28 +345,52 @@ func (m *Model) View() string {
 		m.worktreeContent,
 		m.activePanel == panelWorktree,
 		worktreeWidth,
-		middleHeight,
+		topHeight,
 	)
 
-	middle := lipgloss.JoinHorizontal(lipgloss.Top, progressPanel, worktreePanel)
+	topRow := lipgloss.JoinHorizontal(lipgloss.Top, progressPanel, worktreePanel)
 
 	claudeRunning := m.phase == phaseClaudeRun || m.phase == phaseJudgeRun
-	logPanel := renderLogPanel(m.spinner, m.logContent, claudeRunning, m.width)
+	claudePanel := renderClaudePanel(
+		m.claudeVP,
+		m.spinner,
+		m.claudeContent,
+		claudeRunning,
+		m.activePanel == panelClaude,
+		m.width,
+		claudeHeight,
+	)
 
-	footer := renderFooter(m.width)
+	footer := renderFooter(m.width, m.confirmQuit, m.phase == phaseDone)
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	output := lipgloss.JoinVertical(lipgloss.Left,
 		header,
-		middle,
-		logPanel,
+		topRow,
+		claudePanel,
 		footer,
 	)
+
+	// Clamp to exactly terminal height to prevent scrolling/jitter
+	lines := strings.Split(output, "\n")
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	return strings.Join(lines, "\n")
 }
 
-func renderFooter(width int) string {
+func renderFooter(width int, confirmQuit bool, done bool) string {
+	if confirmQuit {
+		return "  " + styleQuitConfirm.Render("Press q again to quit, any other key to cancel")
+	}
+	if done {
+		help := styleSuccess.Render("Run complete — ") +
+			styleKey.Render("q") + styleFooter.Render(": quit  ") +
+			styleKey.Render("tab") + styleFooter.Render(": switch panel  ") +
+			styleKey.Render("j/k") + styleFooter.Render(": scroll")
+		return "  " + help
+	}
 	help := styleKey.Render("q") + styleFooter.Render(": quit  ") +
 		styleKey.Render("tab") + styleFooter.Render(": switch panel  ") +
 		styleKey.Render("j/k") + styleFooter.Render(": scroll")
 	return "  " + help
 }
-

@@ -36,10 +36,10 @@ func pollProgressCmd(path string) tea.Cmd {
 	}
 }
 
-func pollLogCmd(path string, lines int) tea.Cmd {
+func pollActivityCmd(activityPath string) tea.Cmd {
 	return func() tea.Msg {
-		content := runner.ReadLogTail(path, lines)
-		return logContentMsg{Content: content}
+		content := runner.ReadActivityContent(activityPath)
+		return claudeActivityMsg{Content: content}
 	}
 }
 

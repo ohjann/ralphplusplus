@@ -3,14 +3,14 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	// Colors
-	colorPrimary   = lipgloss.Color("#FF6F00") // Ralph orange
-	colorSecondary = lipgloss.Color("#4FC3F7")
-	colorMuted     = lipgloss.Color("#666666")
-	colorSuccess   = lipgloss.Color("#66BB6A")
-	colorDanger    = lipgloss.Color("#EF5350")
-	colorBorder    = lipgloss.Color("#444444")
-	colorActiveBorder = lipgloss.Color("#FF6F00")
+	// Colors — Catppuccin Mocha palette
+	colorPrimary      = lipgloss.Color("#F9E2AF") // Yellow
+	colorSecondary    = lipgloss.Color("#89B4FA") // Blue
+	colorMuted        = lipgloss.Color("#6C7086") // Overlay0
+	colorSuccess      = lipgloss.Color("#A6E3A1") // Green
+	colorDanger       = lipgloss.Color("#F38BA8") // Red
+	colorBorder       = lipgloss.Color("#585B70") // Surface2
+	colorActiveBorder = lipgloss.Color("#CBA6F7") // Mauve
 
 	// Header
 	styleTitle = lipgloss.NewStyle().
@@ -18,7 +18,7 @@ var (
 			Foreground(colorPrimary)
 
 	styleHeaderLine = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#CCCCCC"))
+			Foreground(lipgloss.Color("#BAC2DE")) // Subtext1
 
 	styleJudgeOn = lipgloss.NewStyle().
 			Foreground(colorSuccess).
@@ -70,4 +70,12 @@ var (
 
 	stylePhaseDone = lipgloss.NewStyle().
 			Foreground(colorSuccess)
+
+	styleQuitConfirm = lipgloss.NewStyle().
+				Foreground(colorDanger).
+				Bold(true)
+
+	styleSuccess = lipgloss.NewStyle().
+			Foreground(colorSuccess).
+			Bold(true)
 )

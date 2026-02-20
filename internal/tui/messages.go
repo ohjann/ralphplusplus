@@ -14,13 +14,13 @@ const (
 )
 
 // Tick messages
-type fastTickMsg struct{} // 500ms — poll log/progress
+type fastTickMsg struct{} // 500ms — poll activity/progress
 type tickMsg struct{}     // 2s — poll jj st, reload prd
 
 // Data refresh messages
 type progressContentMsg struct{ Content string }
 type worktreeMsg struct{ Content string }
-type logContentMsg struct{ Content string }
+type claudeActivityMsg struct{ Content string }
 type prdReloadedMsg struct {
 	CompletedCount int
 	TotalCount     int
