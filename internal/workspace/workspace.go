@@ -15,6 +15,10 @@ import (
 func Create(ctx context.Context, projectDir, storyID, baseDir string) (string, error) {
 	wsDir := filepath.Join(baseDir, storyID)
 
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		return "", fmt.Errorf("creating workspace base dir: %w", err)
+	}
+
 	cmd := exec.CommandContext(ctx, "jj", "workspace", "add", wsDir, "-r", "@")
 	cmd.Dir = projectDir
 	out, err := cmd.CombinedOutput()

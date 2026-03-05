@@ -120,6 +120,16 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 		return
 	}
 
+	// In parallel mode, override the stop condition — this worker only handles one story
+	prompt += fmt.Sprintf(`
+
+---
+## PARALLEL MODE
+You are running as a parallel worker. Other workers are handling other stories simultaneously.
+You are ONLY responsible for story **%s**. After completing it, stop immediately.
+Do NOT check if all stories are complete. Do NOT emit the COMPLETE signal.
+Just implement your story, commit, set passes: true, update progress.txt, and stop.`, w.StoryID)
+
 	logPath := runner.LogFilePath(wsLogDir, w.Iteration)
 	err = runner.RunClaude(w.Ctx, wsDir, prompt, logPath, runner.RunClaudeOpts{
 		Iteration: w.Iteration,

@@ -601,12 +601,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
+			// Update story counts immediately (don't wait for slow tick)
+			m.completedStories = m.coord.CompletedCount()
 		}
 		go m.coord.CleanupWorker(m.ctx, msg.WorkerID)
 		// Schedule more work
 		m.coord.ScheduleReady(m.ctx)
 		if m.coord.AllDone() {
-			if m.coord.CompletedCount() == m.totalStories {
+			// Final sync of story counts
+			m.completedStories = m.coord.CompletedCount()
+			if m.completedStories == m.totalStories {
 				return m.transitionToComplete()
 			}
 			m.phase = phaseDone

@@ -1,0 +1,46 @@
+{
+  "project": "SampleProject",
+  "branchName": "ralph/test-parallel-independent",
+  "description": "Parallel test: three independent stories that can all run concurrently",
+  "userStories": [
+    {
+      "id": "TP-001",
+      "title": "Add Multiply function",
+      "description": "As a developer, I need a Multiply function in math.go",
+      "acceptanceCriteria": [
+        "Add a Multiply(a, b int) int function to math.go that returns a * b",
+        "Add a doc comment for the function",
+        "go build ./... passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "TP-002",
+      "title": "Add string utilities",
+      "description": "As a developer, I need a new strings.go file with string helper functions",
+      "acceptanceCriteria": [
+        "Create strings.go with a Reverse(s string) string function",
+        "Add a doc comment for the function",
+        "go build ./... passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "TP-003",
+      "title": "Add greeting function",
+      "description": "As a developer, I need a Greet function that returns a greeting string",
+      "acceptanceCriteria": [
+        "Create greet.go with a Greet(name string) string function that returns 'Hello, <name>!'",
+        "Add a doc comment for the function",
+        "go build ./... passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -308,7 +309,7 @@ func (c *Coordinator) GetWorkerActivityPath(wID worker.WorkerID) string {
 	return filepath.Join(w.LogDir, fmt.Sprintf("iteration-%d-activity.log", w.Iteration))
 }
 
-// ActiveStoryIDs returns the story IDs currently being worked on.
+// ActiveStoryIDs returns the story IDs currently being worked on, sorted for stable display.
 func (c *Coordinator) ActiveStoryIDs() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -316,6 +317,7 @@ func (c *Coordinator) ActiveStoryIDs() []string {
 	for id := range c.inProgress {
 		ids = append(ids, id)
 	}
+	sort.Strings(ids)
 	return ids
 }
 

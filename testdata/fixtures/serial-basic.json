@@ -1,0 +1,35 @@
+{
+  "project": "SampleProject",
+  "branchName": "ralph/test-serial-basic",
+  "description": "Basic serial test: two independent trivial stories",
+  "userStories": [
+    {
+      "id": "TS-001",
+      "title": "Add Multiply function",
+      "description": "As a developer, I need a Multiply function in math.go",
+      "acceptanceCriteria": [
+        "Add a Multiply(a, b int) int function to math.go that returns a * b",
+        "Add a doc comment for the function",
+        "go build ./... passes",
+        "go vet ./... passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "TS-002",
+      "title": "Add math tests",
+      "description": "As a developer, I need tests for all math functions",
+      "acceptanceCriteria": [
+        "Create math_test.go with tests for Add, Subtract, and Multiply",
+        "Each function has at least 2 test cases",
+        "go test ./... passes",
+        "go vet ./... passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

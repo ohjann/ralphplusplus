@@ -1,0 +1,21 @@
+{
+  "project": "SampleProject",
+  "branchName": "ralph/test-serial-single",
+  "description": "Minimal test: single trivial story (fastest possible test)",
+  "userStories": [
+    {
+      "id": "TS-001",
+      "title": "Add Multiply function",
+      "description": "As a developer, I need a Multiply function in math.go",
+      "acceptanceCriteria": [
+        "Add a Multiply(a, b int) int function to math.go that returns a * b",
+        "Add a doc comment for the function",
+        "go build ./... passes",
+        "go vet ./... passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

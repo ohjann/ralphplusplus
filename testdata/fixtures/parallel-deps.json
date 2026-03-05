@@ -1,0 +1,48 @@
+{
+  "project": "SampleProject",
+  "branchName": "ralph/test-parallel-deps",
+  "description": "Parallel test with dependencies: story 3 depends on stories 1 and 2",
+  "userStories": [
+    {
+      "id": "TD-001",
+      "title": "Add Multiply function",
+      "description": "As a developer, I need a Multiply function in math.go",
+      "acceptanceCriteria": [
+        "Add a Multiply(a, b int) int function to math.go that returns a * b",
+        "Add a doc comment for the function",
+        "go build ./... passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "TD-002",
+      "title": "Add Divide function",
+      "description": "As a developer, I need a Divide function in math.go",
+      "acceptanceCriteria": [
+        "Add a Divide(a, b int) (int, error) function to math.go that returns a / b",
+        "Return an error if b is 0",
+        "Add a doc comment for the function",
+        "go build ./... passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "TD-003",
+      "title": "Add tests for all math functions",
+      "description": "As a developer, I need comprehensive tests for all math functions including Multiply and Divide",
+      "acceptanceCriteria": [
+        "Create math_test.go with tests for Add, Subtract, Multiply, and Divide",
+        "Test Divide with zero divisor returns error",
+        "go test ./... passes",
+        "go vet ./... passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
