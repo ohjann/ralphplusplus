@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/eoghanhynes/ralph/internal/judge"
+	"github.com/eoghanhynes/ralph/internal/quality"
 	"github.com/eoghanhynes/ralph/internal/runner"
 )
 
@@ -17,8 +18,11 @@ const (
 	phaseReview   // User reviewing generated prd.json
 	phaseDone
 	phaseIdle
-	phaseDagAnalysis // Claude Code analyzing dependencies
-	phaseParallel    // coordinator running workers
+	phaseDagAnalysis    // Claude Code analyzing dependencies
+	phaseParallel       // coordinator running workers
+	phaseQualityReview  // running quality lens reviewers
+	phaseQualityFix     // Claude fixing quality issues
+	phaseQualityPrompt  // asking user whether to continue fixing
 )
 
 // Tick messages
@@ -58,6 +62,13 @@ type fixStoryGeneratedMsg struct {
 	Err     error
 }
 type planDoneMsg struct {
+	Err error
+}
+type qualityReviewDoneMsg struct {
+	Assessment quality.Assessment
+	Err        error
+}
+type qualityFixDoneMsg struct {
 	Err error
 }
 

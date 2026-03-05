@@ -24,6 +24,12 @@ func renderHeader(m *Model, width int) string {
 		storyStr = "Generating prd.json from plan..."
 	} else if m.phase == phaseReview {
 		storyStr = "Review prd.json — press Enter to execute"
+	} else if m.phase == phaseQualityReview {
+		storyStr = fmt.Sprintf("Quality review (iteration %d)...", m.qualityIteration)
+	} else if m.phase == phaseQualityFix {
+		storyStr = fmt.Sprintf("Fixing quality issues (iteration %d)...", m.qualityIteration)
+	} else if m.phase == phaseQualityPrompt {
+		storyStr = "Issues remain — press Enter to continue, q to finish"
 	} else if m.phase == phaseDagAnalysis {
 		storyStr = "Analyzing dependencies..."
 	} else if m.currentStoryID != "" {
@@ -126,6 +132,12 @@ func renderPhase(p phase) string {
 		return stylePhaseActive.Render("◌ Analyzing DAG")
 	case phaseParallel:
 		return stylePhaseActive.Render("⚡ Parallel")
+	case phaseQualityReview:
+		return stylePhaseActive.Render("⚖ Quality Review")
+	case phaseQualityFix:
+		return stylePhaseActive.Render("⚡ Quality Fix")
+	case phaseQualityPrompt:
+		return stylePhaseActive.Render("◇ Review Prompt")
 	default:
 		return ""
 	}

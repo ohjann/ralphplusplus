@@ -19,6 +19,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/events"
 	"github.com/eoghanhynes/ralph/internal/judge"
 	"github.com/eoghanhynes/ralph/internal/prd"
+	"github.com/eoghanhynes/ralph/internal/quality"
 	"github.com/eoghanhynes/ralph/internal/runner"
 	"github.com/eoghanhynes/ralph/internal/worker"
 )
@@ -84,6 +85,10 @@ type Model struct {
 	coord            *coordinator.Coordinator
 	storyDAG         *dag.DAG
 	activeWorkerView worker.WorkerID // which worker's output to show in Claude panel
+
+	// Quality review
+	qualityIteration  int
+	lastAssessment    *quality.Assessment
 }
 
 func NewModel(cfg *config.Config, version string) *Model {
@@ -183,6 +188,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancel()
 				return m, tea.Quit
 			}
+			if m.phase == phaseQualityPrompt {
+				// User chose to skip remaining quality fixes
+				m.phase = phaseDone
+				m.allComplete = true
+				m.exitCode = 0
+				return m, nil
+			}
 			if m.confirmQuit || m.phase == phaseDone || m.phase == phaseIdle {
 				m.cancel()
 				return m, tea.Quit
@@ -247,6 +259,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.prevClaudeLen = 0
 				return m, archiveCmd(m.cfg)
 			}
+			if m.phase == phaseQualityPrompt {
+				// User chose to continue fixing
+				m.qualityIteration++
+				m.phase = phaseQualityReview
+				m.claudeContent += fmt.Sprintf("\n── Continuing quality review (iteration %d)... ──\n", m.qualityIteration)
+				m.claudeVP.SetContent(m.claudeContent)
+				m.claudeVP.GotoBottom()
+				m.prevClaudeLen = len(m.claudeContent)
+				return m, qualityReviewCmd(m.ctx, m.cfg, m.qualityIteration)
+			}
 		default:
 			m.confirmQuit = false
 			// Worker tab switching: 1-9
@@ -285,6 +307,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.phase == phaseClaudeRun {
 			cmds = append(cmds, pollStuckCmd(m.cfg.ProjectDir, m.iteration))
+		}
+		if m.phase == phaseQualityFix {
+			activityPath := filepath.Join(m.cfg.LogDir, fmt.Sprintf("quality-fix-%d-activity.log", m.qualityIteration))
+			cmds = append(cmds, pollActivityCmd(activityPath))
 		}
 		if m.phase == phaseParallel && m.coord != nil && m.activeWorkerView > 0 {
 			activityPath := m.coord.GetWorkerActivityPath(m.activeWorkerView)
@@ -356,10 +382,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case nextStoryMsg:
 		if msg.AllDone {
-			m.phase = phaseDone
-			m.allComplete = true
-			m.exitCode = 0
-			return m, nil
+			return m.transitionToComplete()
 		}
 		m.iteration++
 		if m.iteration > m.cfg.MaxIterations {
@@ -410,10 +433,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				StoryID: m.currentStoryID,
 				Summary: "All stories complete (COMPLETE signal received)",
 			})
-			m.phase = phaseDone
-			m.allComplete = true
-			m.exitCode = 0
-			return m, nil
+			return m.transitionToComplete()
 		}
 
 		// Judge check
@@ -541,13 +561,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Try to schedule more
 				m.coord.ScheduleReady(m.ctx)
 				if m.coord.AllDone() {
-					m.phase = phaseDone
-					m.allComplete = m.coord.CompletedCount() == m.totalStories
-					if m.allComplete {
-						m.exitCode = 0
-					} else {
-						m.exitCode = 1
+					if m.coord.CompletedCount() == m.totalStories {
+						return m.transitionToComplete()
 					}
+					m.phase = phaseDone
+					m.allComplete = false
+					m.exitCode = 1
 					return m, nil
 				}
 			}
@@ -587,13 +606,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Schedule more work
 		m.coord.ScheduleReady(m.ctx)
 		if m.coord.AllDone() {
-			m.phase = phaseDone
-			m.allComplete = m.coord.CompletedCount() == m.totalStories
-			if m.allComplete {
-				m.exitCode = 0
-			} else {
-				m.exitCode = 1
+			if m.coord.CompletedCount() == m.totalStories {
+				return m.transitionToComplete()
 			}
+			m.phase = phaseDone
+			m.allComplete = false
+			m.exitCode = 1
 			return m, nil
 		}
 
@@ -642,9 +660,97 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Either way, move to next iteration
 		m.phase = phaseIterating
 		cmds = append(cmds, findNextStoryCmd(m.cfg.PRDFile))
+
+	// --- Quality review messages ---
+	case qualityReviewDoneMsg:
+		if msg.Err != nil {
+			m.claudeContent += fmt.Sprintf("\n── Quality review error: %v ──\n", msg.Err)
+			m.claudeVP.SetContent(m.claudeContent)
+			m.claudeVP.GotoBottom()
+			m.prevClaudeLen = len(m.claudeContent)
+			m.phase = phaseDone
+			m.allComplete = true
+			m.exitCode = 0
+			return m, nil
+		}
+
+		m.lastAssessment = &msg.Assessment
+		summary := quality.FormatSummary(msg.Assessment)
+		m.claudeContent += "\n" + summary
+		m.judgeContent += "\n" + summary
+		m.claudeVP.SetContent(m.claudeContent)
+		m.claudeVP.GotoBottom()
+		m.prevClaudeLen = len(m.claudeContent)
+		m.judgeVP.SetContent(m.judgeContent)
+		m.judgeVP.GotoBottom()
+		m.prevJudgeLen = len(m.judgeContent)
+
+		if msg.Assessment.TotalFindings() == 0 {
+			m.claudeContent += "\n── Quality review: all clean! ──\n"
+			m.claudeVP.SetContent(m.claudeContent)
+			m.claudeVP.GotoBottom()
+			m.prevClaudeLen = len(m.claudeContent)
+			m.phase = phaseDone
+			m.allComplete = true
+			m.exitCode = 0
+			return m, nil
+		}
+
+		// Has findings — start fix phase
+		m.phase = phaseQualityFix
+		m.claudeContent += "\n── Fixing quality issues... ──\n"
+		m.claudeVP.SetContent(m.claudeContent)
+		m.claudeVP.GotoBottom()
+		m.prevClaudeLen = len(m.claudeContent)
+		cmds = append(cmds, qualityFixCmd(m.ctx, m.cfg, msg.Assessment, m.qualityIteration))
+
+	case qualityFixDoneMsg:
+		if msg.Err != nil {
+			m.claudeContent += fmt.Sprintf("\n── Quality fix error: %v ──\n", msg.Err)
+			m.claudeVP.SetContent(m.claudeContent)
+			m.claudeVP.GotoBottom()
+			m.prevClaudeLen = len(m.claudeContent)
+		}
+
+		if m.qualityIteration >= m.cfg.QualityMaxIters {
+			// Max iterations reached — prompt user
+			m.phase = phaseQualityPrompt
+			m.claudeContent += "\n── Max quality iterations reached. Press Enter to continue fixing, q to finish ──\n"
+			m.claudeVP.SetContent(m.claudeContent)
+			m.claudeVP.GotoBottom()
+			m.prevClaudeLen = len(m.claudeContent)
+			return m, nil
+		}
+
+		// Re-review
+		m.qualityIteration++
+		m.phase = phaseQualityReview
+		m.claudeContent += fmt.Sprintf("\n── Re-reviewing (iteration %d)... ──\n", m.qualityIteration)
+		m.claudeVP.SetContent(m.claudeContent)
+		m.claudeVP.GotoBottom()
+		m.prevClaudeLen = len(m.claudeContent)
+		cmds = append(cmds, qualityReviewCmd(m.ctx, m.cfg, m.qualityIteration))
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// transitionToComplete handles the "all stories done" transition.
+// If quality review is enabled and hasn't run yet, starts quality review.
+// Otherwise, transitions to phaseDone.
+func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
+	if m.cfg.QualityReview && m.qualityIteration == 0 {
+		m.qualityIteration = 1
+		m.phase = phaseQualityReview
+		m.claudeContent = "── Starting quality review ──\n"
+		m.claudeVP.SetContent(m.claudeContent)
+		m.prevClaudeLen = len(m.claudeContent)
+		return m, qualityReviewCmd(m.ctx, m.cfg, m.qualityIteration)
+	}
+	m.phase = phaseDone
+	m.allComplete = true
+	m.exitCode = 0
+	return m, nil
 }
 
 func (m *Model) handleJudgeCheck() tea.Cmd {
@@ -737,7 +843,7 @@ func (m *Model) View() string {
 
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, progressPanel, worktreePanel, judgePanel)
 
-	claudeRunning := m.phase == phaseClaudeRun || m.phase == phaseJudgeRun || m.phase == phaseParallel || m.phase == phaseDagAnalysis || m.phase == phasePlanning
+	claudeRunning := m.phase == phaseClaudeRun || m.phase == phaseJudgeRun || m.phase == phaseParallel || m.phase == phaseDagAnalysis || m.phase == phasePlanning || m.phase == phaseQualityReview || m.phase == phaseQualityFix
 	var workerTabStr string
 	if m.phase == phaseParallel && m.coord != nil {
 		workers := m.coord.Workers()
@@ -765,7 +871,7 @@ func (m *Model) View() string {
 		workerTabStr,
 	)
 
-	footer := renderFooter(m.width, m.confirmQuit, m.phase == phaseDone, m.phase == phaseIdle, m.phase == phaseParallel, m.phase == phaseReview)
+	footer := renderFooter(m.width, m.confirmQuit, m.phase == phaseDone, m.phase == phaseIdle, m.phase == phaseParallel, m.phase == phaseReview, m.phase == phaseQualityPrompt)
 
 	output := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -794,7 +900,7 @@ func clampLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bool, review bool) string {
+func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bool, review bool, qualityPrompt bool) string {
 	if confirmQuit {
 		return "  " + styleQuitConfirm.Render("Press q again to quit, any other key to cancel")
 	}
@@ -803,6 +909,13 @@ func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bo
 		styleKey.Render("j/k") + styleFooter.Render(": scroll")
 	if parallel {
 		help += "  " + styleKey.Render("1-9") + styleFooter.Render(": switch worker")
+	}
+	if qualityPrompt {
+		qpHelp := styleKey.Render("enter") + styleFooter.Render(": continue fixing  ") +
+			styleKey.Render("q") + styleFooter.Render(": finish  ") +
+			styleKey.Render("tab") + styleFooter.Render(": switch panel  ") +
+			styleKey.Render("j/k") + styleFooter.Render(": scroll")
+		return "  " + qpHelp
 	}
 	if review {
 		reviewHelp := styleKey.Render("enter") + styleFooter.Render(": execute  ") +

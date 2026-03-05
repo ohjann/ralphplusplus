@@ -16,6 +16,7 @@ import (
 	rexec "github.com/eoghanhynes/ralph/internal/exec"
 	"github.com/eoghanhynes/ralph/internal/judge"
 	"github.com/eoghanhynes/ralph/internal/prd"
+	"github.com/eoghanhynes/ralph/internal/quality"
 	"github.com/eoghanhynes/ralph/internal/runner"
 	"github.com/eoghanhynes/ralph/internal/worker"
 )
@@ -314,5 +315,29 @@ func pollWorkerActivityCmd(wID worker.WorkerID, activityPath string) tea.Cmd {
 			WorkerID: wID,
 			Content:  content,
 		}
+	}
+}
+
+func qualityReviewCmd(ctx context.Context, cfg *config.Config, iteration int) tea.Cmd {
+	return func() tea.Msg {
+		manifest, err := quality.GetDiffManifest(ctx, cfg.ProjectDir)
+		if err != nil || manifest == "" {
+			return qualityReviewDoneMsg{Err: fmt.Errorf("no changes to review: %v", err)}
+		}
+
+		lenses := quality.DefaultLenses()
+		results := quality.RunReviewsParallel(ctx, cfg.ProjectDir, cfg.LogDir, lenses, manifest, iteration, cfg.QualityWorkers)
+		assessment := quality.MergeAssessment(results, iteration)
+
+		_ = quality.WriteAssessment(cfg.ProjectDir, assessment)
+
+		return qualityReviewDoneMsg{Assessment: assessment}
+	}
+}
+
+func qualityFixCmd(ctx context.Context, cfg *config.Config, assessment quality.Assessment, iteration int) tea.Cmd {
+	return func() tea.Msg {
+		err := quality.RunFix(ctx, cfg.ProjectDir, cfg.LogDir, assessment, iteration)
+		return qualityFixDoneMsg{Err: err}
 	}
 }

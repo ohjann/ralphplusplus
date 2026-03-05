@@ -18,6 +18,9 @@ type Config struct {
 	Workers            int    // --workers N, default 1 (serial)
 	WorkspaceBase      string // default /tmp/ralph-workspaces
 	PlanFile           string // --plan <path> to generate prd.json from a plan file
+	QualityReview      bool   // --quality-review: run final quality gate after all stories pass
+	QualityWorkers     int    // --quality-workers N: parallel reviewers (default: 3)
+	QualityMaxIters    int    // --quality-max-iterations N: review-fix cycles (default: 2)
 
 	// Derived paths
 	PRDFile        string
@@ -33,6 +36,8 @@ func Parse(args []string) (*Config, error) {
 		JudgeMaxRejections: 2,
 		Workers:            1,
 		WorkspaceBase:      "/tmp/ralph-workspaces",
+		QualityWorkers:     3,
+		QualityMaxIters:    2,
 	}
 
 	i := 0
@@ -78,6 +83,35 @@ func Parse(args []string) (*Config, error) {
 			}
 			cfg.WorkspaceBase = args[i+1]
 			i += 2
+		case "--quality-review":
+			cfg.QualityReview = true
+			i++
+		case "--quality-workers":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--quality-workers requires a number")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return nil, fmt.Errorf("--quality-workers: invalid number %q", args[i+1])
+			}
+			if n < 1 {
+				n = 1
+			}
+			cfg.QualityWorkers = n
+			i += 2
+		case "--quality-max-iterations":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--quality-max-iterations requires a number")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return nil, fmt.Errorf("--quality-max-iterations: invalid number %q", args[i+1])
+			}
+			if n < 1 {
+				n = 1
+			}
+			cfg.QualityMaxIters = n
+			i += 2
 		case "--judge-max-rejections":
 			if i+1 >= len(args) {
 				return nil, fmt.Errorf("--judge-max-rejections requires a number")
@@ -114,6 +148,30 @@ func Parse(args []string) (*Config, error) {
 			}
 			if strings.HasPrefix(args[i], "--workspace-base=") {
 				cfg.WorkspaceBase = args[i][len("--workspace-base="):]
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--quality-workers=") {
+				n, err := strconv.Atoi(args[i][len("--quality-workers="):])
+				if err != nil {
+					return nil, fmt.Errorf("--quality-workers: invalid number %q", args[i][len("--quality-workers="):])
+				}
+				if n < 1 {
+					n = 1
+				}
+				cfg.QualityWorkers = n
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--quality-max-iterations=") {
+				n, err := strconv.Atoi(args[i][len("--quality-max-iterations="):])
+				if err != nil {
+					return nil, fmt.Errorf("--quality-max-iterations: invalid number %q", args[i][len("--quality-max-iterations="):])
+				}
+				if n < 1 {
+					n = 1
+				}
+				cfg.QualityMaxIters = n
 				i++
 				continue
 			}
@@ -245,6 +303,9 @@ Options:
   --judge-max-rejections <n>      Max judge rejections per story before auto-passing (default: 2)
   --workers <n>                   Number of parallel workers (default: 1 = serial)
   --workspace-base <path>         Base directory for workspaces (default: /tmp/ralph-workspaces)
+  --quality-review                Enable final quality review after all stories pass
+  --quality-workers <n>           Parallel quality reviewers (default: 3)
+  --quality-max-iterations <n>    Max review-fix cycles (default: 2)
   --help, -h                      Show this help message
 
 Arguments:
@@ -258,5 +319,6 @@ Examples:
   ralph --judge                   Run with Gemini judge verification
   ralph --judge --judge-max-rejections 3   Allow up to 3 rejections per story
   ralph --plan .claude/plans/my-plan.md   Generate prd.json from plan, then execute
+  ralph --quality-review                 Run with final quality gate after stories complete
 `)
 }

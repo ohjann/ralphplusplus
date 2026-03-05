@@ -97,6 +97,28 @@ ralph --judge --judge-max-rejections 3
 
 The judge is advisory -- if Gemini crashes or times out, Ralph treats it as a pass and continues.
 
+### Quality Review: `--quality-review`
+
+After all stories pass, an optional final quality gate runs multiple independent Claude Code reviewers, each focused on a single concern:
+
+```bash
+ralph --quality-review
+ralph --quality-review --quality-workers 5 --quality-max-iterations 3
+```
+
+1. Five "lens" reviewers run in parallel, each examining the full changeset:
+   - **Security** — injection, auth, secrets, OWASP top 10
+   - **Efficiency** — unnecessary allocations, N+1 queries, algorithmic issues
+   - **DRY-ness** — duplicated logic, reimplemented existing utilities (searches the full codebase)
+   - **Error Handling** — unchecked errors, nil dereference, edge cases, race conditions
+   - **Testing** — untested code paths, missing edge case tests
+2. Findings are merged into an assessment (`.ralph/quality/assessment-N.json`)
+3. A Claude Code instance reads the assessment and fixes issues (critical first)
+4. Re-review — the lenses run again to verify fixes and catch new issues
+5. After max iterations (default: 2), the TUI prompts: **Enter** to continue fixing, **q** to finish
+
+Each reviewer is an interactive Claude Code agent — it doesn't just read a diff paste, it explores files on demand using Read/Grep/Glob. This means it scales to any changeset size and the DRY reviewer can search the existing codebase for patterns the new code should reuse.
+
 ## CLI Reference
 
 ```
@@ -109,6 +131,9 @@ Options:
   --judge                         Enable Gemini judge verification
   --judge-max-rejections <n>      Max rejections before auto-pass (default: 2)
   --workspace-base <path>         Base directory for worker workspaces (default: /tmp/ralph-workspaces)
+  --quality-review                Enable final quality review after all stories pass
+  --quality-workers <n>           Parallel quality reviewers (default: 3)
+  --quality-max-iterations <n>    Max review-fix cycles (default: 2)
   --idle                          Launch TUI without executing (display only)
   --help, -h                      Show help
 
@@ -121,6 +146,7 @@ Examples:
   ralph --plan .claude/plans/my-plan.md         Plan, review, then execute
   ralph --workers 3                             Run up to 3 stories in parallel
   ralph --judge                                 Run with Gemini judge verification
+  ralph --quality-review                        Run with final quality gate
   ralph --plan plan.md --workers 2 --judge      Full pipeline
 ```
 
@@ -152,6 +178,7 @@ internal/
   judge/            Gemini judge integration
   archive/          Run archiving (previous prd.json + progress.txt)
   autofix/          Stuck loop detection and fix story generation
+  quality/          Final quality review gate (multi-lens reviewers)
   events/           Event log (events.jsonl)
   exec/             Shell command helpers (jj wrappers)
 ralph-prompt.md     Prompt template for Claude Code iterations
@@ -170,6 +197,7 @@ Ralph creates and manages these files in the project directory:
 | `.ralph/` | Logs, events, judge feedback, stuck detection |
 | `.ralph/logs/` | Claude output logs per iteration |
 | `.ralph/archive/` | Archived runs from previous features |
+| `.ralph/quality/` | Quality review assessments per iteration |
 
 ## prd.json Format
 
