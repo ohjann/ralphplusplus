@@ -1,18 +1,38 @@
 ---
 name: ralph
-description: "Convert PRDs to prd.json format for the Ralph autonomous agent system. Use when you have an existing PRD and need to convert it to Ralph's JSON format. Triggers on: convert this prd, turn this into ralph format, create prd.json from this, ralph json."
+description: "Convert plans to prd.json format for the Ralph autonomous agent system. Use when converting a Claude Code plan, pasted plan text, or PRD markdown into Ralph's JSON format. Triggers on: convert this plan, ralph prd, create prd.json, turn this into ralph format, ralph json."
 user-invocable: true
 ---
 
 # Ralph PRD Converter
 
-Converts existing PRDs to the prd.json format that Ralph uses for autonomous execution.
+Converts Claude Code plans, pasted plan text, or PRD markdown into the `prd.json` format that Ralph uses for autonomous execution.
 
 ---
 
-## The Job
+## Step 1: Find the Input
 
-Take a PRD (markdown file or text) and convert it to `prd.json` in your ralph directory.
+Check for input in this order:
+
+1. **Claude Code plans** -- Look in `.claude/plans/` for markdown files. If any exist, list them with timestamps and offer the most recent one as the default. The user may pick a different one.
+2. **Pasted text** -- The user may have pasted plan text directly in the conversation. Use that.
+3. **PRD markdown file** -- The user may reference a `.md` file by path. Read it.
+
+If none of the above are available, ask the user to provide a plan.
+
+---
+
+## Step 2: Where to Write prd.json
+
+**CRITICAL: Always write `prd.json` to the PROJECT ROOT directory (the current working directory).**
+
+- Correct: `./prd.json` (project root)
+- WRONG: `.claude/prd.json`
+- WRONG: `.claude/plans/prd.json`
+- WRONG: `skills/ralph/prd.json`
+- WRONG: Any subdirectory unless the user explicitly asks
+
+Before writing, confirm the project root by checking for markers like `package.json`, `go.mod`, `.git`, etc. The file goes next to those, at the top level.
 
 ---
 
@@ -22,7 +42,7 @@ Take a PRD (markdown file or text) and convert it to `prd.json` in your ralph di
 {
   "project": "[Project Name]",
   "branchName": "ralph/[feature-name-kebab-case]",
-  "description": "[Feature description from PRD title/intro]",
+  "description": "[Feature description from plan title/intro]",
   "repos": ["../other-repo"],
   "userStories": [
     {
@@ -113,7 +133,7 @@ For stories with testable logic, also include:
 "Verify in browser using rodney"
 ```
 
-Frontend stories are NOT complete until visually verified. Ralph will use the rodney to navigate to the page, interact with the UI, and confirm changes work.
+Frontend stories are NOT complete until visually verified. Ralph will use rodney to navigate to the page, interact with the UI, and confirm changes work.
 
 ---
 
@@ -125,13 +145,24 @@ Frontend stories are NOT complete until visually verified. Ralph will use the ro
 4. **All stories**: `passes: false` and empty `notes`
 5. **branchName**: Derive from feature name, kebab-case, prefixed with `ralph/`
 6. **Always add**: "Typecheck passes" to every story's acceptance criteria
-7. **Cross-repo work**: If the PRD mentions changes in multiple repositories, add a `repos` array with relative paths to the additional repos (the primary project dir is always included implicitly)
+7. **Cross-repo work**: If the plan mentions changes in multiple repositories, add a `repos` array with relative paths to the additional repos (the primary project dir is always included implicitly)
 
 ---
 
-## Splitting Large PRDs
+## Translating Claude Code Plans
 
-If a PRD has big features, split them:
+Claude Code plans (from `/plan`) often use a different structure than traditional PRDs. Here is how to translate them:
+
+- **Plan steps/phases** become individual user stories, split further if any step is too large for one iteration.
+- **Numbered task lists** within a step usually map to acceptance criteria for that story.
+- **"Consider" or "open question" notes** in the plan are informational -- incorporate the decisions into acceptance criteria, do not leave them ambiguous.
+- **File paths mentioned in the plan** are valuable context -- include them in the story description or notes so Ralph knows where to work.
+
+---
+
+## Splitting Large Plans
+
+If a plan has big features, split them:
 
 **Original:**
 > "Add user notification system"
@@ -150,20 +181,18 @@ Each is one focused change that can be completed and verified independently.
 
 ## Example
 
-**Input PRD:**
+**Input (Claude Code plan from `.claude/plans/task-status.md`):**
 ```markdown
 # Task Status Feature
 
-Add ability to mark tasks with different statuses.
-
-## Requirements
-- Toggle between pending/in-progress/done on task list
-- Filter list by status
-- Show status badge on each task
-- Persist status in database
+## Steps
+1. Add status column to tasks table (pending/in_progress/done)
+2. Show status badge on each task card with color coding
+3. Add toggle to change status inline from the task list
+4. Add filter dropdown to filter tasks by status
 ```
 
-**Output prd.json:**
+**Output `prd.json` (written to project root):**
 ```json
 {
   "project": "TaskApp",
@@ -236,7 +265,7 @@ Add ability to mark tasks with different statuses.
 
 **Before writing a new prd.json, check if there is an existing one from a different feature:**
 
-1. Read the current `prd.json` if it exists
+1. Read the current `prd.json` (at project root) if it exists
 2. Check if `branchName` differs from the new feature's branch name
 3. If different AND `progress.txt` has content beyond the header:
    - Create archive folder: `archive/YYYY-MM-DD-feature-name/`
@@ -251,6 +280,7 @@ Add ability to mark tasks with different statuses.
 
 Before writing prd.json, verify:
 
+- [ ] **Output path is project root** (not `.claude/`, not `skills/`, not any subdirectory)
 - [ ] **Previous run archived** (if prd.json exists with different branchName, archive it first)
 - [ ] Each story is completable in one iteration (small enough)
 - [ ] Stories are ordered by dependency (schema to backend to UI)

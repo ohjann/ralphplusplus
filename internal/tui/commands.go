@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -72,6 +73,87 @@ func reloadPRDCmd(path string) tea.Cmd {
 			AllComplete:    p.AllComplete(),
 			CurrentStoryID: storyID,
 		}
+	}
+}
+
+func planCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		planContent, err := os.ReadFile(cfg.PlanFile)
+		if err != nil {
+			return planDoneMsg{Err: fmt.Errorf("reading plan file: %w", err)}
+		}
+
+		prompt := fmt.Sprintf(`You are generating a prd.json file from a plan. Read the plan below, explore the codebase for context, then generate prd.json.
+
+CRITICAL: Write prd.json to the current working directory using the Write tool. Do NOT write it anywhere else. The file MUST be named exactly "prd.json".
+
+## prd.json Format
+
+The file must be valid JSON with this exact structure:
+
+{
+  "project": "<short project name>",
+  "branchName": "<kebab-case branch name for this work>",
+  "description": "<one-line description of the work>",
+  "userStories": [
+    {
+      "id": "<PREFIX-001>",
+      "title": "<short title>",
+      "description": "<As a [user], I want [feature] so that [benefit]>",
+      "acceptanceCriteria": [
+        "Specific verifiable criterion",
+        "Another criterion",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
+
+Story IDs should use a short prefix derived from the project name (e.g., "TP-001" for "Task Priority").
+Priority numbers determine execution order: 1 runs first, 2 runs second, etc.
+All stories must have "passes": false and "notes": "".
+
+## Story Sizing Rules
+- Each story must be completable in ONE Claude Code context window (one focused session)
+- Right-sized examples: add a DB column, add a UI component, update server logic, add an API endpoint
+- Too big (MUST split): "build entire dashboard", "add authentication", "create full CRUD" — split these into smaller stories
+- When in doubt, make stories smaller rather than larger
+
+## Story Ordering
+- Schema/database changes first, then backend/API, then UI/frontend
+- Earlier stories must NOT depend on later ones
+- Each story should be independently testable after completion
+
+## Acceptance Criteria
+- Must be specific and verifiable, not vague
+- BAD: "Works correctly", "Is fast", "Looks good"
+- GOOD: "Returns 200 with JSON body containing user object", "Button shows confirmation dialog before deleting"
+- Always include "Typecheck passes" for every story
+- UI stories: always include "Verify in browser"
+
+## The Plan
+
+%s
+`, string(planContent))
+
+		// Ensure log directory exists
+		_ = os.MkdirAll(cfg.LogDir, 0o755)
+
+		logPath := filepath.Join(cfg.LogDir, "plan.log")
+		err = runner.RunClaude(ctx, cfg.ProjectDir, prompt, logPath)
+		if err != nil {
+			return planDoneMsg{Err: fmt.Errorf("claude plan generation failed: %w", err)}
+		}
+
+		// Verify prd.json was actually created
+		if _, statErr := os.Stat(cfg.PRDFile); os.IsNotExist(statErr) {
+			return planDoneMsg{Err: fmt.Errorf("claude did not generate prd.json")}
+		}
+
+		return planDoneMsg{}
 	}
 }
 

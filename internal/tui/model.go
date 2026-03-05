@@ -117,6 +117,15 @@ func (m *Model) Init() tea.Cmd {
 			tickCmd(),
 		)
 	}
+	if m.cfg.PlanFile != "" {
+		m.phase = phasePlanning
+		return tea.Batch(
+			planCmd(m.ctx, m.cfg),
+			m.spinner.Tick,
+			fastTickCmd(),
+			tickCmd(),
+		)
+	}
 	return tea.Batch(
 		archiveCmd(m.cfg),
 		m.spinner.Tick,
@@ -170,6 +179,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancel()
 			return m, tea.Quit
 		case msg.String() == "q":
+			if m.phase == phaseReview {
+				m.cancel()
+				return m, tea.Quit
+			}
 			if m.confirmQuit || m.phase == phaseDone || m.phase == phaseIdle {
 				m.cancel()
 				return m, tea.Quit
@@ -227,6 +240,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.claudeVP.ViewUp()
 			}
 			return m, nil
+		case msg.String() == "enter":
+			if m.phase == phaseReview {
+				m.phase = phaseInit
+				m.claudeContent = ""
+				m.prevClaudeLen = 0
+				return m, archiveCmd(m.cfg)
+			}
 		default:
 			m.confirmQuit = false
 			// Worker tab switching: 1-9
@@ -255,6 +275,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.animatedFill, m.fillVelocity = m.progressSpring.Update(
 			m.animatedFill, m.fillVelocity, target,
 		)
+		if m.phase == phasePlanning {
+			activityPath := filepath.Join(m.cfg.LogDir, "plan-activity.log")
+			cmds = append(cmds, pollActivityCmd(activityPath))
+		}
 		if m.phase == phaseClaudeRun || m.phase == phaseJudgeRun {
 			activityPath := runner.ActivityFilePath(m.cfg.LogDir, m.iteration)
 			cmds = append(cmds, pollActivityCmd(activityPath))
@@ -304,6 +328,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.totalStories = msg.TotalCount
 
 	// --- Phase transitions ---
+	case planDoneMsg:
+		if msg.Err != nil {
+			m.claudeContent += fmt.Sprintf("\n── Plan Error ──\n%s\n", msg.Err)
+			m.claudeVP.SetContent(m.claudeContent)
+			m.claudeVP.GotoBottom()
+			m.prevClaudeLen = len(m.claudeContent)
+			m.phase = phaseDone
+			m.exitCode = 1
+			return m, nil
+		}
+		m.phase = phaseReview
+		m.claudeContent += "\n── prd.json generated. Review it, then press Enter to execute (q to quit) ──\n"
+		m.claudeVP.SetContent(m.claudeContent)
+		m.claudeVP.GotoBottom()
+		m.prevClaudeLen = len(m.claudeContent)
+		return m, nil
+
 	case archiveDoneMsg:
 		if m.cfg.Workers > 1 {
 			m.phase = phaseDagAnalysis
@@ -696,7 +737,7 @@ func (m *Model) View() string {
 
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, progressPanel, worktreePanel, judgePanel)
 
-	claudeRunning := m.phase == phaseClaudeRun || m.phase == phaseJudgeRun || m.phase == phaseParallel || m.phase == phaseDagAnalysis
+	claudeRunning := m.phase == phaseClaudeRun || m.phase == phaseJudgeRun || m.phase == phaseParallel || m.phase == phaseDagAnalysis || m.phase == phasePlanning
 	var workerTabStr string
 	if m.phase == phaseParallel && m.coord != nil {
 		workers := m.coord.Workers()
@@ -724,7 +765,7 @@ func (m *Model) View() string {
 		workerTabStr,
 	)
 
-	footer := renderFooter(m.width, m.confirmQuit, m.phase == phaseDone, m.phase == phaseIdle, m.phase == phaseParallel)
+	footer := renderFooter(m.width, m.confirmQuit, m.phase == phaseDone, m.phase == phaseIdle, m.phase == phaseParallel, m.phase == phaseReview)
 
 	output := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -753,7 +794,7 @@ func clampLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bool) string {
+func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bool, review bool) string {
 	if confirmQuit {
 		return "  " + styleQuitConfirm.Render("Press q again to quit, any other key to cancel")
 	}
@@ -762,6 +803,13 @@ func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bo
 		styleKey.Render("j/k") + styleFooter.Render(": scroll")
 	if parallel {
 		help += "  " + styleKey.Render("1-9") + styleFooter.Render(": switch worker")
+	}
+	if review {
+		reviewHelp := styleKey.Render("enter") + styleFooter.Render(": execute  ") +
+			styleKey.Render("q") + styleFooter.Render(": quit  ") +
+			styleKey.Render("tab") + styleFooter.Render(": switch panel  ") +
+			styleKey.Render("j/k") + styleFooter.Render(": scroll")
+		return "  " + reviewHelp
 	}
 	if idle {
 		return "  " + styleMuted.Render("Idle — ") + help

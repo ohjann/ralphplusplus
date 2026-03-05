@@ -13,6 +13,8 @@ const (
 	phaseIterating
 	phaseClaudeRun
 	phaseJudgeRun
+	phasePlanning // Claude generating prd.json from plan file
+	phaseReview   // User reviewing generated prd.json
 	phaseDone
 	phaseIdle
 	phaseDagAnalysis // Claude Code analyzing dependencies
@@ -54,6 +56,9 @@ type stuckDetectedMsg struct {
 type fixStoryGeneratedMsg struct {
 	StoryID string
 	Err     error
+}
+type planDoneMsg struct {
+	Err error
 }
 
 // Terminal size

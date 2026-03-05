@@ -17,6 +17,7 @@ type Config struct {
 	IdleMode           bool
 	Workers            int    // --workers N, default 1 (serial)
 	WorkspaceBase      string // default /tmp/ralph-workspaces
+	PlanFile           string // --plan <path> to generate prd.json from a plan file
 
 	// Derived paths
 	PRDFile        string
@@ -65,6 +66,12 @@ func Parse(args []string) (*Config, error) {
 			}
 			cfg.Workers = n
 			i += 2
+		case "--plan":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--plan requires a file path argument")
+			}
+			cfg.PlanFile = args[i+1]
+			i += 2
 		case "--workspace-base":
 			if i+1 >= len(args) {
 				return nil, fmt.Errorf("--workspace-base requires a path")
@@ -85,6 +92,11 @@ func Parse(args []string) (*Config, error) {
 			// Check for --key=value forms
 			if len(args[i]) > 6 && args[i][:6] == "--dir=" {
 				cfg.ProjectDir = args[i][6:]
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--plan=") {
+				cfg.PlanFile = args[i][len("--plan="):]
 				i++
 				continue
 			}
@@ -155,7 +167,16 @@ func (c *Config) Validate() error {
 	if c.IdleMode {
 		return nil
 	}
-	if _, err := os.Stat(c.PRDFile); os.IsNotExist(err) {
+	if c.PlanFile != "" {
+		// Resolve plan file path
+		if !filepath.IsAbs(c.PlanFile) {
+			c.PlanFile = filepath.Join(c.ProjectDir, c.PlanFile)
+		}
+		if _, err := os.Stat(c.PlanFile); os.IsNotExist(err) {
+			return fmt.Errorf("plan file not found: %s", c.PlanFile)
+		}
+		// Don't require prd.json when --plan is used (it will be generated)
+	} else if _, err := os.Stat(c.PRDFile); os.IsNotExist(err) {
 		return fmt.Errorf("no prd.json found in %s\nUse the /ralph skill in Claude Code to create one from a PRD", c.ProjectDir)
 	}
 
@@ -218,6 +239,7 @@ Run the Ralph autonomous agent loop against a prd.json in the current directory.
 
 Options:
   --dir <path>                    Project directory containing prd.json (default: current directory)
+  --plan <path>                   Generate prd.json from a plan file before executing
   --idle                          Launch TUI in idle mode (no execution, just display layout)
   --judge                         Enable LLM-as-Judge verification (requires gemini CLI)
   --judge-max-rejections <n>      Max judge rejections per story before auto-passing (default: 2)
@@ -235,5 +257,6 @@ Examples:
   ralph --idle                    Launch TUI without executing the loop
   ralph --judge                   Run with Gemini judge verification
   ralph --judge --judge-max-rejections 3   Allow up to 3 rejections per story
+  ralph --plan .claude/plans/my-plan.md   Generate prd.json from plan, then execute
 `)
 }

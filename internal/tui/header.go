@@ -20,6 +20,10 @@ func renderHeader(m *Model, width int) string {
 		} else {
 			storyStr = "Scheduling..."
 		}
+	} else if m.phase == phasePlanning {
+		storyStr = "Generating prd.json from plan..."
+	} else if m.phase == phaseReview {
+		storyStr = "Review prd.json — press Enter to execute"
 	} else if m.phase == phaseDagAnalysis {
 		storyStr = "Analyzing dependencies..."
 	} else if m.currentStoryID != "" {
@@ -110,6 +114,10 @@ func renderPhase(p phase) string {
 		return stylePhaseActive.Render("⚡ Claude running")
 	case phaseJudgeRun:
 		return stylePhaseActive.Render("⚖ Judge reviewing")
+	case phasePlanning:
+		return stylePhaseActive.Render("✦ Planning")
+	case phaseReview:
+		return stylePhaseActive.Render("◇ Review")
 	case phaseDone:
 		return stylePhaseDone.Render("✓ Complete")
 	case phaseIdle:

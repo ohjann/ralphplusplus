@@ -2,214 +2,242 @@
 
 ![Ralph](ralph.webp)
 
-Ralph is an autonomous AI agent loop that runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) repeatedly until all PRD items are complete. Each iteration is a fresh instance with clean context. Memory persists via git history, `progress.txt`, and `prd.json`.
+Ralph is an autonomous AI agent that runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) in a loop until all user stories in a PRD are complete. Each iteration gets a fresh context window. Memory persists via version control history, `progress.txt`, and `prd.json`.
 
 Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 
-[Read my in-depth article on how I use Ralph](https://x.com/ryancarson/status/2008548371712135632)
-
 ## Prerequisites
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (`npm install -g @anthropic-ai/claude-code`)
-- `jq` installed (`brew install jq` on macOS)
-- A git repository for your project
-- (Optional) [Gemini CLI](https://github.com/google-gemini/gemini-cli) for `--judge` mode
+- **Go 1.25+** (for building from source)
+- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated (`npm install -g @anthropic-ai/claude-code`)
+- **[jj (Jujutsu)](https://martinvonz.github.io/jj/)** for version control (Ralph uses jj, not git)
+- (Optional) **[Gemini CLI](https://github.com/google-gemini/gemini-cli)** for `--judge` mode
 
-## Setup
-
-### Option 1: Copy to your project
-
-Copy the ralph files into your project:
+## Building
 
 ```bash
-# From your project root
-mkdir -p scripts/ralph
-cp /path/to/ralph/ralph.sh scripts/ralph/
-cp /path/to/ralph/ralph-prompt.md scripts/ralph/ralph-prompt.md
-chmod +x scripts/ralph/ralph.sh
+make build
 ```
 
-### Option 2: Install skills globally
-
-Copy the skills to your Claude config for use across all projects:
+This produces `build/ralph` with the current git version baked in. Add it to your PATH or create an alias:
 
 ```bash
-cp -r skills/prd ~/.claude/skills/
-cp -r skills/ralph ~/.claude/skills/
+alias ralph='/path/to/ralph/build/ralph'
 ```
 
-### Option 3: Use as Claude Code Marketplace
-
-Add the Ralph marketplace to Claude Code:
+## Quick Start
 
 ```bash
-/plugin marketplace add snarktank/ralph
+# 1. Create a plan using Claude Code's built-in /plan command
+#    (this saves to .claude/plans/)
+
+# 2. Generate prd.json from the plan and execute
+ralph --plan .claude/plans/my-plan.md
+
+# Or if you already have a prd.json:
+ralph
 ```
-
-Then install the skills:
-
-```bash
-/plugin install ralph-skills@ralph-marketplace
-```
-
-Available skills after installation:
-- `/prd` - Generate Product Requirements Documents
-- `/ralph` - Convert PRDs to prd.json format
-
-Skills are automatically invoked when you ask Claude to:
-- "create a prd", "write prd for", "plan this feature"
-- "convert this prd", "turn into ralph format", "create prd.json"
 
 ## Workflow
 
-### 1. Create a PRD
+### Planning: `--plan`
 
-Use the PRD skill to generate a detailed requirements document:
-
-```
-Load the prd skill and create a PRD for [your feature description]
-```
-
-Answer the clarifying questions. The skill saves output to `tasks/prd-[feature-name].md`.
-
-### 2. Convert PRD to Ralph format
-
-Use the Ralph skill to convert the markdown PRD to JSON:
-
-```
-Load the ralph skill and convert tasks/prd-[feature-name].md to prd.json
-```
-
-This creates `prd.json` with user stories structured for autonomous execution.
-
-### 3. Run Ralph
+The recommended flow uses Claude Code's built-in `/plan` command to create a plan, then Ralph converts it to `prd.json` and executes.
 
 ```bash
-ralph [max_iterations]
-ralph --dir ~/myapp 5
-ralph --judge                   # Enable Gemini judge verification
+ralph --plan .claude/plans/my-plan.md
+```
+
+This launches the TUI in a planning phase:
+
+1. Claude reads the plan file and explores the codebase
+2. Generates `prd.json` in the project root (you can watch progress in the TUI)
+3. **Pauses for review** -- the TUI shows "Review prd.json -- press Enter to execute"
+4. Open `prd.json` in another terminal, review and edit if needed
+5. Press `Enter` to start execution, or `q` to quit
+
+You can also generate `prd.json` manually using the `/ralph` skill in Claude Code, or write it by hand.
+
+### Execution
+
+Once `prd.json` exists, Ralph loops:
+
+1. Picks the highest-priority story where `passes: false`
+2. Spawns a fresh Claude Code instance to implement that story
+3. Claude runs quality checks (typecheck, tests, etc.)
+4. If checks pass, commits with jj and marks the story `passes: true`
+5. Appends learnings to `progress.txt`
+6. Repeats until all stories pass or max iterations reached
+
+### Parallel Execution: `--workers`
+
+When stories are independent, Ralph can run them in parallel:
+
+```bash
+ralph --workers 3
+```
+
+This adds a DAG analysis step where Claude examines the codebase to determine which stories depend on each other, then schedules independent stories across N workers. Each worker runs in an isolated jj workspace.
+
+Use `1-9` keys in the TUI to switch between worker output panels.
+
+### Judge Mode: `--judge`
+
+An independent LLM (Gemini) reviews each story after Claude marks it complete:
+
+```bash
+ralph --judge
 ralph --judge --judge-max-rejections 3
 ```
 
-Default is 10 iterations.
+1. Claude implements a story and sets `passes: true`
+2. Gemini reviews the diff against acceptance criteria
+3. If rejected, `passes` resets to `false` and feedback is written for the next iteration
+4. After N rejections (default: 2), the story is auto-passed with `[HUMAN REVIEW NEEDED]`
 
-Ralph will:
-1. Pick the highest priority story where `passes: false`
-2. Implement that single story
-3. Run quality checks (typecheck, tests)
-4. Commit if checks pass
-5. Update `prd.json` to mark story as `passes: true`
-6. Append learnings to `progress.txt`
-7. Repeat until all stories pass or max iterations reached
+The judge is advisory -- if Gemini crashes or times out, Ralph treats it as a pass and continues.
 
-## Key Files
+## CLI Reference
+
+```
+Usage: ralph [options] [max_iterations]
+
+Options:
+  --dir <path>                    Project directory (default: current directory)
+  --plan <path>                   Generate prd.json from a plan file, review, then execute
+  --workers <n>                   Parallel workers (default: 1 = serial)
+  --judge                         Enable Gemini judge verification
+  --judge-max-rejections <n>      Max rejections before auto-pass (default: 2)
+  --workspace-base <path>         Base directory for worker workspaces (default: /tmp/ralph-workspaces)
+  --idle                          Launch TUI without executing (display only)
+  --help, -h                      Show help
+
+Arguments:
+  max_iterations                  Max loop iterations (default: 1.5x story count)
+
+Examples:
+  ralph                                         Run all stories serially
+  ralph 5                                       Run with max 5 iterations
+  ralph --plan .claude/plans/my-plan.md         Plan, review, then execute
+  ralph --workers 3                             Run up to 3 stories in parallel
+  ralph --judge                                 Run with Gemini judge verification
+  ralph --plan plan.md --workers 2 --judge      Full pipeline
+```
+
+## TUI Keybindings
+
+| Key | Action |
+|-----|--------|
+| `q` | Quit (press twice during execution) |
+| `Ctrl+C` | Force quit (cancels all workers) |
+| `Tab` | Switch active panel |
+| `j/k` | Scroll active panel |
+| `PgUp/PgDn` | Page scroll |
+| `1-9` | Switch worker view (parallel mode) |
+| `Enter` | Start execution (review phase only) |
+
+## Project Structure
+
+```
+cmd/ralph/          Entry point
+internal/
+  config/           CLI flag parsing and configuration
+  tui/              Bubbletea TUI (model, views, commands, styles)
+  runner/           Claude Code CLI integration and output streaming
+  prd/              prd.json loading, saving, story management
+  coordinator/      Parallel worker scheduling and state sync
+  worker/           Worker goroutine lifecycle
+  dag/              Dependency analysis via Claude CLI
+  workspace/        jj workspace create/destroy/merge
+  judge/            Gemini judge integration
+  archive/          Run archiving (previous prd.json + progress.txt)
+  autofix/          Stuck loop detection and fix story generation
+  events/           Event log (events.jsonl)
+  exec/             Shell command helpers (jj wrappers)
+ralph-prompt.md     Prompt template for Claude Code iterations
+judge-prompt.md     Review template for Gemini judge
+skills/ralph/       Claude Code skill for converting plans to prd.json
+```
+
+## Key Files (In Your Project)
+
+Ralph creates and manages these files in the project directory:
 
 | File | Purpose |
 |------|---------|
-| `ralph.sh` | The bash loop that spawns fresh Claude Code instances |
-| `ralph-prompt.md` | Prompt template for Claude Code |
-| `judge-prompt.md` | Review template for Gemini judge |
-| `prd.json` | User stories with `passes` status (the task list) |
-| `prd.json.example` | Example PRD format for reference |
+| `prd.json` | User stories with `passes` status -- the task list |
 | `progress.txt` | Append-only learnings for future iterations |
-| `skills/prd/` | Skill for generating PRDs |
-| `skills/ralph/` | Skill for converting PRDs to JSON |
-| `.claude-plugin/` | Plugin manifest for Claude Code marketplace discovery |
+| `.ralph/` | Logs, events, judge feedback, stuck detection |
+| `.ralph/logs/` | Claude output logs per iteration |
+| `.ralph/archive/` | Archived runs from previous features |
 
-## Critical Concepts
+## prd.json Format
 
-### Each Iteration = Fresh Context
-
-Each iteration spawns a **new Claude Code instance** with clean context. The only memory between iterations is:
-- Git history (commits from previous iterations)
-- `progress.txt` (learnings and context)
-- `prd.json` (which stories are done)
-
-### Small Tasks
-
-Each PRD item should be small enough to complete in one context window. If a task is too big, the LLM runs out of context before finishing and produces poor code.
-
-Right-sized stories:
-- Add a database column and migration
-- Add a UI component to an existing page
-- Update a server action with new logic
-- Add a filter dropdown to a list
-
-Too big (split these):
-- "Build the entire dashboard"
-- "Add authentication"
-- "Refactor the API"
-
-### CLAUDE.md Updates Are Critical
-
-After each iteration, Ralph updates the relevant `CLAUDE.md` files with learnings. This is key because Claude Code automatically reads these files, so future iterations (and future human developers) benefit from discovered patterns, gotchas, and conventions.
-
-Examples of what to add to CLAUDE.md:
-- Patterns discovered ("this codebase uses X for Y")
-- Gotchas ("do not forget to update Z when changing W")
-- Useful context ("the settings panel is in component X")
-
-### Feedback Loops
-
-Ralph only works if there are feedback loops:
-- Typecheck catches type errors
-- Tests verify behavior
-- CI must stay green (broken code compounds across iterations)
-
-### Browser Verification for UI Stories
-
-Frontend stories must include "Verify in browser using rodney" in acceptance criteria. Ralph will use rodney to navigate to the page, interact with the UI, and confirm changes work.
-
-### LLM-as-Judge Verification
-
-When you run Ralph with `--judge`, an independent LLM (Gemini) reviews each story after Claude marks it complete. This creates cross-model verification:
-
-1. Claude implements a story and sets `passes: true`
-2. Gemini reviews the diff against the story's acceptance criteria
-3. If Gemini rejects it, `passes` is set back to `false` and feedback is written for the next Claude iteration
-4. Claude reads the feedback and fixes the issues
-5. After a configurable number of rejections (default: 2), the story is auto-passed and flagged `[HUMAN REVIEW NEEDED]`
-
-**Requirements:**
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed and authenticated
-
-**Flags:**
-- `--judge` — Enable judge verification
-- `--judge-max-rejections <n>` — Max rejections per story before auto-passing (default: 2)
-
-**Failsafe design:** The judge is advisory. If Gemini crashes, returns bad output, or times out, Ralph treats it as a PASS and continues. The judge never blocks progress.
-
-### Stop Condition
-
-When all stories have `passes: true`, Ralph outputs `<promise>COMPLETE</promise>` and the loop exits.
-
-## Debugging
-
-Check current state:
-
-```bash
-# See which stories are done
-cat prd.json | jq '.userStories[] | {id, title, passes}'
-
-# See learnings from previous iterations
-cat progress.txt
-
-# Check git history
-git log --oneline -10
+```json
+{
+  "project": "MyApp",
+  "branchName": "ralph/feature-name",
+  "description": "Short description of the work",
+  "userStories": [
+    {
+      "id": "AB-001",
+      "title": "Add status field to tasks table",
+      "description": "As a developer, I need to store task status.",
+      "acceptanceCriteria": [
+        "Add status column with default 'pending'",
+        "Migration runs successfully",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
 ```
 
-## Customizing the Prompt
+### Story Sizing
 
-After copying `ralph-prompt.md` to your project, customize it:
-- Add project-specific quality check commands
-- Include codebase conventions
-- Add common gotchas for your stack
+Each story must be completable in **one context window**. If Claude runs out of context mid-story, it produces broken code.
 
-## Archiving
+**Right-sized:** add a DB column, add a UI component, update server logic, add a filter
+**Too big (split these):** "build the entire dashboard", "add authentication", "refactor the API"
 
-Ralph automatically archives previous runs when you start a new feature (different `branchName`). Archives are saved to `archive/YYYY-MM-DD-feature-name/`.
+### Story Ordering
+
+Stories execute in priority order. Earlier stories must not depend on later ones:
+
+1. Schema/database changes
+2. Backend/API logic
+3. UI components
+4. Dashboards/aggregation views
+
+## How It Works
+
+### Memory Between Iterations
+
+Each iteration is a fresh Claude Code instance. The only memory is:
+
+- **jj history** -- commits from previous iterations
+- **`progress.txt`** -- learnings, patterns, and context
+- **`prd.json`** -- which stories are done
+- **`CLAUDE.md`** -- Ralph updates these with discovered patterns
+
+### Stuck Detection
+
+If Claude gets stuck in a loop (repeatedly running the same command or editing the same file), Ralph:
+
+1. Detects the pattern via tool call analysis
+2. Cancels the current Claude process
+3. Generates a targeted "fix story" and inserts it before the stuck story
+4. Continues with the fix story in the next iteration
+
+### Archiving
+
+When you start a new feature (different `branchName` in prd.json), Ralph automatically archives the previous run's `prd.json` and `progress.txt` to `.ralph/archive/YYYY-MM-DD-feature-name/`.
 
 ## References
 
 - [Geoffrey Huntley's Ralph article](https://ghuntley.com/ralph/)
 - [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code)
+- [Jujutsu (jj) documentation](https://martinvonz.github.io/jj/)
