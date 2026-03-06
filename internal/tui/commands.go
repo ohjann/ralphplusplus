@@ -341,3 +341,43 @@ func qualityFixCmd(ctx context.Context, cfg *config.Config, assessment quality.A
 		return qualityFixDoneMsg{Err: err}
 	}
 }
+
+func generateSummaryCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		// Read PRD for context
+		prdData, _ := os.ReadFile(cfg.PRDFile)
+		// Read progress for context
+		progressData, _ := os.ReadFile(cfg.ProgressFile)
+
+		prompt := fmt.Sprintf(`You have just completed implementing all stories in a project. Generate a comprehensive summary of everything that was done.
+
+Write this summary to a file called SUMMARY.md in the current working directory using the Write tool.
+
+The summary should include:
+1. **Overview** - What was built/changed (one paragraph)
+2. **Stories Completed** - Brief summary of each story and what it involved
+3. **Files Changed** - Key files that were added or modified (explore the recent changes)
+4. **Configuration** - Any new configuration, environment variables, or setup needed
+5. **Build & Run** - How to build and run the project (check for Makefile, package.json, etc.)
+6. **Testing** - How to run tests, any new test files added
+7. **Notes** - Any caveats, known issues, or things that need human review
+
+Be concise but thorough. Focus on actionable information the developer needs to know.
+
+## PRD (what was planned)
+%s
+
+## Progress Log
+%s
+`, string(prdData), string(progressData))
+
+		logPath := filepath.Join(cfg.LogDir, "summary.log")
+		err := runner.RunClaude(ctx, cfg.ProjectDir, prompt, logPath)
+
+		// Read the generated summary
+		summaryPath := filepath.Join(cfg.ProjectDir, "SUMMARY.md")
+		content, _ := os.ReadFile(summaryPath)
+
+		return summaryDoneMsg{Content: string(content), Err: err}
+	}
+}

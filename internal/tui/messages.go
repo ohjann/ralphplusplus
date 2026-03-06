@@ -23,6 +23,7 @@ const (
 	phaseQualityReview  // running quality lens reviewers
 	phaseQualityFix     // Claude fixing quality issues
 	phaseQualityPrompt  // asking user whether to continue fixing
+	phaseSummary        // generating final summary of all changes
 )
 
 // Tick messages
@@ -70,6 +71,10 @@ type qualityReviewDoneMsg struct {
 }
 type qualityFixDoneMsg struct {
 	Err error
+}
+type summaryDoneMsg struct {
+	Content string
+	Err     error
 }
 
 // Terminal size

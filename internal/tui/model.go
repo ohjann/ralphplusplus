@@ -203,10 +203,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.phase == phaseQualityPrompt {
 				// User chose to skip remaining quality fixes
-				m.phase = phaseDone
-				m.allComplete = true
-				m.exitCode = 0
-				return m, nil
+				return m.transitionToSummary()
 			}
 			if m.confirmQuit || m.phase == phaseDone || m.phase == phaseIdle {
 				m.cancel()
@@ -357,6 +354,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.phase == phaseQualityFix {
 			activityPath := filepath.Join(m.cfg.LogDir, fmt.Sprintf("quality-fix-%d-activity.log", m.qualityIteration))
+			cmds = append(cmds, pollActivityCmd(activityPath))
+		}
+		if m.phase == phaseSummary {
+			activityPath := filepath.Join(m.cfg.LogDir, "summary-activity.log")
 			cmds = append(cmds, pollActivityCmd(activityPath))
 		}
 		if m.phase == phaseParallel && m.coord != nil && m.activeWorkerView > 0 {
@@ -713,10 +714,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
-			m.phase = phaseDone
-			m.allComplete = true
-			m.exitCode = 0
-			return m, nil
+			return m.transitionToSummary()
 		}
 
 		m.lastAssessment = &msg.Assessment
@@ -732,10 +730,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
-			m.phase = phaseDone
-			m.allComplete = true
-			m.exitCode = 0
-			return m, nil
+			return m.transitionToSummary()
 		}
 
 		// Has findings — start fix phase
@@ -772,6 +767,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
 		cmds = append(cmds, qualityReviewCmd(m.ctx, m.cfg, m.qualityIteration))
+
+	case summaryDoneMsg:
+		if msg.Err != nil {
+			m.claudeContent += fmt.Sprintf("\n── Summary generation error: %v ──\n", msg.Err)
+		}
+		if msg.Content != "" {
+			m.claudeContent = msg.Content
+		} else {
+			m.claudeContent += "\n── Summary generation complete (no SUMMARY.md produced) ──\n"
+		}
+		m.claudeVP.SetContent(m.claudeContent)
+		m.claudeVP.GotoBottom()
+		m.prevClaudeLen = len(m.claudeContent)
+		m.phase = phaseDone
+		m.allComplete = true
+		m.exitCode = 0
 	}
 
 	return m, tea.Batch(cmds...)
@@ -779,7 +790,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // transitionToComplete handles the "all stories done" transition.
 // If quality review is enabled and hasn't run yet, starts quality review.
-// Otherwise, transitions to phaseDone.
+// Otherwise, transitions to summary generation.
 func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 	if m.cfg.QualityReview && m.qualityIteration == 0 {
 		m.qualityIteration = 1
@@ -789,10 +800,16 @@ func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 		m.prevClaudeLen = len(m.claudeContent)
 		return m, qualityReviewCmd(m.ctx, m.cfg, m.qualityIteration)
 	}
-	m.phase = phaseDone
-	m.allComplete = true
-	m.exitCode = 0
-	return m, nil
+	return m.transitionToSummary()
+}
+
+// transitionToSummary starts generating a final summary of all changes.
+func (m *Model) transitionToSummary() (tea.Model, tea.Cmd) {
+	m.phase = phaseSummary
+	m.claudeContent = "── Generating summary of all changes... ──\n"
+	m.claudeVP.SetContent(m.claudeContent)
+	m.prevClaudeLen = len(m.claudeContent)
+	return m, generateSummaryCmd(m.ctx, m.cfg)
 }
 
 // cacheWorkerLog reads the activity log for a worker and stores it in memory.
@@ -903,7 +920,7 @@ func (m *Model) View() string {
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, storiesPanel, ctxPanel)
 
 	// Claude panel
-	claudeRunning := m.phase == phaseClaudeRun || m.phase == phaseJudgeRun || m.phase == phaseParallel || m.phase == phaseDagAnalysis || m.phase == phasePlanning || m.phase == phaseQualityReview || m.phase == phaseQualityFix
+	claudeRunning := m.phase == phaseClaudeRun || m.phase == phaseJudgeRun || m.phase == phaseParallel || m.phase == phaseDagAnalysis || m.phase == phasePlanning || m.phase == phaseQualityReview || m.phase == phaseQualityFix || m.phase == phaseSummary
 	var workerTabStr string
 	if m.phase == phaseParallel && m.coord != nil {
 		workers := m.coord.Workers()
