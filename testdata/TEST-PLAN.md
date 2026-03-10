@@ -41,7 +41,7 @@ Verifies the core loop works: pick story, run Claude, commit, mark passes.
 - TS-001 passes
 - `math.go` has a `Multiply` function
 - `go build ./...` passes
-- progress.txt has content
+- progress.md has content
 - jj has commit history
 
 ### 2. Serial Multi-Story (~2-3 min)
@@ -165,7 +165,7 @@ Extra flags can be appended to any test:
 The test runner automatically validates:
 
 1. **prd.json** — exists and all stories pass
-2. **progress.txt** — has content (learnings written)
+2. **progress.md** — has content (learnings written)
 3. **.ralph/** — directory and log files exist
 4. **go build** — project still compiles
 5. **go test** — tests pass (if test files exist)

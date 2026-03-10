@@ -142,7 +142,7 @@ func ClearRejectionCount(projectDir, storyID string) {
 	os.Remove(filepath.Join(projectDir, ".ralph", fmt.Sprintf("judge-feedback-%s.md", storyID)))
 }
 
-// AppendAutoPass adds an auto-pass note to progress.txt.
+// AppendAutoPass adds an auto-pass note to progress.md.
 func AppendAutoPass(progressFile, storyID string, rejectionCount int) {
 	f, err := os.OpenFile(progressFile, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -152,7 +152,7 @@ func AppendAutoPass(progressFile, storyID string, rejectionCount int) {
 	fmt.Fprintf(f, "\n## [Judge] %s auto-passed after %d rejections [HUMAN REVIEW NEEDED]\n---\n", storyID, rejectionCount)
 }
 
-// AppendJudgeResult writes the judge result to progress.txt for persistence.
+// AppendJudgeResult writes the judge result to progress.md for persistence.
 func AppendJudgeResult(progressFile, storyID string, r Result) {
 	f, err := os.OpenFile(progressFile, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {

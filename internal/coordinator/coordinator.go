@@ -144,7 +144,7 @@ func (c *Coordinator) HandleUpdate(u worker.WorkerUpdate) bool {
 	return false
 }
 
-// MergeAndSync rebases the worker's changes onto main, syncs prd.json and progress.txt.
+// MergeAndSync rebases the worker's changes onto main, syncs prd.json and progress.md.
 // If the rebase produces conflicts, it runs Claude to resolve them before advancing.
 // Returns true if conflicts were resolved during the merge.
 func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (conflictsResolved bool, err error) {
@@ -187,8 +187,8 @@ func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (
 		}
 	}
 
-	// Append workspace progress.txt entries to main
-	wsProgress := filepath.Join(w.Workspace, "progress.txt")
+	// Append workspace progress.md entries to main
+	wsProgress := filepath.Join(w.Workspace, "progress.md")
 	if data, readErr := os.ReadFile(wsProgress); readErr == nil && len(data) > 0 {
 		f, openErr := os.OpenFile(c.cfg.ProgressFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 		if openErr == nil {

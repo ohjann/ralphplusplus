@@ -147,8 +147,8 @@ if [[ ${#EXTRA_FLAGS[@]} -gt 0 ]]; then
     RALPH_FLAGS+=("${EXTRA_FLAGS[@]}")
 fi
 
-# Create progress.txt
-touch "$TEST_DIR/progress.txt"
+# Create progress.md
+touch "$TEST_DIR/progress.md"
 
 # Show what we're running
 info "Running: ralph --dir ${TEST_DIR} ${RALPH_FLAGS[*]}"
@@ -211,13 +211,13 @@ else
     check "prd.json exists" "false"
 fi
 
-# Check progress.txt has content
-if [[ -s "$TEST_DIR/progress.txt" ]]; then
-    check "progress.txt has content" "true"
-    LINES=$(wc -l < "$TEST_DIR/progress.txt" | tr -d ' ')
-    info "  progress.txt: ${LINES} lines"
+# Check progress.md has content
+if [[ -s "$TEST_DIR/progress.md" ]]; then
+    check "progress.md has content" "true"
+    LINES=$(wc -l < "$TEST_DIR/progress.md" | tr -d ' ')
+    info "  progress.md: ${LINES} lines"
 else
-    check "progress.txt has content" "false"
+    check "progress.md has content" "false"
 fi
 
 # Check .ralph directory

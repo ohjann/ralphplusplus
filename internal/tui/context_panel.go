@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -12,7 +13,7 @@ import (
 type contextMode int
 
 const (
-	contextProgress contextMode = iota // default: progress.txt
+	contextProgress contextMode = iota // default: progress.md
 	contextWorktree                    // jj status
 	contextJudge                       // judge results
 	contextQuality                     // quality review assessment
@@ -55,6 +56,8 @@ func renderContextPanel(vp viewport.Model, data contextPanelData, active bool, w
 		content = data.ProgressContent
 		if content == "" {
 			content = styleMuted.Render("  Waiting for progress updates...")
+		} else {
+			content = renderMarkdown(content, contentW)
 		}
 	case contextJudge:
 		content = data.JudgeContent
@@ -83,6 +86,30 @@ func renderContextPanel(vp viewport.Model, data contextPanelData, active bool, w
 }
 
 // renderContextTabs shows the tab bar with the active tab highlighted.
+// contextTabHitTest returns which context tab was clicked given an x position
+// relative to the start of the tab bar content area.
+func contextTabHitTest(relX int) (contextMode, bool) {
+	type tabInfo struct {
+		mode  contextMode
+		label string
+	}
+	tabs := []tabInfo{
+		{contextProgress, " ◈ Progress "},
+		{contextWorktree, " ⌥ Tree "},
+		{contextJudge, " ⚖ Judge "},
+		{contextQuality, " ◇ Quality "},
+	}
+	x := 0
+	for _, t := range tabs {
+		w := lipgloss.Width(t.label) + 2 // +2 for Padding(0,1)
+		if relX >= x && relX < x+w {
+			return t.mode, true
+		}
+		x += w
+	}
+	return 0, false
+}
+
 func renderContextTabs(data contextPanelData) string {
 	type tab struct {
 		mode  contextMode
@@ -120,6 +147,22 @@ func hasJudgeContent(data contextPanelData) bool {
 
 func hasQualityContent(data contextPanelData) bool {
 	return data.QualityContent != "" || data.Phase == phaseQualityReview || data.Phase == phaseQualityFix || data.Phase == phaseQualityPrompt
+}
+
+// renderMarkdown renders markdown content for the TUI using glamour.
+func renderMarkdown(content string, width int) string {
+	r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return content
+	}
+	rendered, err := r.Render(content)
+	if err != nil {
+		return content
+	}
+	return strings.TrimRight(rendered, "\n")
 }
 
 // renderWorktreeCompact formats jj status output more compactly.

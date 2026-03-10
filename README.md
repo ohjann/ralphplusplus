@@ -2,7 +2,7 @@
 
 ![Ralph](ralph.webp)
 
-Ralph is an autonomous AI agent that runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) in a loop until all user stories in a PRD are complete. Each iteration gets a fresh context window. Memory persists via version control history, `progress.txt`, and `prd.json`.
+Ralph is an autonomous AI agent that runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) in a loop until all user stories in a PRD are complete. Each iteration gets a fresh context window. Memory persists via version control history, `progress.md`, and `prd.json`.
 
 Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 
@@ -66,7 +66,7 @@ Once `prd.json` exists, Ralph loops:
 2. Spawns a fresh Claude Code instance to implement that story
 3. Claude runs quality checks (typecheck, tests, etc.)
 4. If checks pass, commits with jj and marks the story `passes: true`
-5. Appends learnings to `progress.txt`
+5. Appends learnings to `progress.md`
 6. Repeats until all stories pass or max iterations reached
 
 ### Parallel Execution: `--workers`
@@ -176,7 +176,7 @@ internal/
   dag/              Dependency analysis via Claude CLI
   workspace/        jj workspace create/destroy/merge
   judge/            Gemini judge integration
-  archive/          Run archiving (previous prd.json + progress.txt)
+  archive/          Run archiving (previous prd.json + progress.md)
   autofix/          Stuck loop detection and fix story generation
   quality/          Final quality review gate (multi-lens reviewers)
   events/           Event log (events.jsonl)
@@ -193,7 +193,7 @@ Ralph creates and manages these files in the project directory:
 | File | Purpose |
 |------|---------|
 | `prd.json` | User stories with `passes` status -- the task list |
-| `progress.txt` | Append-only learnings for future iterations |
+| `progress.md` | Append-only learnings for future iterations |
 | `.ralph/` | Logs, events, judge feedback, stuck detection |
 | `.ralph/logs/` | Claude output logs per iteration |
 | `.ralph/archive/` | Archived runs from previous features |
@@ -247,7 +247,7 @@ Stories execute in priority order. Earlier stories must not depend on later ones
 Each iteration is a fresh Claude Code instance. The only memory is:
 
 - **jj history** -- commits from previous iterations
-- **`progress.txt`** -- learnings, patterns, and context
+- **`progress.md`** -- learnings, patterns, and context
 - **`prd.json`** -- which stories are done
 - **`CLAUDE.md`** -- Ralph updates these with discovered patterns
 
@@ -262,7 +262,7 @@ If Claude gets stuck in a loop (repeatedly running the same command or editing t
 
 ### Archiving
 
-When you start a new feature (different `branchName` in prd.json), Ralph automatically archives the previous run's `prd.json` and `progress.txt` to `.ralph/archive/YYYY-MM-DD-feature-name/`.
+When you start a new feature (different `branchName` in prd.json), Ralph automatically archives the previous run's `prd.json` and `progress.md` to `.ralph/archive/YYYY-MM-DD-feature-name/`.
 
 ## References
 

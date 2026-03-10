@@ -130,7 +130,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 You are running as a parallel worker. Other workers are handling other stories simultaneously.
 You are ONLY responsible for story **%s**. After completing it, stop immediately.
 Do NOT check if all stories are complete. Do NOT emit the COMPLETE signal.
-Just implement your story, commit, set passes: true, update progress.txt, and stop.`, w.StoryID)
+Just implement your story, commit, set passes: true, update progress.md, and stop.`, w.StoryID)
 
 	logPath := runner.LogFilePath(wsLogDir, w.Iteration)
 	err = runner.RunClaude(w.Ctx, ws.Dir, prompt, logPath, runner.RunClaudeOpts{

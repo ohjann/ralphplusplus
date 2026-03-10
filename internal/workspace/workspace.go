@@ -173,7 +173,7 @@ func CommitWorkspace(ctx context.Context, wsDir, storyID, title, baseChangeID st
 	return strings.TrimSpace(string(idOut)), nil
 }
 
-// CopyState copies prd.json, progress.txt, and .ralph/ state into the workspace.
+// CopyState copies prd.json, progress.md, and .ralph/ state into the workspace.
 func CopyState(mainDir, wsDir string) error {
 	// Copy prd.json
 	if err := copyFile(
@@ -183,10 +183,10 @@ func CopyState(mainDir, wsDir string) error {
 		return err
 	}
 
-	// Copy progress.txt
+	// Copy progress.md
 	_ = copyFile(
-		filepath.Join(mainDir, "progress.txt"),
-		filepath.Join(wsDir, "progress.txt"),
+		filepath.Join(mainDir, "progress.md"),
+		filepath.Join(wsDir, "progress.md"),
 	)
 
 	// Copy .ralph/ directory

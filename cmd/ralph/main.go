@@ -39,7 +39,7 @@ func main() {
 
 	model := tui.NewModel(cfg, Version)
 
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	finalModel, err := p.Run()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)

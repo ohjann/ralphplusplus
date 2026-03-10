@@ -299,6 +299,60 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case tea.MouseMsg:
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			headerHeight := 3
+			available := m.height - 4 // header(3) + footer(1)
+			if available < 10 {
+				available = 10
+			}
+			topHeight := available * 35 / 100
+			if topHeight < 5 {
+				topHeight = 5
+			}
+			storiesWidth := m.width * 35 / 100
+
+			y := msg.Y
+			x := msg.X
+			if y >= headerHeight && y < headerHeight+topHeight {
+				if x < storiesWidth {
+					m.activePanel = panelStories
+				} else {
+					m.activePanel = panelContext
+					// Check if click is on the tab bar row (first content row inside border)
+					if y == headerHeight+1 {
+						relX := x - storiesWidth - 2 // border(1) + padding(1)
+						if mode, ok := contextTabHitTest(relX); ok {
+							m.ctxMode = mode
+						}
+					}
+				}
+			} else if y >= headerHeight+topHeight {
+				m.activePanel = panelClaude
+				// Check if click is on the worker tabs row (title line inside ornate border)
+				if y == headerHeight+topHeight+1 && m.phase == phaseParallel && m.coord != nil && len(m.workerTabOrder) > 0 {
+					// Title: "│ ✻ Claude  <workerTabs>"
+					// Worker tabs start after: │(1) + space(1) + sparkle(1) + space(1) + "Claude"(6) + "  "(2) = 12
+					titlePrefixW := 12
+					relX := x - titlePrefixW
+					if relX >= 0 {
+						if idx := workerTabHitTest(relX, m.workerTabOrder, m.coord.Workers(), m.activeWorkerView); idx >= 0 {
+							wID := m.workerTabOrder[idx]
+							m.activeWorkerView = wID
+							if cached, ok := m.workerLogCache[wID]; ok {
+								m.claudeContent = cached
+								m.prevClaudeLen = len(cached)
+							} else {
+								m.claudeContent = ""
+								m.prevClaudeLen = 0
+							}
+						}
+					}
+				}
+			}
+		}
+		return m, nil
+
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -345,7 +399,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			activityPath := filepath.Join(m.cfg.LogDir, "plan-activity.log")
 			cmds = append(cmds, pollActivityCmd(activityPath))
 		}
-		if m.phase == phaseClaudeRun || m.phase == phaseJudgeRun {
+		if m.phase == phaseClaudeRun {
 			activityPath := runner.ActivityFilePath(m.cfg.LogDir, m.iteration)
 			cmds = append(cmds, pollActivityCmd(activityPath))
 		}
@@ -684,7 +738,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.judgeContent += judge.FormatResult(m.currentStoryID, msg.Result)
 		m.ctxMode = contextJudge
 
-		// Persist judge result to progress.txt
+		// Persist judge result to progress.md
 		judge.AppendJudgeResult(m.cfg.ProgressFile, m.currentStoryID, msg.Result)
 
 		if msg.Result.Passed {
@@ -711,8 +765,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Quality review messages ---
 	case qualityReviewDoneMsg:
+		m.ctxMode = contextQuality
 		if msg.Err != nil {
-			m.claudeContent += fmt.Sprintf("\n── Quality review error: %v ──\n", msg.Err)
+			errMsg := fmt.Sprintf("\n── Quality review error: %v ──\n", msg.Err)
+			m.qualityContent += errMsg
+			m.claudeContent += errMsg
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
@@ -728,7 +785,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prevClaudeLen = len(m.claudeContent)
 
 		if msg.Assessment.TotalFindings() == 0 {
-			m.claudeContent += "\n── Quality review: all clean! ──\n"
+			var statusMsg string
+			if msg.Assessment.HasParseFailures() {
+				statusMsg = "\n── Quality review: no findings parsed (some lenses failed to parse) ──\n"
+			} else {
+				statusMsg = "\n── Quality review: all clean! ──\n"
+			}
+			m.claudeContent += statusMsg
+			m.qualityContent += statusMsg
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
@@ -737,7 +801,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Has findings — start fix phase
 		m.phase = phaseQualityFix
-		m.claudeContent += "\n── Fixing quality issues... ──\n"
+		fixMsg := "\n── Fixing quality issues... ──\n"
+		m.claudeContent += fixMsg
+		m.qualityContent += fixMsg
 		m.claudeVP.SetContent(m.claudeContent)
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
@@ -745,7 +811,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case qualityFixDoneMsg:
 		if msg.Err != nil {
-			m.claudeContent += fmt.Sprintf("\n── Quality fix error: %v ──\n", msg.Err)
+			errMsg := fmt.Sprintf("\n── Quality fix error: %v ──\n", msg.Err)
+			m.claudeContent += errMsg
+			m.qualityContent += errMsg
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
@@ -754,7 +822,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.qualityIteration >= m.cfg.QualityMaxIters {
 			// Max iterations reached — prompt user
 			m.phase = phaseQualityPrompt
-			m.claudeContent += "\n── Max quality iterations reached. Press Enter to continue fixing, q to finish ──\n"
+			maxMsg := "\n── Max quality iterations reached. Press Enter to continue fixing, q to finish ──\n"
+			m.claudeContent += maxMsg
+			m.qualityContent += maxMsg
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
@@ -764,7 +834,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-review
 		m.qualityIteration++
 		m.phase = phaseQualityReview
-		m.claudeContent += fmt.Sprintf("\n── Re-reviewing (iteration %d)... ──\n", m.qualityIteration)
+		reReviewMsg := fmt.Sprintf("\n── Re-reviewing (iteration %d)... ──\n", m.qualityIteration)
+		m.claudeContent += reReviewMsg
+		m.qualityContent += reReviewMsg
 		m.claudeVP.SetContent(m.claudeContent)
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
@@ -1023,4 +1095,28 @@ func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bo
 		return "  " + styleSuccess.Render("Run complete — ") + baseHelp
 	}
 	return "  " + baseHelp
+}
+
+// workerTabHitTest returns the tab index at the given x position relative to
+// the start of the worker tab string, or -1 if no tab was hit.
+func workerTabHitTest(relX int, tabOrder []worker.WorkerID, workers map[worker.WorkerID]*worker.Worker, activeView worker.WorkerID) int {
+	x := 0
+	for tabIdx, id := range tabOrder {
+		w := workers[id]
+		marker := ""
+		if id == activeView {
+			marker = "▸"
+		}
+		tabText := fmt.Sprintf("%s%d:%s[%s]", marker, tabIdx+1, w.StoryID, w.State)
+		tabW := lipgloss.Width(tabText)
+		if relX >= x && relX < x+tabW {
+			return tabIdx
+		}
+		x += tabW
+		// separator " │ " between tabs
+		if tabIdx < len(tabOrder)-1 {
+			x += 3 // " │ " is 3 visible columns
+		}
+	}
+	return -1
 }

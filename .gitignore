@@ -1,6 +1,6 @@
 # Ralph working files (generated during runs in this repo)
 prd.json
-progress.txt
+progress.md
 
 # Ralph runtime directory (logs, archive, branch tracking)
 .ralph/

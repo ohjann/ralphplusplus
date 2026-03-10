@@ -25,7 +25,7 @@ func BuildPrompt(ralphHome, projectDir, storyID string) (string, error) {
 ---
 ## THIS ITERATION
 You MUST only work on story **%s**. Do NOT implement any other story. After completing %s, stop immediately.
-If progress.txt contains a [CONTEXT EXHAUSTED] entry for %s, continue from where it left off.`, storyID, storyID, storyID)
+If progress.md contains a [CONTEXT EXHAUSTED] entry for %s, continue from where it left off.`, storyID, storyID, storyID)
 
 	// Inject judge feedback if present
 	feedbackPath := filepath.Join(projectDir, ".ralph", fmt.Sprintf("judge-feedback-%s.md", storyID))

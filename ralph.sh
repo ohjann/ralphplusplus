@@ -82,7 +82,7 @@ PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"  # resolve to absolute path
 
 PRD_FILE="$PROJECT_DIR/prd.json"
-PROGRESS_FILE="$PROJECT_DIR/progress.txt"
+PROGRESS_FILE="$PROJECT_DIR/progress.md"
 ARCHIVE_DIR="$PROJECT_DIR/.ralph/archive"
 LAST_BRANCH_FILE="$PROJECT_DIR/.ralph/.last-branch"
 LOG_DIR="$PROJECT_DIR/.ralph/logs"
@@ -337,7 +337,7 @@ for i in $(seq 1 $MAX_ITERATIONS); do
 ---
 ## THIS ITERATION
 You MUST only work on story **$NEXT_STORY**. Do NOT implement any other story. After completing $NEXT_STORY, stop immediately.
-If progress.txt contains a [CONTEXT EXHAUSTED] entry for $NEXT_STORY, continue from where it left off."
+If progress.md contains a [CONTEXT EXHAUSTED] entry for $NEXT_STORY, continue from where it left off."
 
   # Run Claude Code with the dynamic prompt
   LOG_FILE="$LOG_DIR/iteration-$i.log"
@@ -346,7 +346,7 @@ If progress.txt contains a [CONTEXT EXHAUSTED] entry for $NEXT_STORY, continue f
 
   OUTPUT=$(cat "$LOG_FILE")
 
-  # Show what was added to progress.txt this iteration
+  # Show what was added to progress.md this iteration
   POST_LINES=$(wc -l < "$PROGRESS_FILE" 2>/dev/null | tr -d ' ')
   if [ "$POST_LINES" -gt "$PRE_LINES" ]; then
     echo ""

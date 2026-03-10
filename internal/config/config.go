@@ -213,7 +213,7 @@ func Parse(args []string) (*Config, error) {
 
 	// Derive paths
 	cfg.PRDFile = filepath.Join(cfg.ProjectDir, "prd.json")
-	cfg.ProgressFile = filepath.Join(cfg.ProjectDir, "progress.txt")
+	cfg.ProgressFile = filepath.Join(cfg.ProjectDir, "progress.md")
 	cfg.ArchiveDir = filepath.Join(cfg.ProjectDir, ".ralph", "archive")
 	cfg.LastBranchFile = filepath.Join(cfg.ProjectDir, ".ralph", ".last-branch")
 	cfg.LogDir = filepath.Join(cfg.ProjectDir, ".ralph", "logs")

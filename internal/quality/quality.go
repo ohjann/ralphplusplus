@@ -32,9 +32,10 @@ type Finding struct {
 
 // LensResult is the output of a single lens review.
 type LensResult struct {
-	Lens     string    `json:"lens"`
-	Findings []Finding `json:"findings"`
-	Err      error     `json:"-"`
+	Lens        string    `json:"lens"`
+	Findings    []Finding `json:"findings"`
+	ParseFailed bool      `json:"parse_failed,omitempty"` // true if findings tags could not be parsed
+	Err         error     `json:"-"`
 }
 
 // Assessment is the merged result of all lens reviews.
@@ -155,9 +156,9 @@ Be specific. Include file paths and line numbers. Don't flag style preferences �
 
 	// Parse findings from the activity log
 	activityPath := strings.TrimSuffix(logPath, ".log") + "-activity.log"
-	findings := parseFindingsFromActivity(activityPath, lens.Name)
+	findings, parsed := parseFindingsFromActivity(activityPath, lens.Name)
 
-	return LensResult{Lens: lens.Name, Findings: findings}
+	return LensResult{Lens: lens.Name, Findings: findings, ParseFailed: !parsed}
 }
 
 // RunReviewsParallel runs multiple lens reviews in parallel, limited to maxWorkers.
@@ -228,6 +229,16 @@ func (a *Assessment) TotalFindings() int {
 	return total
 }
 
+// HasParseFailures returns true if any lens failed to parse its findings.
+func (a *Assessment) HasParseFailures() bool {
+	for _, r := range a.Results {
+		if r.ParseFailed {
+			return true
+		}
+	}
+	return false
+}
+
 // CountBySeverity returns counts by severity level.
 func (a *Assessment) CountBySeverity() (critical, warning, info int) {
 	for _, r := range a.Results {
@@ -273,11 +284,25 @@ func FormatSummary(a Assessment) string {
 	critical, warning, info := a.CountBySeverity()
 
 	sb.WriteString(fmt.Sprintf("── Quality Review (iteration %d) ──\n", a.Iteration))
-	sb.WriteString(fmt.Sprintf("  Findings: %d critical, %d warning, %d info\n", critical, warning, info))
+	parseFailures := 0
+	for _, r := range a.Results {
+		if r.ParseFailed {
+			parseFailures++
+		}
+	}
+	if parseFailures > 0 {
+		sb.WriteString(fmt.Sprintf("  Findings: %d critical, %d warning, %d info (%d lenses failed to parse)\n", critical, warning, info, parseFailures))
+	} else {
+		sb.WriteString(fmt.Sprintf("  Findings: %d critical, %d warning, %d info\n", critical, warning, info))
+	}
 
 	for _, r := range a.Results {
 		if r.Err != nil {
 			sb.WriteString(fmt.Sprintf("  %s: ERROR — %v\n", r.Lens, r.Err))
+			continue
+		}
+		if r.ParseFailed {
+			sb.WriteString(fmt.Sprintf("  %s: - (parse failed)\n", r.Lens))
 			continue
 		}
 		if len(r.Findings) == 0 {
@@ -318,32 +343,34 @@ func GetDiffManifest(ctx context.Context, projectDir string) (string, error) {
 }
 
 // parseFindingsFromActivity reads the activity log and extracts findings from <findings> tags.
-func parseFindingsFromActivity(activityPath, lensName string) []Finding {
+// Returns the findings and whether parsing succeeded (tags were found and valid JSON extracted).
+// A successful parse with no issues returns (nil, true). A failed parse returns (nil, false).
+func parseFindingsFromActivity(activityPath, lensName string) ([]Finding, bool) {
 	data, err := os.ReadFile(activityPath)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	content := string(data)
 
 	// Extract content between <findings> tags
 	start := strings.LastIndex(content, "<findings>")
 	if start < 0 {
-		return nil
+		return nil, false
 	}
 	start += len("<findings>")
 	end := strings.LastIndex(content, "</findings>")
 	if end < 0 || end <= start {
-		return nil
+		return nil, false
 	}
 
 	jsonStr := strings.TrimSpace(content[start:end])
 	if jsonStr == "" || jsonStr == "[]" {
-		return nil
+		return nil, true // parsed successfully, no findings
 	}
 
 	var findings []Finding
 	if err := json.Unmarshal([]byte(jsonStr), &findings); err != nil {
-		return nil
+		return nil, false
 	}
 
 	// Ensure lens name is set
@@ -351,5 +378,5 @@ func parseFindingsFromActivity(activityPath, lensName string) []Finding {
 		findings[i].Lens = lensName
 	}
 
-	return findings
+	return findings, true
 }

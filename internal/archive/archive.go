@@ -10,7 +10,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/prd"
 )
 
-// CheckAndArchive detects a branch change and archives the previous run's prd.json and progress.txt.
+// CheckAndArchive detects a branch change and archives the previous run's prd.json and progress.md.
 // Returns true if an archive was created.
 func CheckAndArchive(projectDir, lastBranchFile, archiveDir, prdFile, progressFile string) (bool, error) {
 	lastBranch, err := os.ReadFile(lastBranchFile)
@@ -44,9 +44,9 @@ func CheckAndArchive(projectDir, lastBranchFile, archiveDir, prdFile, progressFi
 	if data, err := os.ReadFile(prdFile); err == nil {
 		_ = os.WriteFile(filepath.Join(archiveFolder, "prd.json"), data, 0o644)
 	}
-	// Copy progress.txt
+	// Copy progress.md
 	if data, err := os.ReadFile(progressFile); err == nil {
-		_ = os.WriteFile(filepath.Join(archiveFolder, "progress.txt"), data, 0o644)
+		_ = os.WriteFile(filepath.Join(archiveFolder, "progress.md"), data, 0o644)
 	}
 
 	// Reset progress file
@@ -67,7 +67,7 @@ func TrackBranch(prdFile, lastBranchFile string) error {
 	return os.WriteFile(lastBranchFile, []byte(p.BranchName), 0o644)
 }
 
-// EnsureProgressFile creates progress.txt if it doesn't exist.
+// EnsureProgressFile creates progress.md if it doesn't exist.
 func EnsureProgressFile(progressFile string) error {
 	if _, err := os.Stat(progressFile); err == nil {
 		return nil

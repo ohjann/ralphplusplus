@@ -5,9 +5,9 @@ You are an autonomous coding agent working on a software project.
 ## Your Task
 
 1. Read the PRD at `prd.json` (in the current working directory)
-2. Read the progress log at `progress.txt` (check Codebase Patterns section first)
+2. Read the progress log at `progress.md` (check Codebase Patterns section first)
 3. Use `jj` (Jujutsu) for version control instead of git. Load the `jj-guide` skill for reference. Work from a new revision branched from the current revision with `jj new`
-4. Check progress.txt for any `[CONTEXT EXHAUSTED]` entry — if found, **continue that story first** before starting anything new
+4. Check progress.md for any `[CONTEXT EXHAUSTED]` entry — if found, **continue that story first** before starting anything new
 5. Check for judge feedback at `.ralph/judge-feedback-{storyId}.md` — if found, read it and address all failed criteria (see Judge Feedback section below)
 6. Otherwise, pick the **highest priority** user story where `passes: false`
 7. Implement that single user story
@@ -15,12 +15,12 @@ You are an autonomous coding agent working on a software project.
 9. Update CLAUDE.md files if you discover reusable patterns (see below)
 10. If checks pass, commit ALL changes with a simple descriptive message
 11. Update the PRD to set `passes: true` for the completed story
-12. Append your progress to `progress.txt`
-13. Note: `prd.json`, `progress.txt`, and `.ralph/` are gitignored and will not be committed
+12. Append your progress to `progress.md`
+13. Note: `prd.json`, `progress.md`, and `.ralph/` are gitignored and will not be committed
 
 ## Progress Report Format
 
-APPEND to progress.txt (never replace, always append):
+APPEND to progress.md (never replace, always append):
 ```
 ## [Date/Time] - [Story ID]
 - What was implemented
@@ -36,7 +36,7 @@ The learnings section is critical - it helps future iterations avoid repeating m
 
 ## Consolidate Patterns
 
-If you discover a **reusable pattern** that future iterations should know, add it to the `## Codebase Patterns` section at the TOP of progress.txt (create it if it doesn't exist). This section should consolidate the most important learnings:
+If you discover a **reusable pattern** that future iterations should know, add it to the `## Codebase Patterns` section at the TOP of progress.md (create it if it doesn't exist). This section should consolidate the most important learnings:
 
 ```
 ## Codebase Patterns
@@ -69,7 +69,7 @@ Before committing, check if any edited files have learnings worth preserving in 
 **Do NOT add:**
 - Story-specific implementation details
 - Temporary debugging notes
-- Information already in progress.txt
+- Information already in progress.md
 
 Only update CLAUDE.md if you have **genuinely reusable knowledge** that would help future work in that directory.
 
@@ -83,7 +83,7 @@ Only update CLAUDE.md if you have **genuinely reusable knowledge** that would he
 ## Verification Rules
 If a quality check (typecheck, lint, test, browser verification) fails:
 1. Analyze the error and attempt a fix (up to 3 attempts per check type)
-2. If the SAME check fails 3 times, STOP — note the issue in progress.txt and move on
+2. If the SAME check fails 3 times, STOP — note the issue in progress.md and move on
 3. Do NOT debug the verification tooling itself (e.g., don't fix rodney, don't fix tsc config)
 4. Focus on implementation; commit what you have and let the judge/human review handle the rest
 
@@ -100,7 +100,7 @@ A frontend story is NOT complete until browser verification passes.
 
 ## Context Exhausted
 
-If you cannot complete the story in this session (running out of context, blocked by an external issue, etc.), you MUST append the following to progress.txt before ending:
+If you cannot complete the story in this session (running out of context, blocked by an external issue, etc.), you MUST append the following to progress.md before ending:
 
 ```
 ## [Date/Time] - [Story ID] [CONTEXT EXHAUSTED]
@@ -144,4 +144,4 @@ If there are still stories with `passes: false`, end your response normally (ano
 - Work on ONE story per iteration
 - Commit frequently
 - Keep CI green
-- Read the Codebase Patterns section in progress.txt before starting
+- Read the Codebase Patterns section in progress.md before starting
