@@ -210,6 +210,25 @@ func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (
 		}
 	}
 
+	// Sync story state directory from workspace to main
+	wsStoryDir := filepath.Join(w.Workspace, ".ralph", "stories", u.StoryID)
+	if info, statErr := os.Stat(wsStoryDir); statErr == nil && info.IsDir() {
+		mainStoryDir := filepath.Join(c.cfg.ProjectDir, ".ralph", "stories", u.StoryID)
+		_ = os.MkdirAll(mainStoryDir, 0o755)
+		entries, readErr := os.ReadDir(wsStoryDir)
+		if readErr == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				data, fileErr := os.ReadFile(filepath.Join(wsStoryDir, entry.Name()))
+				if fileErr == nil {
+					_ = os.WriteFile(filepath.Join(mainStoryDir, entry.Name()), data, 0o644)
+				}
+			}
+		}
+	}
+
 	return conflictsResolved, nil
 }
 
