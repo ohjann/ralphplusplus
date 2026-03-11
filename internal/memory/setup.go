@@ -11,6 +11,10 @@ import (
 // LogFunc is a callback for logging setup progress messages.
 type LogFunc func(msg string)
 
+// Function variables for testability.
+var lookPathFunc = exec.LookPath
+var envReadyFunc = envReady
+
 // EnsureChromaDB ensures that a Python environment with chromadb installed
 // exists under dataDir. It uses conda if available, falling back to python3 venv.
 // Returns the path to the python executable in the environment.
@@ -23,25 +27,25 @@ func EnsureChromaDB(dataDir string, logf LogFunc) (string, error) {
 	venvDir := filepath.Join(dataDir, "venv")
 
 	// Check if conda env already exists with chromadb installed.
-	if pythonPath, ok := envReady(condaEnvDir); ok {
+	if pythonPath, ok := envReadyFunc(condaEnvDir); ok {
 		logf("chromadb already installed in conda env, skipping setup")
 		return pythonPath, nil
 	}
 
 	// Check if venv already exists with chromadb installed.
-	if pythonPath, ok := envReady(venvDir); ok {
+	if pythonPath, ok := envReadyFunc(venvDir); ok {
 		logf("chromadb already installed in venv, skipping setup")
 		return pythonPath, nil
 	}
 
 	// Try conda first.
-	condaPath, err := exec.LookPath("conda")
+	condaPath, err := lookPathFunc("conda")
 	if err == nil {
 		return setupConda(condaPath, condaEnvDir, logf)
 	}
 
 	// Fall back to python3 venv.
-	python3Path, err := exec.LookPath("python3")
+	python3Path, err := lookPathFunc("python3")
 	if err != nil {
 		return "", fmt.Errorf("neither conda nor python3 found: cannot set up chromadb environment")
 	}

@@ -33,7 +33,7 @@ func (s *Sidecar) Start(ctx context.Context, pythonPath string, dataDir string, 
 	s.port = port
 
 	// Check if ChromaDB is already running on the target port.
-	if isHealthy(port) {
+	if isHealthyFunc(port) {
 		s.reused = true
 		return nil
 	}
@@ -78,7 +78,7 @@ func (s *Sidecar) Start(ctx context.Context, pythonPath string, dataDir string, 
 			s.stopLocked()
 			return ctx.Err()
 		case <-ticker.C:
-			if isHealthy(port) {
+			if isHealthyFunc(port) {
 				return nil
 			}
 			if time.Now().After(deadline) {
@@ -146,7 +146,7 @@ func (s *Sidecar) IsRunning() bool {
 	defer s.mu.Unlock()
 
 	if s.reused {
-		return isHealthy(s.port)
+		return isHealthyFunc(s.port)
 	}
 
 	if s.cmd == nil || s.cmd.Process == nil {
@@ -162,6 +162,9 @@ func (s *Sidecar) Port() int {
 	defer s.mu.Unlock()
 	return s.port
 }
+
+// isHealthyFunc is a package-level variable for testability.
+var isHealthyFunc = isHealthy
 
 // isHealthy checks if ChromaDB is responding on the given port.
 func isHealthy(port int) bool {
