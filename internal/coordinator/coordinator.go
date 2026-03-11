@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/eoghanhynes/ralph/internal/checkpoint"
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/dag"
 	"github.com/eoghanhynes/ralph/internal/prd"
@@ -26,14 +28,17 @@ type Coordinator struct {
 	maxWorkers int
 	updateCh   chan worker.WorkerUpdate
 
-	mu         sync.Mutex
-	workers    map[worker.WorkerID]*worker.Worker
-	completed  map[string]bool
-	failed     map[string]bool
-	inProgress map[string]worker.WorkerID
-	retries    map[string]int // retry count per story
-	nextID     worker.WorkerID
-	stories    map[string]*prd.UserStory // story lookup
+	mu              sync.Mutex
+	workers         map[worker.WorkerID]*worker.Worker
+	completed       map[string]bool
+	failed          map[string]bool
+	failedErrors    map[string]string // last error message per failed story
+	inProgress      map[string]worker.WorkerID
+	retries         map[string]int // retry count per story
+	nextID          worker.WorkerID
+	stories         map[string]*prd.UserStory // story lookup
+	prdHash         string                    // SHA-256 of prd.json, computed at init
+	iterationCount  int                       // total iterations dispatched
 }
 
 func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory) *Coordinator {
@@ -42,17 +47,26 @@ func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory
 		s := stories[i]
 		storyMap[s.ID] = &s
 	}
+
+	// Compute PRD hash at initialization for reuse across checkpoint writes
+	prdHash, err := checkpoint.ComputePRDHash(cfg.PRDFile)
+	if err != nil {
+		log.Printf("warning: could not compute PRD hash: %v", err)
+	}
+
 	return &Coordinator{
-		cfg:        cfg,
-		dag:        d,
-		maxWorkers: maxWorkers,
-		updateCh:   make(chan worker.WorkerUpdate, maxWorkers*2),
-		workers:    make(map[worker.WorkerID]*worker.Worker),
-		completed:  make(map[string]bool),
-		failed:     make(map[string]bool),
-		inProgress: make(map[string]worker.WorkerID),
-		retries:    make(map[string]int),
-		stories:    storyMap,
+		cfg:          cfg,
+		dag:          d,
+		maxWorkers:   maxWorkers,
+		updateCh:     make(chan worker.WorkerUpdate, maxWorkers*2),
+		workers:      make(map[worker.WorkerID]*worker.Worker),
+		completed:    make(map[string]bool),
+		failed:       make(map[string]bool),
+		failedErrors: make(map[string]string),
+		inProgress:   make(map[string]worker.WorkerID),
+		retries:      make(map[string]int),
+		stories:      storyMap,
+		prdHash:      prdHash,
 	}
 }
 
@@ -109,6 +123,7 @@ func (c *Coordinator) ScheduleReady(ctx context.Context) int {
 
 		go worker.Run(w, c.cfg, c.updateCh)
 		launched++
+		c.iterationCount++
 	}
 
 	return launched
@@ -124,6 +139,7 @@ func (c *Coordinator) HandleUpdate(u worker.WorkerUpdate) bool {
 		w.State = u.State
 	}
 
+	shouldRetry := false
 	switch u.State {
 	case worker.WorkerDone:
 		delete(c.inProgress, u.StoryID)
@@ -131,17 +147,81 @@ func (c *Coordinator) HandleUpdate(u worker.WorkerUpdate) bool {
 			c.completed[u.StoryID] = true
 		} else {
 			c.failed[u.StoryID] = true
+			if u.Err != nil {
+				c.failedErrors[u.StoryID] = u.Err.Error()
+			} else {
+				c.failedErrors[u.StoryID] = "story did not pass"
+			}
 		}
 	case worker.WorkerFailed:
 		delete(c.inProgress, u.StoryID)
+		errMsg := ""
+		if u.Err != nil {
+			errMsg = u.Err.Error()
+		}
 		if u.Retryable && c.retries[u.StoryID] < maxRetries {
 			c.retries[u.StoryID]++
+			c.failedErrors[u.StoryID] = errMsg
 			// Don't mark as failed — leave it available for ScheduleReady
-			return true
+			shouldRetry = true
+		} else {
+			c.failed[u.StoryID] = true
+			c.failedErrors[u.StoryID] = errMsg
 		}
-		c.failed[u.StoryID] = true
 	}
-	return false
+
+	// Write checkpoint after state change
+	c.writeCheckpointLocked()
+
+	return shouldRetry
+}
+
+// writeCheckpointLocked writes the current state as a checkpoint. Must be called with c.mu held.
+func (c *Coordinator) writeCheckpointLocked() {
+	// Build in-progress list
+	inProgress := make([]string, 0, len(c.inProgress))
+	for id := range c.inProgress {
+		inProgress = append(inProgress, id)
+	}
+	sort.Strings(inProgress)
+
+	// Build completed list
+	completedStories := make([]string, 0, len(c.completed))
+	for id := range c.completed {
+		completedStories = append(completedStories, id)
+	}
+	sort.Strings(completedStories)
+
+	// Build failed stories map
+	failedStories := make(map[string]checkpoint.FailedStory)
+	for id := range c.failed {
+		failedStories[id] = checkpoint.FailedStory{
+			Retries:   c.retries[id],
+			LastError: c.failedErrors[id],
+		}
+	}
+
+	// Build DAG map from the DAG's nodes
+	dagMap := make(map[string][]string)
+	if c.dag != nil {
+		for id, node := range c.dag.Nodes {
+			dagMap[id] = node.DependsOn
+		}
+	}
+
+	cp := checkpoint.Checkpoint{
+		PRDHash:          c.prdHash,
+		Phase:            "parallel",
+		CompletedStories: completedStories,
+		FailedStories:    failedStories,
+		InProgress:       inProgress,
+		DAG:              dagMap,
+		IterationCount:   c.iterationCount,
+	}
+
+	if err := checkpoint.Save(c.cfg.ProjectDir, cp); err != nil {
+		log.Printf("warning: failed to write checkpoint: %v", err)
+	}
 }
 
 // MergeAndSync rebases the worker's changes onto main, syncs prd.json and progress.md.
