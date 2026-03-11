@@ -24,6 +24,7 @@ const (
 	phaseQualityFix     // Claude fixing quality issues
 	phaseQualityPrompt  // asking user whether to continue fixing
 	phaseSummary        // generating final summary of all changes
+	phaseResumePrompt   // asking user whether to resume from checkpoint
 )
 
 // Tick messages

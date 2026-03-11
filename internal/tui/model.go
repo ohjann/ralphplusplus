@@ -104,6 +104,9 @@ type Model struct {
 	workerLogCache map[worker.WorkerID]string
 	// Ordered list of worker tab entries for stable 1-9 mapping
 	workerTabOrder []worker.WorkerID
+
+	// Resume checkpoint (loaded during phaseInit)
+	loadedCheckpoint *checkpoint.Checkpoint
 }
 
 func NewModel(cfg *config.Config, version string) *Model {
@@ -200,7 +203,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.cancel()
 			return m, tea.Quit
+		case msg.String() == "y":
+			if m.phase == phaseResumePrompt {
+				// Resume from checkpoint — handled by P1-013
+				// For now, transition to the appropriate execution phase
+				m.phase = phaseIterating
+				cmds = append(cmds, findNextStoryCmd(m.cfg.PRDFile))
+				return m, tea.Batch(cmds...)
+			}
+		case msg.String() == "n":
+			if m.phase == phaseResumePrompt {
+				// Start fresh — delete checkpoint and continue normal startup
+				_ = checkpoint.Delete(m.cfg.ProjectDir)
+				m.loadedCheckpoint = nil
+				if m.cfg.Workers > 1 {
+					m.phase = phaseDagAnalysis
+					cmds = append(cmds, dagAnalyzeCmd(m.ctx, m.cfg))
+				} else {
+					m.phase = phaseIterating
+					cmds = append(cmds, findNextStoryCmd(m.cfg.PRDFile))
+				}
+				return m, tea.Batch(cmds...)
+			}
 		case msg.String() == "q":
+			if m.phase == phaseResumePrompt {
+				m.cancel()
+				return m, tea.Quit
+			}
 			if m.phase == phaseReview {
 				m.cancel()
 				return m, tea.Quit
@@ -471,6 +500,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case archiveDoneMsg:
+		// Check for existing checkpoint to offer resume
+		cp, exists, err := checkpoint.Load(m.cfg.ProjectDir)
+		if err == nil && exists {
+			currentHash, hashErr := checkpoint.ComputePRDHash(m.cfg.PRDFile)
+			if hashErr == nil && currentHash == cp.PRDHash {
+				// Valid checkpoint — offer resume
+				m.loadedCheckpoint = &cp
+				m.phase = phaseResumePrompt
+				return m, nil
+			}
+			// Stale checkpoint — PRD changed, delete and continue
+			m.claudeContent += "── Checkpoint found but PRD has changed — starting fresh ──\n"
+			m.claudeVP.SetContent(m.claudeContent)
+			m.prevClaudeLen = len(m.claudeContent)
+			_ = checkpoint.Delete(m.cfg.ProjectDir)
+		}
 		// Compute PRD hash for checkpointing
 		if hash, err := checkpoint.ComputePRDHash(m.cfg.PRDFile); err == nil {
 			m.prdHash = hash
@@ -996,6 +1041,10 @@ func (m *Model) View() string {
 		return "Loading..."
 	}
 
+	if m.phase == phaseResumePrompt && m.loadedCheckpoint != nil {
+		return m.renderResumePrompt()
+	}
+
 	// Layout: header(3) + top panels + claude activity + footer(1)
 	headerHeight := 3
 	footerHeight := 1
@@ -1089,7 +1138,7 @@ func (m *Model) View() string {
 		workerTabStr,
 	)
 
-	footer := renderFooter(m.width, m.confirmQuit, m.phase == phaseDone, m.phase == phaseIdle, m.phase == phaseParallel, m.phase == phaseReview, m.phase == phaseQualityPrompt)
+	footer := renderFooter(m.width, m.confirmQuit, m.phase == phaseDone, m.phase == phaseIdle, m.phase == phaseParallel, m.phase == phaseReview, m.phase == phaseQualityPrompt, m.phase == phaseResumePrompt)
 
 	output := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -1106,6 +1155,61 @@ func (m *Model) View() string {
 	return strings.Join(lines, "\n")
 }
 
+// renderResumePrompt renders the checkpoint resume prompt as a full-screen view.
+func (m *Model) renderResumePrompt() string {
+	cp := m.loadedCheckpoint
+
+	var b strings.Builder
+	header := renderHeader(m, m.width)
+	b.WriteString(header)
+	b.WriteString("\n")
+
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFD700")).Render("  Checkpoint Found — Resume Previous Run?")
+	b.WriteString(title)
+	b.WriteString("\n\n")
+
+	// Mode
+	b.WriteString(fmt.Sprintf("  Mode: %s\n\n", stylePanelTitle.Render(cp.Phase)))
+
+	// Completed stories
+	b.WriteString(fmt.Sprintf("  %s (%d)\n", styleSuccess.Render("Completed"), len(cp.CompletedStories)))
+	for _, id := range cp.CompletedStories {
+		b.WriteString(fmt.Sprintf("    %s %s\n", styleStoryPassed.Render("✓"), id))
+	}
+	if len(cp.CompletedStories) == 0 {
+		b.WriteString("    (none)\n")
+	}
+	b.WriteString("\n")
+
+	// Failed stories
+	b.WriteString(fmt.Sprintf("  %s (%d)\n", styleDanger.Render("Failed"), len(cp.FailedStories)))
+	for id, fs := range cp.FailedStories {
+		errSummary := fs.LastError
+		if len(errSummary) > 60 {
+			errSummary = errSummary[:60] + "..."
+		}
+		b.WriteString(fmt.Sprintf("    %s %s (retries: %d) %s\n", styleStoryFailed.Render("✗"), id, fs.Retries, styleMuted.Render(errSummary)))
+	}
+	if len(cp.FailedStories) == 0 {
+		b.WriteString("    (none)\n")
+	}
+	b.WriteString("\n")
+
+	// Remaining count
+	totalKnown := len(cp.CompletedStories) + len(cp.FailedStories) + len(cp.InProgress)
+	if p, err := prd.Load(m.cfg.PRDFile); err == nil {
+		remaining := p.TotalCount() - len(cp.CompletedStories)
+		b.WriteString(fmt.Sprintf("  %s %d\n\n", styleMuted.Render("Remaining:"), remaining))
+	} else {
+		b.WriteString(fmt.Sprintf("  %s %d+ stories tracked\n\n", styleMuted.Render("Total:"), totalKnown))
+	}
+
+	// Prompt
+	b.WriteString("  Press " + styleKey.Render("y") + " to resume, " + styleKey.Render("n") + " to start fresh, " + styleKey.Render("q") + " to quit\n")
+
+	return b.String()
+}
+
 // clampLines truncates or pads a string to exactly n lines.
 func clampLines(s string, n int) string {
 	lines := strings.Split(s, "\n")
@@ -1118,7 +1222,12 @@ func clampLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bool, review bool, qualityPrompt bool) string {
+func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bool, review bool, qualityPrompt bool, resumePrompt bool) string {
+	if resumePrompt {
+		return "  " + styleKey.Render("y") + styleFooter.Render(": resume  ") +
+			styleKey.Render("n") + styleFooter.Render(": start fresh  ") +
+			styleKey.Render("q") + styleFooter.Render(": quit")
+	}
 	if confirmQuit {
 		return "  " + styleQuitConfirm.Render("Press q again to quit, any other key to cancel")
 	}
