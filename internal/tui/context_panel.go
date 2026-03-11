@@ -149,8 +149,21 @@ func hasQualityContent(data contextPanelData) bool {
 	return data.QualityContent != "" || data.Phase == phaseQualityReview || data.Phase == phaseQualityFix || data.Phase == phaseQualityPrompt
 }
 
+// markdownCache caches the last rendered markdown to avoid re-rendering
+// on every View() cycle when the content hasn't changed.
+var markdownCache struct {
+	input    string
+	width    int
+	rendered string
+}
+
 // renderMarkdown renders markdown content for the TUI using glamour.
+// Results are cached and only re-rendered when content or width changes.
 func renderMarkdown(content string, width int) string {
+	if content == markdownCache.input && width == markdownCache.width {
+		return markdownCache.rendered
+	}
+
 	r, err := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
 		glamour.WithWordWrap(width),
@@ -162,7 +175,13 @@ func renderMarkdown(content string, width int) string {
 	if err != nil {
 		return content
 	}
-	return strings.TrimRight(rendered, "\n")
+	result := strings.TrimRight(rendered, "\n")
+
+	markdownCache.input = content
+	markdownCache.width = width
+	markdownCache.rendered = result
+
+	return result
 }
 
 // renderWorktreeCompact formats jj status output more compactly.
