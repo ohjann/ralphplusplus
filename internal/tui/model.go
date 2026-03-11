@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/harmonica"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/eoghanhynes/ralph/internal/checkpoint"
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/coordinator"
 	"github.com/eoghanhynes/ralph/internal/dag"
@@ -91,6 +92,9 @@ type Model struct {
 	coord            *coordinator.Coordinator
 	storyDAG         *dag.DAG
 	activeWorkerView worker.WorkerID // which worker's output to show in Claude panel
+
+	// Checkpoint
+	prdHash string
 
 	// Quality review
 	qualityIteration  int
@@ -467,6 +471,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case archiveDoneMsg:
+		// Compute PRD hash for checkpointing
+		if hash, err := checkpoint.ComputePRDHash(m.cfg.PRDFile); err == nil {
+			m.prdHash = hash
+		}
 		if m.cfg.Workers > 1 {
 			m.phase = phaseDagAnalysis
 			cmds = append(cmds, dagAnalyzeCmd(m.ctx, m.cfg))
@@ -521,6 +529,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
 		}
+
+		// Write checkpoint after each serial iteration
+		m.writeSerialCheckpoint(msg.Err)
 
 		if msg.CompleteSignal {
 			_ = events.Append(m.cfg.ProjectDir, events.Event{
@@ -903,6 +914,44 @@ func (m *Model) cacheWorkerLog(wID worker.WorkerID) {
 	if data, err := os.ReadFile(actPath); err == nil {
 		m.workerLogCache[wID] = string(data)
 	}
+}
+
+// writeSerialCheckpoint writes a checkpoint after each serial iteration completes.
+func (m *Model) writeSerialCheckpoint(iterErr error) {
+	p, err := prd.Load(m.cfg.PRDFile)
+	if err != nil {
+		return
+	}
+
+	var completed []string
+	failed := make(map[string]checkpoint.FailedStory)
+
+	for _, s := range p.UserStories {
+		if s.Passes {
+			completed = append(completed, s.ID)
+		}
+	}
+
+	// If the current iteration had an error, record the current story as failed
+	if iterErr != nil && m.currentStoryID != "" {
+		failed[m.currentStoryID] = checkpoint.FailedStory{
+			Retries:   1,
+			LastError: iterErr.Error(),
+		}
+	}
+
+	cp := checkpoint.Checkpoint{
+		PRDHash:          m.prdHash,
+		Phase:            "serial",
+		CompletedStories: completed,
+		FailedStories:    failed,
+		InProgress:       nil,
+		DAG:              nil,
+		IterationCount:   m.iteration,
+		Timestamp:        time.Now(),
+	}
+
+	_ = checkpoint.Save(m.cfg.ProjectDir, cp)
 }
 
 func (m *Model) handleJudgeCheck() tea.Cmd {

@@ -10,13 +10,7 @@ import (
 	"time"
 )
 
-// FailedStory records retry information for a failed story.
-type FailedStory struct {
-	Retries   int    `json:"retries"`
-	LastError string `json:"last_error"`
-}
-
-// Checkpoint represents the persisted state of a run for resume capability.
+// Checkpoint represents the saved state of a ralph run for resume capability.
 type Checkpoint struct {
 	PRDHash          string                 `json:"prd_hash"`
 	Phase            string                 `json:"phase"`
@@ -28,31 +22,35 @@ type Checkpoint struct {
 	Timestamp        time.Time              `json:"timestamp"`
 }
 
+// FailedStory tracks retry information for a failed story.
+type FailedStory struct {
+	Retries   int    `json:"retries"`
+	LastError string `json:"last_error"`
+}
+
 func checkpointPath(projectDir string) string {
 	return filepath.Join(projectDir, ".ralph", "checkpoint.json")
 }
 
-// Save writes the checkpoint to .ralph/checkpoint.json.
+// Save writes a checkpoint to .ralph/checkpoint.json.
 func Save(projectDir string, cp Checkpoint) error {
-	cp.Timestamp = time.Now()
+	path := checkpointPath(projectDir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("creating checkpoint dir: %w", err)
+	}
 	data, err := json.MarshalIndent(cp, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling checkpoint: %w", err)
 	}
 	data = append(data, '\n')
-
-	dir := filepath.Dir(checkpointPath(projectDir))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating checkpoint dir: %w", err)
-	}
-
-	return os.WriteFile(checkpointPath(projectDir), data, 0o644)
+	return os.WriteFile(path, data, 0o644)
 }
 
-// Load reads the checkpoint from .ralph/checkpoint.json.
+// Load reads a checkpoint from .ralph/checkpoint.json.
 // Returns the checkpoint, whether the file exists, and any error.
 func Load(projectDir string) (Checkpoint, bool, error) {
-	data, err := os.ReadFile(checkpointPath(projectDir))
+	path := checkpointPath(projectDir)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Checkpoint{}, false, nil
@@ -66,16 +64,17 @@ func Load(projectDir string) (Checkpoint, bool, error) {
 	return cp, true, nil
 }
 
-// Delete removes the checkpoint file. No error if the file doesn't exist.
+// Delete removes .ralph/checkpoint.json. No error if file doesn't exist.
 func Delete(projectDir string) error {
-	err := os.Remove(checkpointPath(projectDir))
+	path := checkpointPath(projectDir)
+	err := os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("deleting checkpoint: %w", err)
 	}
 	return nil
 }
 
-// ComputePRDHash returns the SHA-256 hex string of the file contents.
+// ComputePRDHash returns the SHA-256 hex digest of a file's contents.
 func ComputePRDHash(prdFilePath string) (string, error) {
 	data, err := os.ReadFile(prdFilePath)
 	if err != nil {
