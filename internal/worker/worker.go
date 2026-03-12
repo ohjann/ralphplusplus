@@ -175,8 +175,8 @@ Just implement your story, commit, update progress.md, and stop.`, w.StoryID)
 	if cfg.JudgeEnabled && passed {
 		send(WorkerJudging, nil, false, changeID)
 
-		// Capture revs for judge
-		preRevs := []judge.DirRev{{Dir: ws.Dir, Rev: changeID}}
+		// Capture revs for judge: diff from base to squashed commit
+		preRevs := []judge.DirRev{{Dir: ws.Dir, Rev: w.BaseChangeID, ToRev: changeID}}
 		result := judge.RunJudge(w.Ctx, cfg.RalphHome, ws.Dir, filepath.Join(ws.Dir, "prd.json"), w.StoryID, preRevs)
 		if !result.Passed {
 			passed = false

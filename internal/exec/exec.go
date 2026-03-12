@@ -18,9 +18,13 @@ func JJStatus(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// JJDiff runs "jj diff --from <rev> --to @ --git" and returns the output.
-func JJDiff(ctx context.Context, dir, fromRev string) (string, error) {
-	cmd := exec.CommandContext(ctx, "jj", "diff", "--from", fromRev, "--to", "@", "--git")
+// JJDiff runs "jj diff --from <fromRev> --to <toRev> --git" and returns the output.
+// If toRev is empty, it defaults to "@".
+func JJDiff(ctx context.Context, dir, fromRev, toRev string) (string, error) {
+	if toRev == "" {
+		toRev = "@"
+	}
+	cmd := exec.CommandContext(ctx, "jj", "diff", "--from", fromRev, "--to", toRev, "--git")
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

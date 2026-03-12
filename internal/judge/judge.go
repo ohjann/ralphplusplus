@@ -13,10 +13,12 @@ import (
 	"github.com/eoghanhynes/ralph/internal/prd"
 )
 
-// DirRev associates a directory with its pre-run revision for deterministic diff ordering.
+// DirRev associates a directory with revisions for diffing.
+// Rev is the "from" revision. ToRev, if set, is the "to" revision (otherwise defaults to @).
 type DirRev struct {
-	Dir string
-	Rev string
+	Dir   string
+	Rev   string
+	ToRev string
 }
 
 type Verdict struct {
@@ -168,7 +170,7 @@ func getDiffs(ctx context.Context, preRevs []DirRev) string {
 	for _, dr := range preRevs {
 		var diff string
 		if dr.Rev != "" {
-			if d, err := rexec.JJDiff(ctx, dr.Dir, dr.Rev); err == nil && d != "" {
+			if d, err := rexec.JJDiff(ctx, dr.Dir, dr.Rev, dr.ToRev); err == nil && d != "" {
 				diff = d
 			}
 		}
