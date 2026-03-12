@@ -116,6 +116,7 @@ type Model struct {
 	// Memory / ChromaDB sidecar
 	memorySidecar *memory.Sidecar
 	chromaClient  *memory.ChromaClient
+	memoryContent string // rendered content for the memory context panel tab
 }
 
 func NewModel(cfg *config.Config, version string) *Model {
@@ -312,9 +313,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.String() == "[" || msg.String() == "]":
 			// Cycle context panel tabs
 			if msg.String() == "]" {
-				m.ctxMode = (m.ctxMode + 1) % 4
+				m.ctxMode = (m.ctxMode + 1) % contextModeCount
 			} else {
-				m.ctxMode = (m.ctxMode + 3) % 4 // -1 with wrap
+				m.ctxMode = (m.ctxMode + contextModeCount - 1) % contextModeCount // -1 with wrap
 			}
 			return m, nil
 		case msg.String() == "enter":
@@ -428,6 +429,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tickCmd())
 		cmds = append(cmds, pollWorktreeCmd(m.ctx, m.cfg.ProjectDir))
 		cmds = append(cmds, reloadPRDCmd(m.cfg.PRDFile))
+		// Refresh memory stats periodically (picks up embedding pipeline changes)
+		if m.chromaClient != nil {
+			cmds = append(cmds, memoryStatsCmd(m.ctx, m.chromaClient, m.cfg.Memory.Disabled))
+		}
 
 	// --- Data updates ---
 	case progressContentMsg:
@@ -477,6 +482,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Start ChromaDB sidecar setup in background (unless disabled)
 		if !m.cfg.Memory.Disabled {
 			cmds = append(cmds, chromaSetupCmd(m.ctx, m.cfg))
+		} else {
+			m.memoryContent = "  Memory disabled"
 		}
 
 		// Check for existing checkpoint to offer resume
@@ -510,17 +517,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chromaSetupDoneMsg:
 		if msg.Err != nil {
 			debuglog.Log("chromadb setup failed (degrading gracefully): %v", msg.Err)
+			m.memoryContent = "  Memory unavailable (ChromaDB not running)"
 		} else {
 			m.memorySidecar = msg.Sidecar
 			m.chromaClient = msg.Client
 			// Trigger codebase scan in background now that sidecar is healthy
 			cmds = append(cmds, codebaseScanCmd(m.ctx, m.cfg, m.chromaClient))
+			cmds = append(cmds, memoryStatsCmd(m.ctx, m.chromaClient, m.cfg.Memory.Disabled))
 		}
 
 	case codebaseScanDoneMsg:
 		if msg.Err != nil {
 			debuglog.Log("codebase scan failed (non-fatal): %v", msg.Err)
 		}
+		// Refresh memory stats after scan completes (collection counts changed)
+		if m.chromaClient != nil {
+			cmds = append(cmds, memoryStatsCmd(m.ctx, m.chromaClient, m.cfg.Memory.Disabled))
+		}
+
+	case memoryStatsMsg:
+		m.memoryContent = msg.Content
 
 	case pipelineEmbedDoneMsg:
 		if msg.Err != nil {
@@ -1171,6 +1187,7 @@ func (m *Model) View() string {
 		WorktreeContent: m.worktreeContent,
 		JudgeContent:    m.judgeContent,
 		QualityContent:  m.qualityContent,
+		MemoryContent:   m.memoryContent,
 		Phase:           m.phase,
 	}
 	ctxPanel := renderContextPanel(

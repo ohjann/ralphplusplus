@@ -478,3 +478,70 @@ func runPipelineCmd(ctx context.Context, client *memory.ChromaClient, projectDir
 		return pipelineEmbedDoneMsg{StoryID: storyID}
 	}
 }
+
+// memoryStatsCmd fetches collection statistics and formats them for the memory panel.
+func memoryStatsCmd(ctx context.Context, client *memory.ChromaClient, disabled bool) tea.Cmd {
+	return func() tea.Msg {
+		if disabled {
+			return memoryStatsMsg{Content: "  Memory disabled"}
+		}
+		if client == nil {
+			return memoryStatsMsg{Content: "  Memory unavailable (ChromaDB not running)"}
+		}
+
+		var sb fmt.Stringer = &memoryStatsBuilder{}
+		b := sb.(*memoryStatsBuilder)
+
+		b.WriteString("  Collection Statistics\n")
+		b.WriteString("  ─────────────────────\n")
+
+		collections := memory.AllCollections()
+		totalDocs := 0
+		for _, col := range collections {
+			count, err := client.CountDocuments(ctx, col.Name)
+			if err != nil {
+				b.WriteString(fmt.Sprintf("  %-20s  error\n", col.Name))
+				continue
+			}
+			totalDocs += count
+			bar := renderCapBar(count, col.MaxDocuments, 15)
+			b.WriteString(fmt.Sprintf("  %-20s %s %4d / %d\n", col.Name, bar, count, col.MaxDocuments))
+		}
+		b.WriteString(fmt.Sprintf("\n  Total documents: %d\n", totalDocs))
+
+		return memoryStatsMsg{Content: b.String()}
+	}
+}
+
+// memoryStatsBuilder is a simple string builder implementing fmt.Stringer.
+type memoryStatsBuilder struct {
+	buf []byte
+}
+
+func (b *memoryStatsBuilder) WriteString(s string) {
+	b.buf = append(b.buf, s...)
+}
+
+func (b *memoryStatsBuilder) String() string {
+	return string(b.buf)
+}
+
+// renderCapBar renders a simple capacity bar like [████░░░░░░░░░░░].
+func renderCapBar(count, max, width int) string {
+	if max <= 0 {
+		return ""
+	}
+	filled := count * width / max
+	if filled > width {
+		filled = width
+	}
+	bar := make([]byte, width)
+	for i := range bar {
+		if i < filled {
+			bar[i] = '#'
+		} else {
+			bar[i] = '.'
+		}
+	}
+	return "[" + string(bar) + "]"
+}

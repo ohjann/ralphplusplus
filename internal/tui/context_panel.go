@@ -17,6 +17,8 @@ const (
 	contextWorktree                    // jj status
 	contextJudge                       // judge results
 	contextQuality                     // quality review assessment
+	contextMemory                      // memory statistics and context
+	contextModeCount                   // sentinel: total number of modes
 )
 
 func newContextViewport(width, height int) viewport.Model {
@@ -32,6 +34,7 @@ type contextPanelData struct {
 	WorktreeContent string
 	JudgeContent    string
 	QualityContent  string
+	MemoryContent   string
 	Phase           phase
 }
 
@@ -76,6 +79,11 @@ func renderContextPanel(vp *viewport.Model, data contextPanelData, active bool, 
 		} else {
 			content = styleMuted.Render("  No changes")
 		}
+	case contextMemory:
+		content = data.MemoryContent
+		if content == "" {
+			content = styleMuted.Render("  Waiting for memory data...")
+		}
 	}
 
 	vp.SetContent(content)
@@ -104,6 +112,7 @@ func renderContextTabs(data contextPanelData) string {
 		{contextWorktree, "⌥", "Tree", true},
 		{contextJudge, "⚖", "Judge", true},
 		{contextQuality, "◇", "Quality", true},
+		{contextMemory, "⧫", "Memory", true},
 	}
 
 	var parts []string

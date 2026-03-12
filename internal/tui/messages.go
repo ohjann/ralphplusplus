@@ -92,6 +92,9 @@ type pipelineEmbedDoneMsg struct {
 	StoryID string
 	Err     error
 }
+type memoryStatsMsg struct {
+	Content string
+}
 
 // Terminal size
 type windowSizeMsg struct {
