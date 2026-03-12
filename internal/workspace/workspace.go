@@ -17,8 +17,11 @@ type CreateResult struct {
 }
 
 // Create creates a jj workspace for the given story, branched from current @-.
+// If a workspace with the same name already exists (e.g. from a previous failed
+// attempt), it is forgotten and cleaned up before creating a fresh one.
 func Create(ctx context.Context, projectDir, storyID, baseDir string) (CreateResult, error) {
 	wsDir := filepath.Join(baseDir, storyID)
+	wsName := WorkspaceName(storyID)
 
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return CreateResult{}, fmt.Errorf("creating workspace base dir: %w", err)
@@ -40,7 +43,28 @@ func Create(ctx context.Context, projectDir, storyID, baseDir string) (CreateRes
 	cmd.Dir = projectDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return CreateResult{}, fmt.Errorf("jj workspace add: %s: %w", strings.TrimSpace(string(out)), err)
+		outStr := strings.TrimSpace(string(out))
+		// If the workspace already exists (stale from a previous failed attempt),
+		// clean it up and retry.
+		if strings.Contains(outStr, "already exists") || strings.Contains(outStr, "is not an empty directory") {
+			// Forget the jj workspace (best-effort — may already be partially cleaned up)
+			forgetCmd := exec.CommandContext(ctx, "jj", "workspace", "forget", wsName)
+			forgetCmd.Dir = projectDir
+			_ = forgetCmd.Run()
+
+			// Remove the leftover directory
+			_ = os.RemoveAll(wsDir)
+
+			// Retry workspace creation
+			retryCmd := exec.CommandContext(ctx, "jj", "workspace", "add", wsDir, "-r", "@-")
+			retryCmd.Dir = projectDir
+			retryOut, retryErr := retryCmd.CombinedOutput()
+			if retryErr != nil {
+				return CreateResult{}, fmt.Errorf("jj workspace add (retry after cleanup): %s: %w", strings.TrimSpace(string(retryOut)), retryErr)
+			}
+		} else {
+			return CreateResult{}, fmt.Errorf("jj workspace add: %s: %w", outStr, err)
+		}
 	}
 
 	return CreateResult{Dir: wsDir, BaseChangeID: baseChangeID}, nil

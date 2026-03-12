@@ -546,10 +546,22 @@ func (c *Coordinator) FailedError(storyID string) string {
 }
 
 // IsBlockedByFailure returns true and the blocking dependency ID if the story
-// cannot be scheduled because one of its dependencies failed.
+// cannot be scheduled because one of its dependencies failed (directly or transitively).
 func (c *Coordinator) IsBlockedByFailure(storyID string) (bool, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	visited := make(map[string]bool)
+	return c.isBlockedByFailureLocked(storyID, visited)
+}
+
+// isBlockedByFailureLocked checks transitively whether a story is blocked by any failed dependency.
+// Must be called with c.mu held.
+func (c *Coordinator) isBlockedByFailureLocked(storyID string, visited map[string]bool) (bool, string) {
+	if visited[storyID] {
+		return false, ""
+	}
+	visited[storyID] = true
+
 	node, ok := c.dag.Nodes[storyID]
 	if !ok {
 		return false, ""
@@ -557,6 +569,12 @@ func (c *Coordinator) IsBlockedByFailure(storyID string) (bool, string) {
 	for _, dep := range node.DependsOn {
 		if c.failed[dep] {
 			return true, dep
+		}
+		// Check if the dependency is itself blocked by a failure upstream
+		if !c.completed[dep] {
+			if blocked, blocker := c.isBlockedByFailureLocked(dep, visited); blocked {
+				return true, blocker
+			}
 		}
 	}
 	return false, ""

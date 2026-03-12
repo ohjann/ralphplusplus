@@ -13,9 +13,8 @@ You are an autonomous coding agent working on a software project.
 7. Run quality checks (e.g., typecheck, lint, test - use whatever your project requires)
 8. Update CLAUDE.md files if you discover reusable patterns (see below)
 9. If checks pass, commit ALL changes with a simple descriptive message
-10. Update the PRD to set `passes: true` for the completed story
-11. Append your progress to `progress.md`
-12. Note: `prd.json`, `progress.md`, and `.ralph/` are gitignored and will not be committed
+10. Append your progress to `progress.md`
+11. Note: `prd.json`, `progress.md`, and `.ralph/` are gitignored and will not be committed
 
 ## Progress Report Format
 
@@ -143,33 +142,31 @@ If you cannot complete the story in this session (running out of context, blocke
 ---
 ```
 
-Do NOT set `passes: true` for an incomplete story. The next iteration will see the `[CONTEXT EXHAUSTED]` marker and continue where you left off.
+The next iteration will see the `[CONTEXT EXHAUSTED]` marker and continue where you left off.
 
 ## Judge Feedback
 
-When the `--judge` flag is enabled, an independent LLM (Gemini) reviews your changes after you mark a story as `passes: true`. If the judge rejects your work, the ralph loop will:
+When the `--judge` flag is enabled, an independent LLM (Gemini) reviews your changes after each iteration. If the judge rejects your work, the ralph loop will:
 
-1. Set `passes` back to `false` for the story
-2. Write feedback to `.ralph/judge-feedback-{storyId}.md`
-3. Re-run your iteration
+1. Write feedback to `.ralph/judge-feedback-{storyId}.md`
+2. Re-run your iteration
 
 When you see a judge feedback file:
 - Read it carefully — it contains the specific criteria that were not met
 - Address **all** failed criteria listed in the feedback
 - Do NOT repeat the same approach that was rejected
 - The feedback includes a suggestion — use it as guidance
-- After fixing the issues, mark the story as `passes: true` again
 
 The judge can only reject a story a limited number of times. After the limit is reached, the story is auto-passed and flagged for human review.
 
 ## Stop Condition
 
-After completing a user story, check if ALL stories have `passes: true`.
+After completing a user story, end your response normally. The system will automatically detect completion and schedule the next story.
 
-If ALL stories are complete and passing, reply with:
+If you believe ALL stories are complete, you may optionally reply with:
 <promise>COMPLETE</promise>
 
-If there are still stories with `passes: false`, end your response normally (another iteration will pick up the next story).
+This is a hint to the system — do NOT read or modify prd.json to check completion status.
 
 ## Semantic Memory
 

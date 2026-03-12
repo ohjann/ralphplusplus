@@ -132,7 +132,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 You are running as a parallel worker. Other workers are handling other stories simultaneously.
 You are ONLY responsible for story **%s**. After completing it, stop immediately.
 Do NOT check if all stories are complete. Do NOT emit the COMPLETE signal.
-Just implement your story, commit, set passes: true, update progress.md, and stop.`, w.StoryID)
+Just implement your story, commit, update progress.md, and stop.`, w.StoryID)
 
 	logPath := runner.LogFilePath(wsLogDir, w.Iteration)
 	err = runner.RunClaude(w.Ctx, ws.Dir, prompt, logPath, runner.RunClaudeOpts{
@@ -149,14 +149,20 @@ Just implement your story, commit, set passes: true, update progress.md, and sto
 		return
 	}
 
-	// 3. Check if story passed
+	// 3. Mark story as passed in workspace prd.json
+	// The system owns the passes field — the agent no longer sets it.
+	// If the judge is enabled, it will revert passes to false on failure.
 	p, err := prd.Load(filepath.Join(ws.Dir, "prd.json"))
 	if err != nil {
 		send(WorkerFailed, fmt.Errorf("load prd: %w", err), false, "")
 		return
 	}
-	story := p.FindStory(w.StoryID)
-	passed := story != nil && story.Passes
+	p.SetPasses(w.StoryID, true)
+	if err := prd.Save(filepath.Join(ws.Dir, "prd.json"), p); err != nil {
+		send(WorkerFailed, fmt.Errorf("save prd: %w", err), false, "")
+		return
+	}
+	passed := true
 
 	// 4. Commit workspace changes
 	changeID, err := workspace.CommitWorkspace(w.Ctx, ws.Dir, w.StoryID, w.StoryTitle, w.BaseChangeID)

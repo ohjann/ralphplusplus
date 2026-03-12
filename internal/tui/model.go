@@ -24,6 +24,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/quality"
 	"github.com/eoghanhynes/ralph/internal/runner"
+	"github.com/eoghanhynes/ralph/internal/storystate"
 	"github.com/eoghanhynes/ralph/internal/worker"
 )
 
@@ -533,6 +534,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
+		}
+
+		// Mark current story as passed in prd.json if agent reported it complete.
+		// The system owns the passes field — the agent no longer modifies prd.json.
+		if msg.Err == nil && m.currentStoryID != "" {
+			ss, _ := storystate.Load(m.cfg.ProjectDir, m.currentStoryID)
+			if ss.Status == storystate.StatusComplete {
+				if p, err := prd.Load(m.cfg.PRDFile); err == nil {
+					p.SetPasses(m.currentStoryID, true)
+					_ = prd.Save(m.cfg.PRDFile, p)
+				}
+			}
 		}
 
 		// Write checkpoint after each serial iteration
