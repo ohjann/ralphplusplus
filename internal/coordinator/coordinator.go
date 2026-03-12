@@ -75,6 +75,23 @@ func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory
 	}
 }
 
+// NewFromCheckpoint creates a Coordinator pre-seeded with state from a checkpoint.
+func NewFromCheckpoint(
+	cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory,
+	completedIDs []string, failedStories map[string]checkpoint.FailedStory, iterationCount int,
+) *Coordinator {
+	c := New(cfg, d, maxWorkers, stories)
+	for _, id := range completedIDs {
+		c.completed[id] = true
+	}
+	for id, fs := range failedStories {
+		c.failed[id] = true
+		c.failedErrors[id] = fs.LastError
+	}
+	c.iterationCount = iterationCount
+	return c
+}
+
 // ScheduleReady launches workers for stories whose dependencies are met.
 // Returns the number of new workers launched.
 func (c *Coordinator) ScheduleReady(ctx context.Context) int {

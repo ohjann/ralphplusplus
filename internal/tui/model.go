@@ -247,10 +247,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case msg.String() == "y":
 			if m.phase == phaseResumePrompt {
-				// Resume from checkpoint — handled by P1-013
-				// For now, transition to the appropriate execution phase
-				m.phase = phaseIterating
-				cmds = append(cmds, findNextStoryCmd(m.cfg.PRDFile))
+				cp := m.loadedCheckpoint
+				m.iteration = cp.IterationCount
+				m.completedStories = len(cp.CompletedStories)
+
+				if cp.Phase == "parallel" && m.cfg.Workers > 1 {
+					p, err := prd.Load(m.cfg.PRDFile)
+					if err != nil {
+						debuglog.Log("Error loading PRD for resume: %v", err)
+						m.phase = phaseIterating
+						cmds = append(cmds, findNextStoryCmd(m.cfg.PRDFile))
+						return m, tea.Batch(cmds...)
+					}
+
+					m.storyDAG = dag.FromCheckpoint(cp.DAG, p.UserStories)
+
+					var incomplete []prd.UserStory
+					for _, s := range p.UserStories {
+						if !s.Passes {
+							incomplete = append(incomplete, s)
+						}
+					}
+
+					m.coord = coordinator.NewFromCheckpoint(
+						m.cfg, m.storyDAG, m.cfg.Workers, incomplete,
+						cp.CompletedStories, cp.FailedStories, cp.IterationCount,
+					)
+					m.phase = phaseParallel
+					m.coord.ScheduleReady(m.ctx)
+					cmds = append(cmds, m.coord.ListenCmd())
+				} else {
+					m.phase = phaseIterating
+					cmds = append(cmds, findNextStoryCmd(m.cfg.PRDFile))
+				}
 				return m, tea.Batch(cmds...)
 			}
 		case msg.String() == "n":

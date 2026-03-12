@@ -126,6 +126,24 @@ func (d *DAG) Ready(completed map[string]bool) []string {
 	return ready
 }
 
+// FromCheckpoint reconstructs a DAG from checkpoint data (edges + stories for priority).
+func FromCheckpoint(edges map[string][]string, stories []prd.UserStory) *DAG {
+	priorityMap := make(map[string]int)
+	for _, s := range stories {
+		priorityMap[s.ID] = s.Priority
+	}
+
+	d := &DAG{Nodes: make(map[string]*StoryNode)}
+	for id, deps := range edges {
+		d.Nodes[id] = &StoryNode{
+			StoryID:   id,
+			DependsOn: deps,
+			Priority:  priorityMap[id],
+		}
+	}
+	return d
+}
+
 // Validate checks for cycles and dangling references.
 func (d *DAG) Validate(storyIDs []string) error {
 	idSet := make(map[string]bool)
