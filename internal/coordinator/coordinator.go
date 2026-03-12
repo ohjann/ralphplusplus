@@ -30,6 +30,7 @@ type Coordinator struct {
 	updateCh   chan worker.WorkerUpdate
 
 	mu              sync.Mutex
+	mergeMu         sync.Mutex // serialises MergeAndSync so jj rebase operations never overlap
 	workers         map[worker.WorkerID]*worker.Worker
 	completed       map[string]bool
 	failed          map[string]bool
@@ -236,7 +237,18 @@ func (c *Coordinator) writeCheckpointLocked() {
 // MergeAndSync rebases the worker's changes onto main, syncs prd.json and progress.md.
 // If the rebase produces conflicts, it runs Claude to resolve them before advancing.
 // Returns true if conflicts were resolved during the merge.
+//
+// This method is serialised via mergeMu so that concurrent tea.Cmd goroutines
+// cannot run overlapping jj rebase operations, which would create divergent
+// commits and conflicts in the history.
 func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (conflictsResolved bool, err error) {
+	// Serialise all merge-back operations. Multiple workers can finish around
+	// the same time and the TUI dispatches each mergeBackCmd as a concurrent
+	// tea.Cmd goroutine. Without this lock, two rebases would both target the
+	// same @- and create divergent sibling commits instead of a linear chain.
+	c.mergeMu.Lock()
+	defer c.mergeMu.Unlock()
+
 	c.mu.Lock()
 	w, ok := c.workers[u.WorkerID]
 	c.mu.Unlock()
@@ -502,6 +514,7 @@ type WorkerUpdateMsg struct {
 type MergeCompleteMsg struct {
 	StoryID           string
 	WorkerID          worker.WorkerID
+	ChangeID          string // jj change ID, needed for cleanup on merge failure
 	Err               error
 	ConflictsResolved bool
 }

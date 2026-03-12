@@ -310,6 +310,7 @@ func mergeBackCmd(ctx context.Context, coord *coordinator.Coordinator, u worker.
 		return coordinator.MergeCompleteMsg{
 			StoryID:           u.StoryID,
 			WorkerID:          u.WorkerID,
+			ChangeID:          u.ChangeID,
 			Err:               err,
 			ConflictsResolved: conflictsResolved,
 		}

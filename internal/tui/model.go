@@ -27,6 +27,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/runner"
 	"github.com/eoghanhynes/ralph/internal/storystate"
 	"github.com/eoghanhynes/ralph/internal/worker"
+	"github.com/eoghanhynes/ralph/internal/workspace"
 )
 
 const (
@@ -764,6 +765,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if u.Passed && u.ChangeID != "" {
 				cmds = append(cmds, mergeBackCmd(m.ctx, m.coord, u))
 			} else {
+				// Abandon the committed change so it doesn't leave an orphaned
+				// side branch in the jj history.
+				if u.ChangeID != "" {
+					_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, u.ChangeID)
+				}
 				// Preserve activity log for debugging before workspace is destroyed
 				m.coord.PreserveFailedLogs(u.StoryID, u.WorkerID)
 				go m.coord.CleanupWorker(m.ctx, u.WorkerID)
@@ -830,6 +836,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case coordinator.MergeCompleteMsg:
 		if msg.Err != nil {
+			// Abandon the change so it doesn't leave an orphaned side branch.
+			if msg.ChangeID != "" {
+				_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, msg.ChangeID)
+			}
 			m.claudeContent += fmt.Sprintf("\n── Merge failed (%s): %v ──\n", msg.StoryID, msg.Err)
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()

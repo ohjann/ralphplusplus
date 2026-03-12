@@ -81,6 +81,22 @@ func Destroy(ctx context.Context, projectDir, wsName, wsDir string) error {
 	return os.RemoveAll(wsDir)
 }
 
+// AbandonChange removes a change from the jj graph. Use this to clean up
+// commits from failed or non-passing workers that will never be merged back,
+// preventing orphaned side branches in the history.
+func AbandonChange(ctx context.Context, projectDir, changeID string) error {
+	if changeID == "" {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, "jj", "abandon", changeID)
+	cmd.Dir = projectDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("jj abandon %s: %s: %w", changeID, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 // MergeResult describes the outcome of a MergeBack operation.
 type MergeResult struct {
 	HasConflict     bool
