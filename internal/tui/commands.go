@@ -192,10 +192,29 @@ func findNextStoryCmd(prdPath string) tea.Cmd {
 	}
 }
 
-func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, iteration int) tea.Cmd {
+func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, iteration int, chromaClient *memory.ChromaClient, embedder memory.Embedder) tea.Cmd {
 	return func() tea.Msg {
-		p, _ := prd.Load(cfg.PRDFile)
-		prompt, err := runner.BuildPrompt(cfg.RalphHome, cfg.ProjectDir, storyID, p)
+		p, err := prd.Load(cfg.PRDFile)
+		if err != nil {
+			return claudeDoneMsg{Err: fmt.Errorf("loading PRD: %w", err)}
+		}
+
+		var opts []runner.BuildPromptOpts
+		if chromaClient != nil && embedder != nil && !cfg.Memory.Disabled {
+			retriever := memory.NewRetriever(chromaClient, embedder)
+			if retriever != nil {
+				opts = append(opts, runner.BuildPromptOpts{
+					Memory: retriever,
+					MemoryOpts: memory.RetrievalOptions{
+						TopK:      cfg.Memory.TopK,
+						MinScore:  cfg.Memory.MinScore,
+						MaxTokens: cfg.Memory.MaxTokens,
+					},
+				})
+			}
+		}
+
+		prompt, err := runner.BuildPrompt(cfg.RalphHome, cfg.ProjectDir, storyID, p, opts...)
 		if err != nil {
 			return claudeDoneMsg{Err: err}
 		}
@@ -431,13 +450,8 @@ func chromaSetupCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
 }
 
 // codebaseScanCmd runs the codebase scanner in the background.
-func codebaseScanCmd(ctx context.Context, cfg *config.Config, client *memory.ChromaClient) tea.Cmd {
+func codebaseScanCmd(ctx context.Context, cfg *config.Config, client *memory.ChromaClient, embedder memory.Embedder) tea.Cmd {
 	return func() tea.Msg {
-		embedder, err := memory.NewAnthropicEmbedder()
-		if err != nil {
-			debuglog.Log("codebase scan: embedder init failed: %v", err)
-			return codebaseScanDoneMsg{Err: err}
-		}
 		if err := memory.ScanCodebase(ctx, cfg.ProjectDir, client, embedder); err != nil {
 			debuglog.Log("codebase scan failed: %v", err)
 			return codebaseScanDoneMsg{Err: err}
@@ -448,16 +462,12 @@ func codebaseScanCmd(ctx context.Context, cfg *config.Config, client *memory.Chr
 }
 
 // runPipelineCmd runs the embedding pipeline for a completed or context-exhausted story.
-// It creates its own embedder and pipeline, embeds story data, then enforces collection caps.
-func runPipelineCmd(ctx context.Context, client *memory.ChromaClient, projectDir, storyID string, contextExhausted bool) tea.Cmd {
+// It uses the provided embedder, embeds story data, then enforces collection caps.
+func runPipelineCmd(ctx context.Context, client *memory.ChromaClient, embedder memory.Embedder, projectDir, storyID string, contextExhausted bool) tea.Cmd {
 	return func() tea.Msg {
-		embedder, err := memory.NewAnthropicEmbedder()
-		if err != nil {
-			debuglog.Log("pipeline embed: embedder init failed for %s: %v", storyID, err)
-			return pipelineEmbedDoneMsg{StoryID: storyID, Err: err}
-		}
 		pipeline := memory.NewPipeline(client, embedder)
 
+		var err error
 		if contextExhausted {
 			err = pipeline.ProcessContextExhaustion(ctx, projectDir, storyID)
 		} else {

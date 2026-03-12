@@ -70,7 +70,9 @@ type Model struct {
 	animFrame         int // animation frame for spinners
 
 	// Context panel mode
-	ctxMode contextMode
+	ctxMode          contextMode
+	ctxModeManual    bool  // true when user manually switched tabs; suppresses auto-select
+	ctxManualAtPhase phase // phase when manual override was set; resets on phase change
 
 	// Active panel for scrolling
 	activePanel int
@@ -115,9 +117,10 @@ type Model struct {
 	loadedCheckpoint *checkpoint.Checkpoint
 
 	// Memory / ChromaDB sidecar
-	memorySidecar *memory.Sidecar
-	chromaClient  *memory.ChromaClient
-	memoryContent string // rendered content for the memory context panel tab
+	memorySidecar  *memory.Sidecar
+	chromaClient   *memory.ChromaClient
+	memoryEmbedder memory.Embedder
+	memoryContent  string // rendered content for the memory context panel tab
 }
 
 func NewModel(cfg *config.Config, version string) *Model {
@@ -149,6 +152,13 @@ func (m *Model) stopSidecar() {
 			debuglog.Log("chromadb sidecar stop error: %v", err)
 		}
 	}
+}
+
+// contextContentWidth returns the usable content width for the context panel.
+func (m *Model) contextContentWidth() int {
+	storiesWidth := m.width * 35 / 100
+	contextWidth := m.width - storiesWidth
+	return max(contextWidth-4, 0)
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -212,6 +222,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.claudeVP.Width = m.width - 4
 		m.claudeVP.Height = claudeHeight - 3
 
+		// Re-render markdown at new width if we have content.
+		if m.progressContent != "" {
+			contentW := m.contextContentWidth()
+			if cmd := maybeRenderMarkdown(m.progressContent, contentW); cmd != nil {
+				return m, cmd
+			}
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -318,6 +335,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.ctxMode = (m.ctxMode + contextModeCount - 1) % contextModeCount // -1 with wrap
 			}
+			m.ctxModeManual = true
+			m.ctxManualAtPhase = m.phase
 			return m, nil
 		case msg.String() == "enter":
 			if m.phase == phaseReview {
@@ -380,13 +399,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.storyDisplayInfos = BuildStoryDisplayInfos(p.UserStories, m.currentStoryID, coordIface, m.phase)
 		}
 
-		// Auto-select context mode based on phase
-		autoMode := autoSelectContextMode(m.phase, m.judgeContent, m.qualityContent)
-		if autoMode != m.ctxMode {
-			// Only auto-switch if user hasn't manually changed (check if content appeared)
-			switch m.phase {
-			case phaseJudgeRun, phaseQualityReview, phaseQualityFix, phaseQualityPrompt:
-				m.ctxMode = autoMode
+		// Auto-select context mode based on phase (skip if user manually switched)
+		// Reset manual override when the phase changes so new phases can auto-select.
+		if m.ctxModeManual && m.phase != m.ctxManualAtPhase {
+			m.ctxModeManual = false
+		}
+		if !m.ctxModeManual {
+			autoMode := autoSelectContextMode(m.phase, m.judgeContent, m.qualityContent)
+			if autoMode != m.ctxMode {
+				switch m.phase {
+				case phaseJudgeRun, phaseQualityReview, phaseQualityFix, phaseQualityPrompt:
+					m.ctxMode = autoMode
+				}
 			}
 		}
 
@@ -439,8 +463,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case progressContentMsg:
 		if msg.Content != m.progressContent {
 			m.progressChanged = true
+			// Kick off async markdown rendering for the new content.
+			contentW := m.contextContentWidth()
+			if cmd := maybeRenderMarkdown(msg.Content, contentW); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 		}
 		m.progressContent = msg.Content
+
+	case markdownRenderedMsg:
+		applyMarkdownRendered(msg)
 
 	case worktreeMsg:
 		m.worktreeContent = msg.Content
@@ -522,8 +554,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.memorySidecar = msg.Sidecar
 			m.chromaClient = msg.Client
+			// Create embedder for semantic memory retrieval in BuildPrompt
+			if embedder, err := memory.NewAnthropicEmbedder(); err != nil {
+				debuglog.Log("memory embedder init failed (retrieval degraded): %v", err)
+			} else {
+				m.memoryEmbedder = embedder
+			}
 			// Trigger codebase scan in background now that sidecar is healthy
-			cmds = append(cmds, codebaseScanCmd(m.ctx, m.cfg, m.chromaClient))
+			if m.memoryEmbedder != nil {
+				cmds = append(cmds, codebaseScanCmd(m.ctx, m.cfg, m.chromaClient, m.memoryEmbedder))
+			}
 			cmds = append(cmds, memoryStatsCmd(m.ctx, m.chromaClient, m.cfg.Memory.Disabled))
 		}
 
@@ -581,7 +621,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.preRevs = captureRevsCmd(m.ctx, dirs)
 		}
 
-		cmds = append(cmds, runClaudeCmd(m.ctx, m.cfg, msg.StoryID, m.iteration))
+		cmds = append(cmds, runClaudeCmd(m.ctx, m.cfg, msg.StoryID, m.iteration, m.chromaClient, m.memoryEmbedder))
 
 	case claudeDoneMsg:
 		debuglog.Log("claudeDone: story=%s err=%v completeSignal=%v", m.currentStoryID, msg.Err, msg.CompleteSignal)
@@ -609,13 +649,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					_ = prd.Save(m.cfg.PRDFile, p)
 				}
 				// Trigger embedding pipeline for completed story
-				if m.chromaClient != nil {
-					cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.cfg.ProjectDir, m.currentStoryID, false))
+				if m.chromaClient != nil && m.memoryEmbedder != nil {
+					cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.memoryEmbedder, m.cfg.ProjectDir, m.currentStoryID, false))
 				}
 			} else if ss.Status == storystate.StatusContextExhausted {
 				// Trigger embedding pipeline for context-exhausted story
-				if m.chromaClient != nil {
-					cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.cfg.ProjectDir, m.currentStoryID, true))
+				if m.chromaClient != nil && m.memoryEmbedder != nil {
+					cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.memoryEmbedder, m.cfg.ProjectDir, m.currentStoryID, true))
 				}
 			}
 		}
@@ -857,10 +897,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cacheWorkerLog(msg.WorkerID)
 		go m.coord.CleanupWorker(m.ctx, msg.WorkerID)
 		// Trigger embedding pipeline after successful merge
-		if msg.Err == nil && m.chromaClient != nil {
+		if msg.Err == nil && m.chromaClient != nil && m.memoryEmbedder != nil {
 			ss, _ := storystate.Load(m.cfg.ProjectDir, msg.StoryID)
 			contextExhausted := ss.Status == storystate.StatusContextExhausted
-			cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.cfg.ProjectDir, msg.StoryID, contextExhausted))
+			cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.memoryEmbedder, m.cfg.ProjectDir, msg.StoryID, contextExhausted))
 		}
 		// Schedule more work
 		m.coord.ScheduleReady(m.ctx)

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -61,7 +62,11 @@ func renderContextPanel(vp *viewport.Model, data contextPanelData, active bool, 
 		if content == "" {
 			content = styleMuted.Render("  Waiting for progress updates...")
 		} else {
-			content = renderMarkdown(content, contentW)
+			// Use pre-rendered markdown from cache (rendered async in Update).
+			// Fall back to raw content if nothing rendered yet.
+			if markdownCache.rendered != "" && (markdownCache.input == content || markdownCache.pending) {
+				content = markdownCache.rendered
+			}
 		}
 	case contextJudge:
 		content = data.JudgeContent
@@ -139,39 +144,93 @@ func hasQualityContent(data contextPanelData) bool {
 	return data.QualityContent != "" || data.Phase == phaseQualityReview || data.Phase == phaseQualityFix || data.Phase == phaseQualityPrompt
 }
 
-// markdownCache caches the last rendered markdown to avoid re-rendering
-// on every View() cycle when the content hasn't changed.
+// markdownCache caches the last rendered markdown and the renderer itself
+// to avoid expensive re-creation on every content change.
+// All fields are only accessed from the main Bubble Tea goroutine.
 var markdownCache struct {
 	input    string
 	width    int
 	rendered string
+
+	// Cached renderer — only recreated when width changes.
+	renderer      *glamour.TermRenderer
+	rendererWidth int
+
+	// Async rendering: when content changes, we render in the background
+	// and return the stale cached result until the new one is ready.
+	pending   bool
+	pendingIn string
 }
 
-// renderMarkdown renders markdown content for the TUI using glamour.
-// Results are cached and only re-rendered when content or width changes.
-func renderMarkdown(content string, width int) string {
+// markdownRenderedMsg is sent when async markdown rendering completes.
+type markdownRenderedMsg struct {
+	Input    string
+	Width    int
+	Rendered string
+}
+
+// renderMarkdownAsync starts a background render and returns a Cmd.
+// The renderer is captured from the cache on the main goroutine and passed
+// into the background closure so that no shared state is accessed concurrently.
+func renderMarkdownAsync(content string, width int) tea.Cmd {
+	// Prepare renderer on the main goroutine (cache access is safe here).
+	renderer := markdownCache.renderer
+	if renderer == nil || width != markdownCache.rendererWidth {
+		r, err := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(width),
+		)
+		if err != nil {
+			// Can't create renderer — return raw content immediately.
+			return func() tea.Msg {
+				return markdownRenderedMsg{Input: content, Width: width, Rendered: content}
+			}
+		}
+		renderer = r
+		markdownCache.renderer = r
+		markdownCache.rendererWidth = width
+	}
+
+	return func() tea.Msg {
+		// Only uses the local `renderer` — no shared state access.
+		rendered, err := renderer.Render(content)
+		if err != nil {
+			return markdownRenderedMsg{Input: content, Width: width, Rendered: content}
+		}
+		return markdownRenderedMsg{
+			Input:    content,
+			Width:    width,
+			Rendered: strings.TrimRight(rendered, "\n"),
+		}
+	}
+}
+
+// maybeRenderMarkdown checks if markdown needs re-rendering and returns
+// a Cmd to render async if so. Call from Update(), not View().
+func maybeRenderMarkdown(content string, width int) tea.Cmd {
+	// Exact cache hit — nothing to do.
 	if content == markdownCache.input && width == markdownCache.width {
-		return markdownCache.rendered
+		return nil
 	}
 
-	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(width),
-	)
-	if err != nil {
-		return content
+	// Already rendering this exact input — don't double-dispatch.
+	if markdownCache.pending && content == markdownCache.pendingIn && width == markdownCache.rendererWidth {
+		return nil
 	}
-	rendered, err := r.Render(content)
-	if err != nil {
-		return content
-	}
-	result := strings.TrimRight(rendered, "\n")
 
-	markdownCache.input = content
-	markdownCache.width = width
-	markdownCache.rendered = result
+	// New content — kick off async render.
+	markdownCache.pending = true
+	markdownCache.pendingIn = content
+	return renderMarkdownAsync(content, width)
+}
 
-	return result
+// applyMarkdownRendered updates the cache when async rendering completes.
+func applyMarkdownRendered(msg markdownRenderedMsg) {
+	markdownCache.input = msg.Input
+	markdownCache.width = msg.Width
+	markdownCache.rendered = msg.Rendered
+	markdownCache.pending = false
+	markdownCache.pendingIn = ""
 }
 
 // renderWorktreeCompact formats jj status output more compactly.
