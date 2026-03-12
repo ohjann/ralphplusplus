@@ -34,7 +34,7 @@ type contextPanelData struct {
 	Phase           phase
 }
 
-func renderContextPanel(vp viewport.Model, data contextPanelData, active bool, width, height int) string {
+func renderContextPanel(vp *viewport.Model, data contextPanelData, active bool, width, height int) string {
 	style := styleSoftBorder
 	if active {
 		style = styleSoftBorderActive
@@ -77,7 +77,9 @@ func renderContextPanel(vp viewport.Model, data contextPanelData, active bool, w
 		}
 	}
 
+	prevOffset := vp.YOffset
 	vp.SetContent(content)
+	vp.SetYOffset(prevOffset)
 
 	body := tabs + "\n" + vp.View()
 	body = clampLines(body, height-2)

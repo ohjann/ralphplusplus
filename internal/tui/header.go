@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -9,9 +10,12 @@ import (
 )
 
 func renderHeader(m *Model, width int) string {
+	running := isLoopActive(m.phase)
+	pulse := pulsePhase()
+
 	// Line 1: ❖ RALPH v0.1  ┃  ⚡ Claude running  ┃  AB-XXX: Title
 	titleBlock := fmt.Sprintf("  %s %s %s",
-		styleClaudeSparkle.Render("❖"),
+		renderDiamond(running, pulse),
 		styleTitle.Render("RALPH"),
 		styleMuted.Render(m.version),
 	)
@@ -59,7 +63,7 @@ func renderHeader(m *Model, width int) string {
 	line2 := fmt.Sprintf("%s  │  %s%s", progressBlock, elapsedBlock, badgeStr)
 
 	// Decorative separator
-	sep := renderDecorativeSeparator(width)
+	sep := renderDecorativeSeparator(width, running, pulse)
 	return lipgloss.JoinVertical(lipgloss.Left, line1, line2, sep)
 }
 
@@ -132,18 +136,30 @@ func renderProgressBar(fillRatio float64, barWidth int) string {
 		styleProgressEmpty.Render(emptyStr)
 }
 
-func renderDecorativeSeparator(width int) string {
-	accent := styleClaudeSparkle.Render("✦")
-	// ─── ✦ ──── with gradient-like feel
+func renderDecorativeSeparator(width int, running bool, pulse float64) string {
 	sideWidth := (width - 3) / 2
 	if sideWidth < 0 {
 		sideWidth = 0
 	}
 
-	// Mix heavy and light dashes for texture
-	left := renderGradientLine(sideWidth, true)
-	right := renderGradientLine(width-3-sideWidth, false)
+	if !running {
+		accent := styleClaudeSparkle.Render("✦")
+		left := renderGradientLine(sideWidth, true)
+		right := renderGradientLine(width-3-sideWidth, false)
+		return left + " " + accent + " " + right
+	}
 
+	// Pulse the center accent in sync with the wave
+	accentStyle := styleClaudeSparkle
+	if pulse < 0.15 {
+		accentStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
+	} else if pulse < 0.35 {
+		accentStyle = lipgloss.NewStyle().Bold(true).Foreground(colorPeach)
+	}
+	accent := accentStyle.Render("✦")
+
+	left := renderPulseLine(sideWidth, true, pulse)
+	right := renderPulseLine(width-3-sideWidth, false, pulse)
 	return left + " " + accent + " " + right
 }
 
@@ -208,6 +224,98 @@ func renderPhase(p phase) string {
 	default:
 		return ""
 	}
+}
+
+// isLoopActive returns true when the ralph loop is actively working.
+func isLoopActive(p phase) bool {
+	switch p {
+	case phaseIdle, phaseDone, phaseReview, phaseResumePrompt, phaseQualityPrompt:
+		return false
+	}
+	return true
+}
+
+// pulsePhase returns 0.0–1.0 position within a ~1.5s repeating cycle.
+func pulsePhase() float64 {
+	ms := time.Now().UnixMilli()
+	const cycleMs = 1500
+	return float64(ms%cycleMs) / float64(cycleMs)
+}
+
+// renderDiamond renders the ❖ with an electric flash when running.
+func renderDiamond(running bool, p float64) string {
+	if !running {
+		return styleClaudeSparkle.Render("❖")
+	}
+	switch {
+	case p < 0.15:
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Render("❖")
+	case p < 0.35:
+		return lipgloss.NewStyle().Bold(true).Foreground(colorPeach).Render("❖")
+	default:
+		return styleClaudeSparkle.Render("❖")
+	}
+}
+
+// renderPulseLine draws a separator segment with an electric arc radiating outward.
+func renderPulseLine(width int, fadeRight bool, p float64) string {
+	if width <= 0 {
+		return ""
+	}
+
+	// Exponential burst: fast initial expansion then decelerating — like a voltage spike
+	pulsePos := math.Pow(p, 0.35) * float64(width) * 1.3
+
+	glow := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
+	bright := lipgloss.NewStyle().Bold(true).Foreground(colorClaude)
+	warm := lipgloss.NewStyle().Foreground(colorPeach)
+	medium := lipgloss.NewStyle().Foreground(colorBorder)
+	light := lipgloss.NewStyle().Foreground(colorSurface1)
+
+	var sb strings.Builder
+	for i := 0; i < width; i++ {
+		// Distance from center (0 = near center ✦)
+		var dist int
+		if fadeRight {
+			dist = width - 1 - i
+		} else {
+			dist = i
+		}
+
+		// Character based on position (matches original gradient)
+		char := "┄"
+		if dist < 2 {
+			char = "━"
+		} else if dist < 5 {
+			char = "─"
+		}
+
+		// Distance from pulse front (negative = pulse already passed)
+		delta := float64(dist) - pulsePos
+
+		switch {
+		case delta > -2 && delta < 2:
+			// Pulse front — white hot
+			sb.WriteString(glow.Render(char))
+		case delta > -6 && delta < 0:
+			// Just behind front — bright orange arc
+			sb.WriteString(bright.Render(char))
+		case delta > -10 && delta < 0:
+			// Trailing warmth
+			sb.WriteString(warm.Render(char))
+		default:
+			// Normal gradient
+			switch {
+			case dist < 2:
+				sb.WriteString(bright.Render(char))
+			case dist < 5:
+				sb.WriteString(medium.Render(char))
+			default:
+				sb.WriteString(light.Render(char))
+			}
+		}
+	}
+	return sb.String()
 }
 
 func formatDuration(d time.Duration) string {

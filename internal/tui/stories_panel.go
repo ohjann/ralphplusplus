@@ -28,7 +28,7 @@ func newStoriesViewport(width, height int) viewport.Model {
 	return vp
 }
 
-func renderStoriesPanel(vp viewport.Model, stories []StoryDisplayInfo, active bool, width, height int, animFrame int) string {
+func renderStoriesPanel(vp *viewport.Model, stories []StoryDisplayInfo, active bool, width, height int, animFrame int) string {
 	icon := styleClaudeSparkle.Render("◆")
 	title := fmt.Sprintf("%s %s", icon, stylePanelTitle.Render("Stories"))
 
@@ -44,7 +44,9 @@ func renderStoriesPanel(vp viewport.Model, stories []StoryDisplayInfo, active bo
 	vp.Height = vpH
 
 	content := renderStoryList(stories, contentW, animFrame)
+	prevOffset := vp.YOffset
 	vp.SetContent(content)
+	vp.SetYOffset(prevOffset)
 
 	body := title + "\n" + vp.View()
 	body = clampLines(body, height-2)

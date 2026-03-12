@@ -1078,7 +1078,7 @@ func (m *Model) View() string {
 
 	// Stories panel
 	storiesPanel := renderStoriesPanel(
-		m.storiesVP,
+		&m.storiesVP,
 		m.storyDisplayInfos,
 		m.activePanel == panelStories,
 		storiesWidth,
@@ -1096,7 +1096,7 @@ func (m *Model) View() string {
 		Phase:           m.phase,
 	}
 	ctxPanel := renderContextPanel(
-		m.contextVP,
+		&m.contextVP,
 		ctxData,
 		m.activePanel == panelContext,
 		contextWidth,
