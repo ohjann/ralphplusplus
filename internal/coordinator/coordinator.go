@@ -21,6 +21,7 @@ import (
 )
 
 const maxRetries = 3
+const maxStoryRetries = 1 // retries for stories that ran but didn't pass
 
 type Coordinator struct {
 	cfg        *config.Config
@@ -34,7 +35,8 @@ type Coordinator struct {
 	failed          map[string]bool
 	failedErrors    map[string]string // last error message per failed story
 	inProgress      map[string]worker.WorkerID
-	retries         map[string]int // retry count per story
+	retries         map[string]int // retry count per story (transient failures)
+	storyRetries    map[string]int // retry count for stories that didn't pass
 	nextID          worker.WorkerID
 	stories         map[string]*prd.UserStory // story lookup
 	prdHash         string                    // SHA-256 of prd.json, computed at init
@@ -65,6 +67,7 @@ func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory
 		failedErrors: make(map[string]string),
 		inProgress:   make(map[string]worker.WorkerID),
 		retries:      make(map[string]int),
+		storyRetries: make(map[string]int),
 		stories:      storyMap,
 		prdHash:      prdHash,
 	}
@@ -146,11 +149,17 @@ func (c *Coordinator) HandleUpdate(u worker.WorkerUpdate) bool {
 		if u.Passed {
 			c.completed[u.StoryID] = true
 		} else {
-			c.failed[u.StoryID] = true
+			errMsg := "story did not pass"
 			if u.Err != nil {
-				c.failedErrors[u.StoryID] = u.Err.Error()
+				errMsg = u.Err.Error()
+			}
+			if c.storyRetries[u.StoryID] < maxStoryRetries {
+				c.storyRetries[u.StoryID]++
+				c.failedErrors[u.StoryID] = errMsg
+				shouldRetry = true
 			} else {
-				c.failedErrors[u.StoryID] = "story did not pass"
+				c.failed[u.StoryID] = true
+				c.failedErrors[u.StoryID] = errMsg
 			}
 		}
 	case worker.WorkerFailed:
@@ -196,7 +205,7 @@ func (c *Coordinator) writeCheckpointLocked() {
 	failedStories := make(map[string]checkpoint.FailedStory)
 	for id := range c.failed {
 		failedStories[id] = checkpoint.FailedStory{
-			Retries:   c.retries[id],
+			Retries:   c.retries[id] + c.storyRetries[id],
 			LastError: c.failedErrors[id],
 		}
 	}
@@ -352,6 +361,28 @@ func (c *Coordinator) CleanupWorker(ctx context.Context, workerID worker.WorkerI
 	}
 
 	_ = workspace.Destroy(ctx, c.cfg.ProjectDir, w.WorkspaceName, w.Workspace)
+}
+
+// PreserveFailedLogs copies the worker's activity log to the main project's
+// .ralph/logs/worker-<storyID>-failed.log for post-mortem debugging.
+func (c *Coordinator) PreserveFailedLogs(storyID string, workerID worker.WorkerID) {
+	c.mu.Lock()
+	w, ok := c.workers[workerID]
+	c.mu.Unlock()
+	if !ok || w.LogDir == "" {
+		return
+	}
+
+	srcPath := filepath.Join(w.LogDir, fmt.Sprintf("iteration-%d-activity.log", w.Iteration))
+	data, err := os.ReadFile(srcPath)
+	if err != nil || len(data) == 0 {
+		return
+	}
+
+	dstDir := filepath.Join(c.cfg.ProjectDir, ".ralph", "logs")
+	_ = os.MkdirAll(dstDir, 0o755)
+	dstPath := filepath.Join(dstDir, fmt.Sprintf("worker-%s-failed.log", storyID))
+	_ = os.WriteFile(dstPath, data, 0o644)
 }
 
 // ListenCmd returns a tea.Cmd that waits for the next worker update.

@@ -59,13 +59,14 @@ type Worker struct {
 }
 
 type WorkerUpdate struct {
-	WorkerID  WorkerID
-	StoryID   string
-	State     WorkerState
-	Err       error
-	Passed    bool
-	ChangeID  string // jj change_id of committed work, for rebase
-	Retryable bool   // true for transient errors (rate limits, timeouts)
+	WorkerID    WorkerID
+	StoryID     string
+	State       WorkerState
+	Err         error
+	Passed      bool
+	ChangeID    string // jj change_id of committed work, for rebase
+	Retryable   bool   // true for transient errors (rate limits, timeouts)
+	JudgeResult *judge.Result
 }
 
 // Run executes the full worker lifecycle in the workspace.
@@ -174,6 +175,17 @@ Just implement your story, commit, set passes: true, update progress.md, and sto
 		if !result.Passed {
 			passed = false
 		}
+		// Send done with judge result
+		w.State = WorkerDone
+		updateCh <- WorkerUpdate{
+			WorkerID:    w.ID,
+			StoryID:     w.StoryID,
+			State:       WorkerDone,
+			Passed:      passed,
+			ChangeID:    changeID,
+			JudgeResult: &result,
+		}
+		return
 	}
 
 	// 6. Send done

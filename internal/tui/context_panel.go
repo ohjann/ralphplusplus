@@ -28,6 +28,7 @@ func newContextViewport(width, height int) viewport.Model {
 type contextPanelData struct {
 	Mode            contextMode
 	ProgressContent string
+	ProgressChanged bool
 	WorktreeContent string
 	JudgeContent    string
 	QualityContent  string
@@ -78,8 +79,8 @@ func renderContextPanel(vp *viewport.Model, data contextPanelData, active bool, 
 	}
 
 	vp.SetContent(content)
-	if data.Mode == contextProgress {
-		// Auto-scroll to bottom so latest progress is visible
+	if data.Mode == contextProgress && data.ProgressChanged {
+		// Auto-scroll to bottom when new progress content arrives
 		vp.GotoBottom()
 	}
 
@@ -90,30 +91,6 @@ func renderContextPanel(vp *viewport.Model, data contextPanelData, active bool, 
 }
 
 // renderContextTabs shows the tab bar with the active tab highlighted.
-// contextTabHitTest returns which context tab was clicked given an x position
-// relative to the start of the tab bar content area.
-func contextTabHitTest(relX int) (contextMode, bool) {
-	type tabInfo struct {
-		mode  contextMode
-		label string
-	}
-	tabs := []tabInfo{
-		{contextProgress, " ◈ Progress "},
-		{contextWorktree, " ⌥ Tree "},
-		{contextJudge, " ⚖ Judge "},
-		{contextQuality, " ◇ Quality "},
-	}
-	x := 0
-	for _, t := range tabs {
-		w := lipgloss.Width(t.label) + 2 // +2 for Padding(0,1)
-		if relX >= x && relX < x+w {
-			return t.mode, true
-		}
-		x += w
-	}
-	return 0, false
-}
-
 func renderContextTabs(data contextPanelData) string {
 	type tab struct {
 		mode  contextMode

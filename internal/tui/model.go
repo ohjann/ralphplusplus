@@ -56,6 +56,7 @@ type Model struct {
 
 	// Panel content
 	progressContent string
+	progressChanged bool
 	worktreeContent string
 	claudeContent   string
 	judgeContent    string
@@ -334,60 +335,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case tea.MouseMsg:
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			headerHeight := 3
-			available := m.height - 4 // header(3) + footer(1)
-			if available < 10 {
-				available = 10
-			}
-			topHeight := available * 35 / 100
-			if topHeight < 5 {
-				topHeight = 5
-			}
-			storiesWidth := m.width * 35 / 100
-
-			y := msg.Y
-			x := msg.X
-			if y >= headerHeight && y < headerHeight+topHeight {
-				if x < storiesWidth {
-					m.activePanel = panelStories
-				} else {
-					m.activePanel = panelContext
-					// Check if click is on the tab bar row (first content row inside border)
-					if y == headerHeight+1 {
-						relX := x - storiesWidth - 2 // border(1) + padding(1)
-						if mode, ok := contextTabHitTest(relX); ok {
-							m.ctxMode = mode
-						}
-					}
-				}
-			} else if y >= headerHeight+topHeight {
-				m.activePanel = panelClaude
-				// Check if click is on the worker tabs row (title line inside ornate border)
-				if y == headerHeight+topHeight+1 && m.phase == phaseParallel && m.coord != nil && len(m.workerTabOrder) > 0 {
-					// Title: "│ ✻ Claude  <workerTabs>"
-					// Worker tabs start after: │(1) + space(1) + sparkle(1) + space(1) + "Claude"(6) + "  "(2) = 12
-					titlePrefixW := 12
-					relX := x - titlePrefixW
-					if relX >= 0 {
-						if idx := workerTabHitTest(relX, m.workerTabOrder, m.coord.Workers(), m.activeWorkerView); idx >= 0 {
-							wID := m.workerTabOrder[idx]
-							m.activeWorkerView = wID
-							if cached, ok := m.workerLogCache[wID]; ok {
-								m.claudeContent = cached
-								m.prevClaudeLen = len(cached)
-							} else {
-								m.claudeContent = ""
-								m.prevClaudeLen = 0
-							}
-						}
-					}
-				}
-			}
-		}
-		return m, nil
-
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -465,6 +412,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Data updates ---
 	case progressContentMsg:
+		if msg.Content != m.progressContent {
+			m.progressChanged = true
+		}
 		m.progressContent = msg.Content
 
 	case worktreeMsg:
@@ -716,6 +666,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeWorkerView = u.WorkerID
 		}
 
+		// Display judge result if present
+		if u.JudgeResult != nil {
+			m.judgeContent += judge.FormatResult(u.StoryID, *u.JudgeResult)
+			m.ctxMode = contextJudge
+			judge.AppendJudgeResult(m.cfg.ProgressFile, u.StoryID, *u.JudgeResult)
+		}
+
 		switch u.State {
 		case worker.WorkerDone:
 			// Cache the activity log before workspace cleanup
@@ -723,8 +680,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if u.Passed && u.ChangeID != "" {
 				cmds = append(cmds, mergeBackCmd(m.ctx, m.coord, u))
 			} else {
-				// Failed or didn't pass — cleanup workspace
+				// Preserve activity log for debugging before workspace is destroyed
+				m.coord.PreserveFailedLogs(u.StoryID, u.WorkerID)
 				go m.coord.CleanupWorker(m.ctx, u.WorkerID)
+				if willRetry {
+					m.claudeContent += fmt.Sprintf("\n── Worker %d (%s): story did not pass — retrying ──\n", u.WorkerID, u.StoryID)
+					m.claudeVP.SetContent(m.claudeContent)
+					m.claudeVP.GotoBottom()
+					m.prevClaudeLen = len(m.claudeContent)
+				}
 				// Try to schedule more
 				m.coord.ScheduleReady(m.ctx)
 				if m.coord.AllDone() {
@@ -742,6 +706,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case worker.WorkerFailed:
 			m.cacheWorkerLog(u.WorkerID)
+			// Preserve activity log for debugging before workspace is destroyed
+			m.coord.PreserveFailedLogs(u.StoryID, u.WorkerID)
 			go m.coord.CleanupWorker(m.ctx, u.WorkerID)
 			if willRetry {
 				m.claudeContent += fmt.Sprintf("\n── Worker %d failed (%s): %v — retrying ──\n", u.WorkerID, u.StoryID, u.Err)
@@ -1125,6 +1091,7 @@ func (m *Model) View() string {
 	ctxData := contextPanelData{
 		Mode:            m.ctxMode,
 		ProgressContent: m.progressContent,
+		ProgressChanged: m.progressChanged,
 		WorktreeContent: m.worktreeContent,
 		JudgeContent:    m.judgeContent,
 		QualityContent:  m.qualityContent,
@@ -1137,6 +1104,7 @@ func (m *Model) View() string {
 		contextWidth,
 		topHeight,
 	)
+	m.progressChanged = false
 
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, storiesPanel, ctxPanel)
 
@@ -1411,26 +1379,3 @@ func (m *Model) showCompletionReport() {
 	m.prevClaudeLen = len(m.claudeContent)
 }
 
-// workerTabHitTest returns the tab index at the given x position relative to
-// the start of the worker tab string, or -1 if no tab was hit.
-func workerTabHitTest(relX int, tabOrder []worker.WorkerID, workers map[worker.WorkerID]*worker.Worker, activeView worker.WorkerID) int {
-	x := 0
-	for tabIdx, id := range tabOrder {
-		w := workers[id]
-		marker := ""
-		if id == activeView {
-			marker = "▸"
-		}
-		tabText := fmt.Sprintf("%s%d:%s[%s]", marker, tabIdx+1, w.StoryID, w.State)
-		tabW := lipgloss.Width(tabText)
-		if relX >= x && relX < x+tabW {
-			return tabIdx
-		}
-		x += tabW
-		// separator " │ " between tabs
-		if tabIdx < len(tabOrder)-1 {
-			x += 3 // " │ " is 3 visible columns
-		}
-	}
-	return -1
-}
