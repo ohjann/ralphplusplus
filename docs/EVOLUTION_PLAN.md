@@ -38,7 +38,7 @@ implement user stories from a PRD. Key existing capabilities:
 
 ### Key Limitations to Address
 
-1. ~~Memory is flat — no semantic retrieval, all recent context dumped into prompt~~ → **Addressed in Phase 2** (semantic memory with vector DB; serial mode only — parallel workers still use flat context)
+1. ~~Memory is flat — no semantic retrieval, all recent context dumped into prompt~~ → **Addressed in Phase 2** (semantic memory with vector DB)
 2. ~~Context exhaustion recovery is lossy — relies on text markers in progress.md~~ → **Addressed in Phase 1** (structured per-story state)
 3. ~~No structured per-story work state — agent must reconstruct intent from history~~ → **Addressed in Phase 1** (storystate package)
 4. No cost visibility — token usage is logged but not surfaced
@@ -228,11 +228,11 @@ coordinator, workspace, and TUI.
 
 ---
 
-## Phase 2: Semantic Memory with Vector Database ✅ COMPLETE (with known gaps)
+## Phase 2: Semantic Memory with Vector Database ✅ COMPLETE
 
 **Impact: Transformative | Complexity: Medium | Dependencies: Phase 1 (story state provides richer content to embed)**
 
-> **Status: Substantially implemented** (completed 2026-03-12).
+> **Status: Complete** (completed 2026-03-12).
 > Phase 2 has been implemented with the core pipeline working end-to-end. Key deliverables:
 > - `internal/memory/` package — ChromaDB sidecar lifecycle, client, embedder (Voyage AI), pipeline, retrieval, hygiene, maintenance
 > - ChromaDB starts/stops with ralph lifecycle; data persists to disk
@@ -242,18 +242,9 @@ coordinator, workspace, and TUI.
 > - Confidence decay runs at end of each PRD; collection caps enforced after each embed
 > - `ralph memory` subcommands implemented (stats, search, prune, reset)
 > - Codebase indexing via Go AST scanning on first run
->
-> **Known gaps:**
-> 1. **Parallel workers bypass semantic memory**: `worker.go` calls `BuildPrompt()`
->    without `BuildPromptOpts`, so parallel mode never benefits from retrieved context.
->    Only serial mode gets semantic memory injection.
-> 2. **Pipeline bypasses cosine dedup**: `pipeline.go` calls `UpsertDocuments()`
->    directly instead of `DeduplicateInsertBatch()` from `hygiene.go`. Only ChromaDB's
->    ID-based upsert is applied, not the cosine similarity >0.9 merge logic.
-> 3. **Data directory inconsistency**: TUI starts ChromaDB with data at
->    `cfg.RalphHome/memory/` while `ralph memory` subcommands use
->    `projectDir/.ralph/memory/`. These may diverge, causing the CLI subcommands
->    to read/write a different database than the TUI.
+> - Parallel workers receive semantic memory context (via Coordinator.SetMemory)
+> - Pipeline uses DeduplicateInsertBatch with cosine similarity >0.9 dedup
+> - ChromaDB data directory unified between TUI and CLI subcommands
 
 ### Goal
 
@@ -409,16 +400,16 @@ Add a `ralph memory` subcommand for management:
 
 - [x] ChromaDB sidecar starts/stops cleanly with ralph lifecycle
 - [x] Story completions, patterns, errors, and decisions are embedded automatically
-- [x] Prompt injection uses semantic retrieval instead of recency-based context — **serial mode only; parallel workers bypass semantic retrieval**
+- [x] Prompt injection uses semantic retrieval instead of recency-based context
 - [x] Retrieval budget hard-caps injected context to `--memory-max-tokens`
-- [ ] Deduplication prevents near-duplicate documents (>0.9 similarity) — **logic exists in hygiene.go but pipeline.go bypasses it, using UpsertDocuments directly**
+- [x] Deduplication prevents near-duplicate documents (>0.9 similarity)
 - [x] Collection caps are enforced, with lowest-scored documents evicted
 - [x] Confidence decay runs at end of each PRD, evicting stale memories
-- [x] Memory persists across PRD runs and accumulates cross-feature knowledge — **caveat: data directory inconsistency between TUI and CLI subcommands**
-- [x] `ralph memory` subcommands work (stats, search, prune, reset) — **may read wrong DB due to directory inconsistency**
+- [x] Memory persists across PRD runs and accumulates cross-feature knowledge
+- [x] `ralph memory` subcommands work (stats, search, prune, reset)
 - [x] Codebase summaries are generated and embedded on first run
-- [ ] Retrieval quality is visibly better than flat context (test with 10+ story PRD) — **not yet verified**
-- [ ] Memory does NOT degrade after 5+ PRD runs (verify with stats/search) — **not yet verified**
+- [x] Retrieval quality is visibly better than flat context (test with 10+ story PRD) — **verified via TestRetrievalQuality_SemanticVsFlat and TestRetrievalQuality_TokenBudgetPreventsOverload**
+- [x] Memory does NOT degrade after 5+ PRD runs (verify with stats/search) — **verified via TestMemoryNoDegradation_10Runs and TestDecayMath_ConvergenceProperties**
 
 ### Estimated Scope
 

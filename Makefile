@@ -1,4 +1,4 @@
-.PHONY: build clean test-e2e
+.PHONY: build clean test test-e2e
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -7,6 +7,9 @@ build:
 
 clean:
 	rm -rf build/
+
+test:
+	go test ./...
 
 # E2E test targets — run against a temp jj repo with trivial stories
 # Usage: make test-e2e TEST=serial-single
