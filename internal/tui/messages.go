@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/eoghanhynes/ralph/internal/judge"
+	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/quality"
 	"github.com/eoghanhynes/ralph/internal/runner"
 )
@@ -76,6 +77,16 @@ type qualityFixDoneMsg struct {
 type summaryDoneMsg struct {
 	Content string
 	Err     error
+}
+
+// Memory / ChromaDB lifecycle messages
+type chromaSetupDoneMsg struct {
+	Err      error
+	Sidecar  *memory.Sidecar
+	Client   *memory.ChromaClient
+}
+type codebaseScanDoneMsg struct {
+	Err error
 }
 
 // Terminal size

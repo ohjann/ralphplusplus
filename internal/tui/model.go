@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/eoghanhynes/ralph/internal/checkpoint"
 	"github.com/eoghanhynes/ralph/internal/config"
+	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/coordinator"
 	"github.com/eoghanhynes/ralph/internal/dag"
 	"github.com/eoghanhynes/ralph/internal/debuglog"
@@ -111,6 +112,10 @@ type Model struct {
 
 	// Resume checkpoint (loaded during phaseInit)
 	loadedCheckpoint *checkpoint.Checkpoint
+
+	// Memory / ChromaDB sidecar
+	memorySidecar *memory.Sidecar
+	chromaClient  *memory.ChromaClient
 }
 
 func NewModel(cfg *config.Config, version string) *Model {
@@ -133,6 +138,15 @@ func NewModel(cfg *config.Config, version string) *Model {
 
 func (m *Model) ExitCode() int {
 	return m.exitCode
+}
+
+// stopSidecar cleanly shuts down the ChromaDB sidecar if running.
+func (m *Model) stopSidecar() {
+	if m.memorySidecar != nil {
+		if err := m.memorySidecar.Stop(); err != nil {
+			debuglog.Log("chromadb sidecar stop error: %v", err)
+		}
+	}
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -205,6 +219,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.coord.CancelAll()
 				m.coord.CleanupAll(context.Background())
 			}
+			m.stopSidecar()
 			m.cancel()
 			return m, tea.Quit
 		case msg.String() == "y":
@@ -231,10 +246,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case msg.String() == "q":
 			if m.phase == phaseResumePrompt {
+				m.stopSidecar()
 				m.cancel()
 				return m, tea.Quit
 			}
 			if m.phase == phaseReview {
+				m.stopSidecar()
 				m.cancel()
 				return m, tea.Quit
 			}
@@ -243,6 +260,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.transitionToSummary()
 			}
 			if m.confirmQuit || m.phase == phaseDone || m.phase == phaseIdle {
+				m.stopSidecar()
 				m.cancel()
 				return m, tea.Quit
 			}
@@ -456,6 +474,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case archiveDoneMsg:
+		// Start ChromaDB sidecar setup in background (unless disabled)
+		if !m.cfg.Memory.Disabled {
+			cmds = append(cmds, chromaSetupCmd(m.ctx, m.cfg))
+		}
+
 		// Check for existing checkpoint to offer resume
 		cp, exists, err := checkpoint.Load(m.cfg.ProjectDir)
 		if err == nil && exists {
@@ -464,7 +487,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Valid checkpoint — offer resume
 				m.loadedCheckpoint = &cp
 				m.phase = phaseResumePrompt
-				return m, nil
+				return m, tea.Batch(cmds...)
 			}
 			// Stale checkpoint — PRD changed, delete and continue
 			m.claudeContent += "── Checkpoint found but PRD has changed — starting fresh ──\n"
@@ -482,6 +505,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.phase = phaseIterating
 			cmds = append(cmds, findNextStoryCmd(m.cfg.PRDFile))
+		}
+
+	case chromaSetupDoneMsg:
+		if msg.Err != nil {
+			debuglog.Log("chromadb setup failed (degrading gracefully): %v", msg.Err)
+		} else {
+			m.memorySidecar = msg.Sidecar
+			m.chromaClient = msg.Client
+			// Trigger codebase scan in background now that sidecar is healthy
+			cmds = append(cmds, codebaseScanCmd(m.ctx, m.cfg, m.chromaClient))
+		}
+
+	case codebaseScanDoneMsg:
+		if msg.Err != nil {
+			debuglog.Log("codebase scan failed (non-fatal): %v", msg.Err)
 		}
 
 	case nextStoryMsg:
@@ -527,6 +565,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Context cancelled = user quit
 			if m.ctx.Err() != nil {
 				debuglog.Log("claudeDone: context cancelled, quitting")
+				m.stopSidecar()
 				return m, tea.Quit
 			}
 			// Show Claude error in activity panel
@@ -957,6 +996,8 @@ func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 
 // transitionToSummary starts generating a final summary of all changes.
 func (m *Model) transitionToSummary() (tea.Model, tea.Cmd) {
+	// Stop ChromaDB sidecar — no more memory operations needed
+	m.stopSidecar()
 	// Best-effort checkpoint cleanup on clean completion
 	_ = checkpoint.Delete(m.cfg.ProjectDir)
 	m.phase = phaseSummary

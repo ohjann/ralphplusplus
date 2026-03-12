@@ -16,6 +16,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/dag"
 	rexec "github.com/eoghanhynes/ralph/internal/exec"
 	"github.com/eoghanhynes/ralph/internal/judge"
+	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/quality"
 	"github.com/eoghanhynes/ralph/internal/runner"
@@ -386,5 +387,61 @@ Be concise but thorough. Focus on actionable information the developer needs to 
 		content, _ := os.ReadFile(summaryPath)
 
 		return summaryDoneMsg{Content: string(content), Err: err}
+	}
+}
+
+// chromaSetupCmd sets up the Python environment, starts the ChromaDB sidecar,
+// creates all collections, and returns the sidecar + client for storage.
+func chromaSetupCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		dataDir := filepath.Join(cfg.RalphHome, "memory")
+		port := cfg.Memory.Port
+		if port == 0 {
+			port = 9876
+		}
+
+		// Ensure Python environment with chromadb installed
+		pythonPath, err := memory.EnsureChromaDB(dataDir, func(msg string) {
+			debuglog.Log("chromadb setup: %s", msg)
+		})
+		if err != nil {
+			return chromaSetupDoneMsg{Err: fmt.Errorf("chromadb setup: %w", err)}
+		}
+
+		// Start the sidecar
+		sc := &memory.Sidecar{}
+		if err := sc.Start(ctx, pythonPath, dataDir, port); err != nil {
+			return chromaSetupDoneMsg{Err: fmt.Errorf("chromadb start: %w", err)}
+		}
+
+		// Create a client and initialise all collections
+		client := memory.NewClient(fmt.Sprintf("http://localhost:%d", sc.Port()))
+		for _, coll := range memory.AllCollections() {
+			if err := client.CreateCollection(ctx, coll.Name); err != nil {
+				// Stop sidecar on collection creation failure
+				_ = sc.Stop()
+				return chromaSetupDoneMsg{Err: fmt.Errorf("create collection %s: %w", coll.Name, err)}
+			}
+		}
+
+		debuglog.Log("chromadb sidecar healthy on port %d, all collections ready", sc.Port())
+		return chromaSetupDoneMsg{Sidecar: sc, Client: client}
+	}
+}
+
+// codebaseScanCmd runs the codebase scanner in the background.
+func codebaseScanCmd(ctx context.Context, cfg *config.Config, client *memory.ChromaClient) tea.Cmd {
+	return func() tea.Msg {
+		embedder, err := memory.NewAnthropicEmbedder()
+		if err != nil {
+			debuglog.Log("codebase scan: embedder init failed: %v", err)
+			return codebaseScanDoneMsg{Err: err}
+		}
+		if err := memory.ScanCodebase(ctx, cfg.ProjectDir, client, embedder); err != nil {
+			debuglog.Log("codebase scan failed: %v", err)
+			return codebaseScanDoneMsg{Err: err}
+		}
+		debuglog.Log("codebase scan complete")
+		return codebaseScanDoneMsg{}
 	}
 }
