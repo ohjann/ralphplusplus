@@ -25,7 +25,7 @@ func main() {
 
 	// Handle memory subcommand before validation (no prd.json needed).
 	if cfg.MemoryCommand != "" {
-		dataDir := filepath.Join(cfg.ProjectDir, ".ralph", "memory")
+		dataDir := filepath.Join(cfg.RalphHome, "memory")
 		ctx := context.Background()
 		var err error
 		switch cfg.MemoryCommand {
