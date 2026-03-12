@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/eoghanhynes/ralph/internal/config"
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/tui"
 )
@@ -36,6 +37,13 @@ func main() {
 			cfg.MaxIterations = n + n/2
 		}
 	}
+
+	// Initialize debug log
+	if err := debuglog.Init(cfg.LogDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not init debug log: %v\n", err)
+	}
+	defer debuglog.Close()
+	debuglog.Log("ralph starting, version=%s, workers=%d, maxIterations=%d", Version, cfg.Workers, cfg.MaxIterations)
 
 	model := tui.NewModel(cfg, Version)
 

@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/eoghanhynes/ralph/internal/archive"
 	"github.com/eoghanhynes/ralph/internal/autofix"
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/coordinator"
 	"github.com/eoghanhynes/ralph/internal/dag"
@@ -173,15 +174,19 @@ func findNextStoryCmd(prdPath string) tea.Cmd {
 	return func() tea.Msg {
 		p, err := prd.Load(prdPath)
 		if err != nil {
+			debuglog.Log("findNextStory: prd load error: %v — signaling AllDone", err)
 			return nextStoryMsg{AllDone: true}
 		}
 		if p.AllComplete() {
+			debuglog.Log("findNextStory: all %d stories complete", p.TotalCount())
 			return nextStoryMsg{AllDone: true}
 		}
 		next := p.NextIncompleteStory()
 		if next == nil {
+			debuglog.Log("findNextStory: AllComplete()=false but NextIncompleteStory()=nil (should not happen)")
 			return nextStoryMsg{AllDone: true}
 		}
+		debuglog.Log("findNextStory: next story=%s (%d/%d complete)", next.ID, p.CompletedCount(), p.TotalCount())
 		return nextStoryMsg{StoryID: next.ID, StoryTitle: next.Title}
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/coordinator"
 	"github.com/eoghanhynes/ralph/internal/dag"
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"github.com/eoghanhynes/ralph/internal/events"
 	"github.com/eoghanhynes/ralph/internal/judge"
 	"github.com/eoghanhynes/ralph/internal/prd"
@@ -49,6 +50,7 @@ type Model struct {
 	totalStories     int
 	allComplete      bool
 	exitCode         int
+	completionReason string // why the run finished
 	startTime        time.Time
 	confirmQuit      bool
 
@@ -490,6 +492,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prevClaudeLen = len(m.claudeContent)
 			m.phase = phaseDone
 			m.exitCode = 1
+			m.completionReason = fmt.Sprintf("Planning failed: %v", msg.Err)
+			debuglog.Log("entering phaseDone: %s", m.completionReason)
+			m.showCompletionReport()
 			return m, nil
 		}
 		m.phase = phaseReview
@@ -537,6 +542,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phase = phaseDone
 			m.allComplete = false
 			m.exitCode = 1
+			m.completionReason = fmt.Sprintf("Max iterations reached (%d)", m.cfg.MaxIterations)
+			debuglog.Log("entering phaseDone: %s", m.completionReason)
+			m.showCompletionReport()
 			return m, nil
 		}
 		m.currentStoryID = msg.StoryID
@@ -563,9 +571,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, runClaudeCmd(m.ctx, m.cfg, msg.StoryID, m.iteration))
 
 	case claudeDoneMsg:
+		debuglog.Log("claudeDone: story=%s err=%v completeSignal=%v", m.currentStoryID, msg.Err, msg.CompleteSignal)
 		if msg.Err != nil {
 			// Context cancelled = user quit
 			if m.ctx.Err() != nil {
+				debuglog.Log("claudeDone: context cancelled, quitting")
 				return m, tea.Quit
 			}
 			// Show Claude error in activity panel
@@ -579,6 +589,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.writeSerialCheckpoint(msg.Err)
 
 		if msg.CompleteSignal {
+			debuglog.Log("claudeDone: COMPLETE signal received during story=%s, transitioning to complete", m.currentStoryID)
 			_ = events.Append(m.cfg.ProjectDir, events.Event{
 				Type:    events.EventStoryComplete,
 				StoryID: m.currentStoryID,
@@ -600,6 +611,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, findNextStoryCmd(m.cfg.PRDFile))
 
 	case stuckDetectedMsg:
+		debuglog.Log("stuck detected: story=%s pattern=%s count=%d", msg.Info.StoryID, msg.Info.Pattern, msg.Info.Count)
 		// Cancel Claude — it's stuck
 		m.cancel()
 		// Recreate context for future operations
@@ -677,6 +689,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.phase = phaseDone
 				m.exitCode = 1
+				m.completionReason = fmt.Sprintf("Failed to load prd.json for parallel execution: %v", err)
+				debuglog.Log("entering phaseDone: %s", m.completionReason)
+				m.showCompletionReport()
 				return m, nil
 			}
 			// Filter to incomplete stories only
@@ -719,6 +734,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.phase = phaseDone
 					m.allComplete = false
 					m.exitCode = 1
+					m.completionReason = fmt.Sprintf("Parallel workers done but only %d/%d stories completed (worker did not pass)", m.coord.CompletedCount(), m.totalStories)
+					debuglog.Log("entering phaseDone: %s", m.completionReason)
+					m.showCompletionReport()
 					return m, nil
 				}
 			}
@@ -737,6 +755,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.coord.AllDone() {
 				m.phase = phaseDone
 				m.exitCode = 1
+				m.completionReason = fmt.Sprintf("Worker failed and all work done (%d/%d completed)", m.coord.CompletedCount(), m.totalStories)
+				debuglog.Log("entering phaseDone: %s", m.completionReason)
+				m.showCompletionReport()
 				return m, nil
 			}
 		}
@@ -750,6 +771,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.allComplete = m.coord.CompletedCount() == m.totalStories
 			if !m.allComplete {
 				m.exitCode = 1
+				m.completionReason = fmt.Sprintf("No active workers remaining (%d/%d completed)", m.coord.CompletedCount(), m.totalStories)
+				debuglog.Log("entering phaseDone: %s", m.completionReason)
+				m.showCompletionReport()
 			}
 			return m, nil
 		}
@@ -783,6 +807,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.phase = phaseDone
 			m.allComplete = false
 			m.exitCode = 1
+			m.completionReason = fmt.Sprintf("All parallel work done after merge but only %d/%d stories completed", m.completedStories, m.totalStories)
+			debuglog.Log("entering phaseDone: %s", m.completionReason)
+			m.showCompletionReport()
 			return m, nil
 		}
 
@@ -800,6 +827,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case judgeDoneMsg:
+		debuglog.Log("judgeDone: story=%s passed=%v reason=%s", m.currentStoryID, msg.Result.Passed, msg.Result.Reason)
 		// Show judge result in the context panel
 		m.judgeContent += judge.FormatResult(m.currentStoryID, msg.Result)
 		m.ctxMode = contextJudge
@@ -925,6 +953,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.phase = phaseDone
 		m.allComplete = true
 		m.exitCode = 0
+		m.completionReason = "All stories completed successfully"
+		debuglog.Log("entering phaseDone: %s", m.completionReason)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -934,6 +964,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // If quality review is enabled and hasn't run yet, starts quality review.
 // Otherwise, transitions to summary generation.
 func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
+	debuglog.Log("transitionToComplete: iteration=%d, currentStory=%s", m.iteration, m.currentStoryID)
 	if m.cfg.QualityReview && m.qualityIteration == 0 {
 		m.qualityIteration = 1
 		m.phase = phaseQualityReview
@@ -1016,22 +1047,26 @@ func (m *Model) writeSerialCheckpoint(iterErr error) {
 func (m *Model) handleJudgeCheck() tea.Cmd {
 	// Skip judge if no pre-revisions were captured
 	if len(m.preRevs) == 0 {
+		debuglog.Log("handleJudgeCheck: skipping judge for %s — no pre-revisions", m.currentStoryID)
 		return nil
 	}
 
 	// Reload PRD to check if story passes
 	p, err := prd.Load(m.cfg.PRDFile)
 	if err != nil {
+		debuglog.Log("handleJudgeCheck: prd load error: %v", err)
 		return nil
 	}
 	story := p.FindStory(m.currentStoryID)
 	if story == nil || !story.Passes {
+		debuglog.Log("handleJudgeCheck: story %s not passing (story=%v), skipping judge", m.currentStoryID, story != nil)
 		return nil
 	}
 
 	// Story claims to pass — run judge
 	rejections := judge.GetRejectionCount(m.cfg.ProjectDir, m.currentStoryID)
 	if rejections >= m.cfg.JudgeMaxRejections {
+		debuglog.Log("handleJudgeCheck: auto-passing %s after %d rejections", m.currentStoryID, rejections)
 		// Auto-pass
 		judge.AppendAutoPass(m.cfg.ProgressFile, m.currentStoryID, rejections)
 		judge.ClearRejectionCount(m.cfg.ProjectDir, m.currentStoryID)
@@ -1267,6 +1302,113 @@ func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bo
 		return "  " + styleSuccess.Render("Run complete — ") + baseHelp
 	}
 	return "  " + baseHelp
+}
+
+// generateCompletionReport builds a human-readable report of the run outcome,
+// explaining which stories were completed, which were not, and why.
+func (m *Model) generateCompletionReport() string {
+	var sb strings.Builder
+
+	sb.WriteString("\n── Completion Report ──\n\n")
+	sb.WriteString(fmt.Sprintf("Reason: %s\n", m.completionReason))
+	sb.WriteString(fmt.Sprintf("Duration: %s\n", time.Since(m.startTime).Truncate(time.Second)))
+	sb.WriteString(fmt.Sprintf("Iterations used: %d\n\n", m.iteration))
+
+	p, err := prd.Load(m.cfg.PRDFile)
+	if err != nil {
+		sb.WriteString(fmt.Sprintf("Could not load prd.json: %v\n", err))
+		return sb.String()
+	}
+
+	var passed, incomplete []prd.UserStory
+	for _, s := range p.UserStories {
+		if s.Passes {
+			passed = append(passed, s)
+		} else {
+			incomplete = append(incomplete, s)
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf("Stories: %d/%d completed\n\n", len(passed), len(p.UserStories)))
+
+	if len(passed) > 0 {
+		sb.WriteString("Completed:\n")
+		for _, s := range passed {
+			sb.WriteString(fmt.Sprintf("  ✓ %s: %s\n", s.ID, s.Title))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(incomplete) > 0 {
+		sb.WriteString("Incomplete:\n")
+		for _, s := range incomplete {
+			reason := m.inferStorySkipReason(s.ID)
+			sb.WriteString(fmt.Sprintf("  ✗ %s: %s\n    Reason: %s\n", s.ID, s.Title, reason))
+		}
+	}
+
+	// Write report to log file
+	reportPath := filepath.Join(m.cfg.LogDir, "completion-report.log")
+	_ = os.WriteFile(reportPath, []byte(sb.String()), 0o644)
+
+	return sb.String()
+}
+
+// inferStorySkipReason tries to determine why a story was not completed.
+func (m *Model) inferStorySkipReason(storyID string) string {
+	// Check parallel coordinator state
+	if m.coord != nil {
+		if m.coord.IsCompleted(storyID) {
+			return "Marked completed by coordinator but passes=false in prd.json (possible judge rejection)"
+		}
+		if m.coord.IsFailed(storyID) {
+			if errMsg := m.coord.FailedError(storyID); errMsg != "" {
+				return fmt.Sprintf("Worker failed: %s", errMsg)
+			}
+			return "Worker failed (no error details)"
+		}
+		// Check if it was blocked by a failed dependency
+		if blocked, dep := m.coord.IsBlockedByFailure(storyID); blocked {
+			return fmt.Sprintf("Blocked: dependency %q failed", dep)
+		}
+		return "Not scheduled (may have been unreachable in DAG)"
+	}
+
+	// Serial mode: check if we hit max iterations
+	if m.iteration > m.cfg.MaxIterations {
+		return fmt.Sprintf("Max iterations reached (%d)", m.cfg.MaxIterations)
+	}
+
+	// Check events log for clues about this story
+	evts, err := events.Load(m.cfg.ProjectDir)
+	if err == nil {
+		for i := len(evts) - 1; i >= 0; i-- {
+			e := evts[i]
+			if e.StoryID != storyID {
+				continue
+			}
+			switch e.Type {
+			case events.EventStuck:
+				return fmt.Sprintf("Got stuck: %s", e.Summary)
+			case events.EventContextExhausted:
+				return "Claude ran out of context window"
+			case events.EventStoryFailed:
+				return fmt.Sprintf("Failed: %s", e.Summary)
+			}
+		}
+	}
+
+	return "Not attempted (run ended before this story was reached)"
+}
+
+// showCompletionReport generates and displays the completion report in the Claude panel.
+func (m *Model) showCompletionReport() {
+	report := m.generateCompletionReport()
+	debuglog.Log("completion report:\n%s", report)
+	m.claudeContent += report
+	m.claudeVP.SetContent(m.claudeContent)
+	m.claudeVP.GotoBottom()
+	m.prevClaudeLen = len(m.claudeContent)
 }
 
 // workerTabHitTest returns the tab index at the given x position relative to

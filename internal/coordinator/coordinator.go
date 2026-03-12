@@ -493,6 +493,44 @@ type WorkerStuckMsg struct {
 	StoryID  string
 }
 
+// IsCompleted returns true if the story was completed by a worker.
+func (c *Coordinator) IsCompleted(storyID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.completed[storyID]
+}
+
+// IsFailed returns true if the story failed in a worker.
+func (c *Coordinator) IsFailed(storyID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failed[storyID]
+}
+
+// FailedError returns the last error message for a failed story.
+func (c *Coordinator) FailedError(storyID string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failedErrors[storyID]
+}
+
+// IsBlockedByFailure returns true and the blocking dependency ID if the story
+// cannot be scheduled because one of its dependencies failed.
+func (c *Coordinator) IsBlockedByFailure(storyID string) (bool, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	node, ok := c.dag.Nodes[storyID]
+	if !ok {
+		return false, ""
+	}
+	for _, dep := range node.DependsOn {
+		if c.failed[dep] {
+			return true, dep
+		}
+	}
+	return false, ""
+}
+
 // FormatWorkerStates returns a display string of worker states.
 func FormatWorkerStates(workers map[worker.WorkerID]*worker.Worker) string {
 	if len(workers) == 0 {

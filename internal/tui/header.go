@@ -90,6 +90,9 @@ func renderCurrentTask(m *Model) string {
 		if m.allComplete {
 			return styleSuccess.Render("✓ All stories complete!")
 		}
+		if m.completionReason != "" {
+			return styleDanger.Render("✗ " + m.completionReason)
+		}
 		return styleDanger.Render("✗ Some failed stories")
 	case phaseParallel:
 		if m.coord != nil {
