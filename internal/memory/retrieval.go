@@ -17,6 +17,19 @@ type RetrievalOptions struct {
 	Disabled  bool    // If true, return empty string immediately
 }
 
+// DocRef identifies a document in a specific collection.
+type DocRef struct {
+	Collection string
+	DocID      string
+}
+
+// RetrievalResult holds the formatted markdown and the document references
+// that contributed to it, enabling confirmation tracking.
+type RetrievalResult struct {
+	Text    string
+	DocRefs []DocRef
+}
+
 // DefaultRetrievalOptions returns options with sensible defaults.
 func DefaultRetrievalOptions() RetrievalOptions {
 	return RetrievalOptions{
@@ -44,7 +57,8 @@ var collectionSection = map[string]string{
 
 // RetrieveContext queries all memory collections for content relevant to a story,
 // ranks results by relevance and recency, applies a token budget, and formats
-// the output as markdown for prompt injection.
+// the output as markdown for prompt injection. Returns both the formatted text
+// and the document references that contributed to it.
 func RetrieveContext(
 	ctx context.Context,
 	client *ChromaClient,
@@ -53,9 +67,9 @@ func RetrieveContext(
 	storyDescription string,
 	acceptanceCriteria []string,
 	opts RetrievalOptions,
-) (string, error) {
+) (RetrievalResult, error) {
 	if opts.Disabled {
-		return "", nil
+		return RetrievalResult{}, nil
 	}
 
 	// Apply defaults for zero values.
@@ -80,7 +94,7 @@ func RetrieveContext(
 	// Get embedding for the query.
 	embedding, err := embedder.EmbedOne(ctx, query)
 	if err != nil {
-		return "", fmt.Errorf("embed query: %w", err)
+		return RetrievalResult{}, fmt.Errorf("embed query: %w", err)
 	}
 
 	// Query all collections and gather results.
@@ -109,7 +123,7 @@ func RetrieveContext(
 	}
 
 	if len(ranked) == 0 {
-		return "", nil
+		return RetrievalResult{}, nil
 	}
 
 	// Sort by combined score descending.
