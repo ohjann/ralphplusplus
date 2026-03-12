@@ -31,6 +31,8 @@ type Config struct {
 	QualityWorkers     int    // --quality-workers N: parallel reviewers (default: 3)
 	QualityMaxIters    int    // --quality-max-iterations N: review-fix cycles (default: 2)
 	Memory             MemoryConfig
+	MemoryCommand      string // "stats", "search", "prune", "reset" (empty = normal TUI mode)
+	MemoryQuery        string // query text for "ralph memory search <query>"
 
 	// Derived paths
 	PRDFile        string
@@ -54,6 +56,45 @@ func Parse(args []string) (*Config, error) {
 			MaxTokens: 2000,
 			Port:      9876,
 		},
+	}
+
+	// Check for "memory" subcommand as first argument.
+	if len(args) > 0 && args[0] == "memory" {
+		if len(args) < 2 {
+			return nil, fmt.Errorf("usage: ralph memory <stats|search|prune|reset>")
+		}
+		switch args[1] {
+		case "stats":
+			cfg.MemoryCommand = "stats"
+		case "search":
+			if len(args) < 3 {
+				return nil, fmt.Errorf("usage: ralph memory search <query>")
+			}
+			cfg.MemoryCommand = "search"
+			cfg.MemoryQuery = strings.Join(args[2:], " ")
+		case "prune":
+			cfg.MemoryCommand = "prune"
+		case "reset":
+			cfg.MemoryCommand = "reset"
+		default:
+			return nil, fmt.Errorf("unknown memory command %q. Use: stats, search, prune, reset", args[1])
+		}
+		// Resolve paths needed for memory commands.
+		cfg.RalphHome = resolveRalphHome()
+		if cfg.ProjectDir == "" {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return nil, fmt.Errorf("cannot determine working directory: %w", err)
+			}
+			cfg.ProjectDir = cwd
+		}
+		abs, err := filepath.Abs(cfg.ProjectDir)
+		if err != nil {
+			return nil, fmt.Errorf("cannot resolve project dir: %w", err)
+		}
+		cfg.ProjectDir = abs
+		cfg.LogDir = filepath.Join(cfg.ProjectDir, ".ralph", "logs")
+		return cfg, nil
 	}
 
 	i := 0
@@ -423,5 +464,11 @@ Examples:
   ralph --judge --judge-max-rejections 3   Allow up to 3 rejections per story
   ralph --plan .claude/plans/my-plan.md   Generate prd.json from plan, then execute
   ralph --quality-review                 Run with final quality gate after stories complete
+
+Memory Subcommands:
+  ralph memory stats                     Show collection sizes, document counts, and average scores
+  ralph memory search <query>            Search all collections for the given query text
+  ralph memory prune                     Decay all scores by 0.85 and evict documents below 0.3
+  ralph memory reset                     Delete all collections and recreate them empty
 `)
 }
