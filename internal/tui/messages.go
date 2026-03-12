@@ -88,6 +88,10 @@ type chromaSetupDoneMsg struct {
 type codebaseScanDoneMsg struct {
 	Err error
 }
+type pipelineEmbedDoneMsg struct {
+	StoryID string
+	Err     error
+}
 
 // Terminal size
 type windowSizeMsg struct {

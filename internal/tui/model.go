@@ -522,6 +522,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			debuglog.Log("codebase scan failed (non-fatal): %v", msg.Err)
 		}
 
+	case pipelineEmbedDoneMsg:
+		if msg.Err != nil {
+			debuglog.Log("pipeline embed failed for %s (non-fatal): %v", msg.StoryID, msg.Err)
+		} else {
+			debuglog.Log("pipeline embed complete for %s", msg.StoryID)
+		}
+
 	case nextStoryMsg:
 		if msg.AllDone {
 			return m.transitionToComplete()
@@ -583,6 +590,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if p, err := prd.Load(m.cfg.PRDFile); err == nil {
 					p.SetPasses(m.currentStoryID, true)
 					_ = prd.Save(m.cfg.PRDFile, p)
+				}
+				// Trigger embedding pipeline for completed story
+				if m.chromaClient != nil {
+					cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.cfg.ProjectDir, m.currentStoryID, false))
+				}
+			} else if ss.Status == storystate.StatusContextExhausted {
+				// Trigger embedding pipeline for context-exhausted story
+				if m.chromaClient != nil {
+					cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.cfg.ProjectDir, m.currentStoryID, true))
 				}
 			}
 		}
@@ -814,6 +830,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.cacheWorkerLog(msg.WorkerID)
 		go m.coord.CleanupWorker(m.ctx, msg.WorkerID)
+		// Trigger embedding pipeline after successful merge
+		if msg.Err == nil && m.chromaClient != nil {
+			ss, _ := storystate.Load(m.cfg.ProjectDir, msg.StoryID)
+			contextExhausted := ss.Status == storystate.StatusContextExhausted
+			cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.cfg.ProjectDir, msg.StoryID, contextExhausted))
+		}
 		// Schedule more work
 		m.coord.ScheduleReady(m.ctx)
 		if m.coord.AllDone() {

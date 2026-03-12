@@ -445,3 +445,36 @@ func codebaseScanCmd(ctx context.Context, cfg *config.Config, client *memory.Chr
 		return codebaseScanDoneMsg{}
 	}
 }
+
+// runPipelineCmd runs the embedding pipeline for a completed or context-exhausted story.
+// It creates its own embedder and pipeline, embeds story data, then enforces collection caps.
+func runPipelineCmd(ctx context.Context, client *memory.ChromaClient, projectDir, storyID string, contextExhausted bool) tea.Cmd {
+	return func() tea.Msg {
+		embedder, err := memory.NewAnthropicEmbedder()
+		if err != nil {
+			debuglog.Log("pipeline embed: embedder init failed for %s: %v", storyID, err)
+			return pipelineEmbedDoneMsg{StoryID: storyID, Err: err}
+		}
+		pipeline := memory.NewPipeline(client, embedder)
+
+		if contextExhausted {
+			err = pipeline.ProcessContextExhaustion(ctx, projectDir, storyID)
+		} else {
+			err = pipeline.ProcessStoryCompletion(ctx, projectDir, storyID)
+		}
+		if err != nil {
+			debuglog.Log("pipeline embed failed for %s: %v", storyID, err)
+			return pipelineEmbedDoneMsg{StoryID: storyID, Err: err}
+		}
+
+		// Enforce collection caps on all affected collections
+		for name, cap := range memory.CollectionCaps {
+			if capErr := memory.EnforceCollectionCap(ctx, client, name, cap); capErr != nil {
+				debuglog.Log("pipeline cap enforcement failed for %s: %v", name, capErr)
+			}
+		}
+
+		debuglog.Log("pipeline embed complete for %s", storyID)
+		return pipelineEmbedDoneMsg{StoryID: storyID}
+	}
+}
