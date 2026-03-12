@@ -273,6 +273,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.cfg, m.storyDAG, m.cfg.Workers, incomplete,
 						cp.CompletedStories, cp.FailedStories, cp.IterationCount,
 					)
+					m.coord.SetMemory(m.chromaClient, m.memoryEmbedder)
 					m.phase = phaseParallel
 					m.coord.ScheduleReady(m.ctx)
 					cmds = append(cmds, m.coord.ListenCmd())
@@ -862,6 +863,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.coord = coordinator.New(m.cfg, m.storyDAG, m.cfg.Workers, incomplete)
+			m.coord.SetMemory(m.chromaClient, m.memoryEmbedder)
 			m.phase = phaseParallel
 			m.coord.ScheduleReady(m.ctx)
 			cmds = append(cmds, m.coord.ListenCmd())

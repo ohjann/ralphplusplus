@@ -8,6 +8,7 @@ import (
 
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/judge"
+	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/runner"
 	"github.com/eoghanhynes/ralph/internal/workspace"
@@ -57,6 +58,8 @@ type Worker struct {
 	Iteration      int
 	Ctx            context.Context
 	Cancel         context.CancelFunc
+	ChromaClient   *memory.ChromaClient // optional: for semantic memory retrieval
+	Embedder       memory.Embedder      // optional: for semantic memory retrieval
 }
 
 type WorkerUpdate struct {
@@ -120,7 +123,23 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	// 2. Build prompt and run Claude
 	send(WorkerRunning, nil, false, "")
 	wsPRD, _ := prd.Load(filepath.Join(ws.Dir, "prd.json"))
-	prompt, _, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD)
+
+	var buildOpts []runner.BuildPromptOpts
+	if w.ChromaClient != nil && w.Embedder != nil && !cfg.Memory.Disabled {
+		retriever := memory.NewRetriever(w.ChromaClient, w.Embedder)
+		if retriever != nil {
+			buildOpts = append(buildOpts, runner.BuildPromptOpts{
+				Memory: retriever,
+				MemoryOpts: memory.RetrievalOptions{
+					TopK:      cfg.Memory.TopK,
+					MinScore:  cfg.Memory.MinScore,
+					MaxTokens: cfg.Memory.MaxTokens,
+				},
+			})
+		}
+	}
+
+	prompt, _, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, buildOpts...)
 	if err != nil {
 		send(WorkerFailed, fmt.Errorf("build prompt: %w", err), false, "")
 		return
