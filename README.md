@@ -155,6 +155,7 @@ Options:
   --notify <topic>                Send push notifications via ntfy.sh to given topic
   --ntfy-server <url>             Self-hosted ntfy server URL (default: https://ntfy.sh)
   --status-port <port>            Start remote status page on given port (disabled by default)
+  --enable-monitoring             Enable ntfy + status page using .ralph/.env config
   --memory-max-tokens <n>         Max tokens for injected memory context (default: 2000)
   --memory-top-k <n>              Results per memory collection (default: 5)
   --memory-min-score <float>      Memory similarity threshold (default: 0.7)
@@ -182,7 +183,7 @@ Examples:
   ralph --no-judge                               Run without Gemini judge
   ralph --no-quality-review                     Run without final quality gate
   ralph --plan plan.md --workers 2              Full pipeline
-  ralph --notify my-topic --status-port 8080    Run with notifications and status page
+  ralph --enable-monitoring                     Use .ralph/.env for ntfy + status page
 ```
 
 ## TUI Keybindings
@@ -199,52 +200,48 @@ Examples:
 
 ## Configuration
 
-### Push Notifications (ntfy.sh)
+### Monitoring Setup (`.ralph/.env`)
 
-Ralph sends push notifications via [ntfy.sh](https://ntfy.sh) — a free, open-source notification service that requires zero accounts.
+Ralph supports push notifications (ntfy.sh) and a remote status page. Configure once in `.ralph/.env`, then use `--enable-monitoring` to activate both:
 
-**Setup:**
-
-1. Install the ntfy app on your phone ([iOS](https://apps.apple.com/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy))
-2. Subscribe to a secret topic (e.g., `ralph-yourname-a8f3`) in the app
-3. Run ralph with the same topic:
+**One-time setup:**
 
 ```bash
-ralph --notify ralph-yourname-a8f3
+mkdir -p .ralph
+cat > .ralph/.env << 'EOF'
+RALPH_NOTIFY_TOPIC=ralph-yourname-a8f3
+RALPH_STATUS_PORT=8080
+# RALPH_NTFY_SERVER=https://ntfy.my-server.ts.net  # optional, defaults to https://ntfy.sh
+EOF
 ```
 
-You'll receive push notifications for: story completion, story failure, stuck detection, and run completion (with cost summary).
+Install the ntfy app on your phone ([iOS](https://apps.apple.com/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy)) and subscribe to the same topic.
 
-**Self-hosted ntfy:** If you run your own ntfy instance (e.g., on your Tailscale network):
+**Then just run:**
 
 ```bash
-ralph --notify my-topic --ntfy-server https://ntfy.my-server.ts.net
+ralph --enable-monitoring
 ```
+
+Ralph prints the active monitoring config at startup as a reminder:
+
+```
+Monitoring:
+  Notifications: https://ntfy.sh/ralph-yourname-a8f3
+  Status page:   http://localhost:8080
+```
+
+You can also set these values as OS environment variables (`RALPH_NOTIFY_TOPIC`, `RALPH_NTFY_SERVER`, `RALPH_STATUS_PORT`) or use the explicit flags (`--notify`, `--ntfy-server`, `--status-port`) which always take priority.
 
 ### Remote Status Page + Tailscale
 
-Ralph serves a mobile-friendly status page with live Server-Sent Events updates. Combined with [Tailscale](https://tailscale.com), you can monitor runs from your phone without port forwarding.
-
-**Setup:**
+Combined with [Tailscale](https://tailscale.com), the status page is accessible from your phone without port forwarding:
 
 1. Install [Tailscale](https://tailscale.com/download) on your laptop and phone
-2. Start ralph with a status port:
+2. Find your laptop's Tailscale IP: `tailscale ip -4` (e.g., `100.64.1.42`)
+3. Open `http://100.64.1.42:8080` on your phone
 
-```bash
-ralph --status-port 8080
-```
-
-3. Find your laptop's Tailscale IP:
-
-```bash
-tailscale ip -4    # e.g., 100.64.1.42
-```
-
-4. Open `http://100.64.1.42:8080` on your phone (connected to Tailscale)
-
-The status page shows: PRD name, current phase, run duration, story list with status/cost, and total run cost — all updating in real-time via SSE.
-
-A JSON API is also available at `/api/status` for programmatic access.
+The status page shows: PRD name, current phase, run duration, story list with status/cost, and total run cost — all updating in real-time via SSE. JSON API available at `/api/status`.
 
 ### Semantic Memory (ChromaDB)
 
@@ -274,10 +271,7 @@ For the complete phone monitoring experience:
 
 ```bash
 # On your laptop (connected to Tailscale)
-ralph --plan .claude/plans/my-feature.md \
-      --workers 3 \
-      --notify ralph-yourname-a8f3 \
-      --status-port 8080
+ralph --plan .claude/plans/my-feature.md --workers 3 --enable-monitoring
 ```
 
 Then on your phone:

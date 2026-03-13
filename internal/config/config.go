@@ -45,6 +45,7 @@ type Config struct {
 	StatusPort         int    // --status-port <port>: remote status page (0 = disabled)
 	NotifyTopic        string // --notify <topic>: ntfy.sh topic for push notifications
 	NtfyServer         string // --ntfy-server <url>: self-hosted ntfy server URL
+	EnableMonitoring   bool   // --enable-monitoring: activate ntfy + status page from .env
 	HistoryCommand     bool   // true when "history" subcommand is used
 	HistoryAll         bool   // --all flag for history subcommand
 
@@ -289,6 +290,9 @@ func Parse(args []string) (*Config, error) {
 			}
 			cfg.NtfyServer = args[i+1]
 			i += 2
+		case "--enable-monitoring":
+			cfg.EnableMonitoring = true
+			i++
 		default:
 			// Check for --key=value forms
 			if len(args[i]) > 6 && args[i][:6] == "--dir=" {
@@ -427,6 +431,13 @@ func Parse(args []string) (*Config, error) {
 	}
 	cfg.ProjectDir = abs
 
+	// Load .ralph/.env if it exists (values only apply where flags weren't explicitly set)
+	envFile := filepath.Join(cfg.ProjectDir, ".ralph", ".env")
+	dotEnv, _ := loadDotEnv(envFile) // ignore error (file may not exist)
+
+	// Apply env vars (dotenv -> OS env -> flag). Flags always win.
+	cfg.applyEnvDefaults(dotEnv)
+
 	// Derive paths
 	cfg.PRDFile = filepath.Join(cfg.ProjectDir, "prd.json")
 	cfg.ProgressFile = filepath.Join(cfg.ProjectDir, "progress.md")
@@ -435,6 +446,61 @@ func Parse(args []string) (*Config, error) {
 	cfg.LogDir = filepath.Join(cfg.ProjectDir, ".ralph", "logs")
 
 	return cfg, nil
+}
+
+// applyEnvDefaults fills in config values from .env file and OS environment variables.
+// Priority: CLI flags > OS env vars > .env file values.
+func (c *Config) applyEnvDefaults(dotEnv map[string]string) {
+	// Helper: get value from dotEnv then OS env, returning first non-empty.
+	getEnv := func(key string) string {
+		if v, ok := dotEnv[key]; ok && v != "" {
+			return v
+		}
+		return os.Getenv(key)
+	}
+
+	if c.NotifyTopic == "" {
+		c.NotifyTopic = getEnv("RALPH_NOTIFY_TOPIC")
+	}
+	if c.NtfyServer == "" {
+		c.NtfyServer = getEnv("RALPH_NTFY_SERVER")
+	}
+	if c.StatusPort == 0 {
+		if v := getEnv("RALPH_STATUS_PORT"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				c.StatusPort = n
+			}
+		}
+	}
+
+	// --enable-monitoring activates monitoring using env values with sensible defaults.
+	if c.EnableMonitoring {
+		if c.StatusPort == 0 {
+			c.StatusPort = 8080
+		}
+		// NotifyTopic must come from env — we can't guess a topic name.
+		// NtfyServer defaults to https://ntfy.sh (handled downstream in notify package).
+	}
+}
+
+// MonitoringSummary returns a human-readable string describing the active monitoring config.
+// Returns empty string if no monitoring is enabled.
+func (c *Config) MonitoringSummary() string {
+	var lines []string
+	if c.NotifyTopic != "" {
+		server := c.NtfyServer
+		if server == "" {
+			server = "https://ntfy.sh"
+		}
+		lines = append(lines, fmt.Sprintf("  Notifications: %s/%s", server, c.NotifyTopic))
+	}
+	if c.StatusPort > 0 {
+		lines = append(lines, fmt.Sprintf("  Status page:   http://localhost:%d", c.StatusPort))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "Monitoring:\n" + strings.Join(lines, "\n")
 }
 
 func (c *Config) Validate() error {
@@ -533,6 +599,7 @@ Options:
   --status-port <port>           Start remote status page on given port (disabled by default)
   --notify <topic>               Send push notifications via ntfy.sh to given topic
   --ntfy-server <url>            Self-hosted ntfy server URL (default: https://ntfy.sh)
+  --enable-monitoring            Enable ntfy + status page using .ralph/.env config
   --help, -h                      Show this help message
 
 Examples:
@@ -543,6 +610,7 @@ Examples:
   ralph --judge-max-rejections 3  Allow up to 3 rejections per story
   ralph --plan .claude/plans/my-plan.md   Generate prd.json from plan, then execute
   ralph --no-quality-review       Run without final quality gate
+  ralph --enable-monitoring       Use .ralph/.env for ntfy + status page config
 
 History Subcommand:
   ralph history                          Show last 10 runs

@@ -71,6 +71,10 @@ func main() {
 	defer debuglog.Close()
 	debuglog.Log("ralph starting, version=%s, workers=%d", Version, cfg.Workers)
 
+	if summary := cfg.MonitoringSummary(); summary != "" {
+		fmt.Println(summary)
+	}
+
 	model := tui.NewModel(cfg, Version)
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
