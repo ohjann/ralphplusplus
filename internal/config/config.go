@@ -36,7 +36,7 @@ type Config struct {
 	Workers            int    // --workers N, default 1 (serial)
 	WorkspaceBase      string // default /tmp/ralph-workspaces
 	PlanFile           string // --plan <path> to generate prd.json from a plan file
-	QualityReview      bool   // --quality-review: run final quality gate after all stories pass
+	QualityReview      bool   // enabled by default; --no-quality-review disables
 	QualityWorkers     int    // --quality-workers N: parallel reviewers (default: 3)
 	QualityMaxIters    int    // --quality-max-iterations N: review-fix cycles (default: 2)
 	Memory             MemoryConfig
@@ -53,9 +53,11 @@ type Config struct {
 
 func Parse(args []string) (*Config, error) {
 	cfg := &Config{
+		JudgeEnabled:       true,
 		JudgeMaxRejections: 2,
 		Workers:            1,
 		WorkspaceBase:      "/tmp/ralph-workspaces",
+		QualityReview:      true,
 		QualityWorkers:     3,
 		QualityMaxIters:    2,
 		Memory: DefaultMemoryConfig(),
@@ -115,8 +117,8 @@ func Parse(args []string) (*Config, error) {
 		case "--idle":
 			cfg.IdleMode = true
 			i++
-		case "--judge":
-			cfg.JudgeEnabled = true
+		case "--no-judge":
+			cfg.JudgeEnabled = false
 			i++
 		case "--workers":
 			if i+1 >= len(args) {
@@ -143,8 +145,8 @@ func Parse(args []string) (*Config, error) {
 			}
 			cfg.WorkspaceBase = args[i+1]
 			i += 2
-		case "--quality-review":
-			cfg.QualityReview = true
+		case "--no-quality-review":
+			cfg.QualityReview = false
 			i++
 		case "--quality-workers":
 			if i+1 >= len(args) {
@@ -435,11 +437,11 @@ Options:
   --dir <path>                    Project directory containing prd.json (default: current directory)
   --plan <path>                   Generate prd.json from a plan file before executing
   --idle                          Launch TUI in idle mode (no execution, just display layout)
-  --judge                         Enable LLM-as-Judge verification (requires gemini CLI)
+  --no-judge                      Disable LLM-as-Judge verification (enabled by default)
   --judge-max-rejections <n>      Max judge rejections per story before auto-passing (default: 2)
   --workers <n>                   Number of parallel workers (default: 1 = serial)
   --workspace-base <path>         Base directory for workspaces (default: /tmp/ralph-workspaces)
-  --quality-review                Enable final quality review after all stories pass
+  --no-quality-review             Disable final quality review (enabled by default)
   --quality-workers <n>           Parallel quality reviewers (default: 3)
   --quality-max-iterations <n>    Max review-fix cycles (default: 2)
   --memory-top-k <n>             Number of memory results to retrieve (default: 5)
@@ -453,10 +455,10 @@ Examples:
   ralph                           Run until all stories are complete
   ralph --dir ~/myapp             Run against prd.json in ~/myapp
   ralph --idle                    Launch TUI without executing the loop
-  ralph --judge                   Run with Gemini judge verification
-  ralph --judge --judge-max-rejections 3   Allow up to 3 rejections per story
+  ralph --no-judge                Run without Gemini judge verification
+  ralph --judge-max-rejections 3  Allow up to 3 rejections per story
   ralph --plan .claude/plans/my-plan.md   Generate prd.json from plan, then execute
-  ralph --quality-review                 Run with final quality gate after stories complete
+  ralph --no-quality-review       Run without final quality gate
 
 Memory Subcommands:
   ralph memory stats                     Show collection sizes, document counts, and average scores

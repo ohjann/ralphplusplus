@@ -81,13 +81,13 @@ This adds a DAG analysis step where Claude examines the codebase to determine wh
 
 Use `1-9` keys in the TUI to switch between worker output panels.
 
-### Judge Mode: `--judge`
+### Judge Mode (enabled by default)
 
-An independent LLM (Gemini) reviews each story after Claude marks it complete:
+An independent LLM (Gemini) reviews each story after Claude marks it complete. Disable with `--no-judge`.
 
 ```bash
-ralph --judge
-ralph --judge --judge-max-rejections 3
+ralph --no-judge                    # disable judge
+ralph --judge-max-rejections 3      # allow up to 3 rejections
 ```
 
 1. Claude implements a story and sets `passes: true`
@@ -97,13 +97,13 @@ ralph --judge --judge-max-rejections 3
 
 The judge is advisory -- if Gemini crashes or times out, Ralph treats it as a pass and continues.
 
-### Quality Review: `--quality-review`
+### Quality Review (enabled by default)
 
-After all stories pass, an optional final quality gate runs multiple independent Claude Code reviewers, each focused on a single concern:
+After all stories pass, a final quality gate runs multiple independent Claude Code reviewers, each focused on a single concern. Disable with `--no-quality-review`.
 
 ```bash
-ralph --quality-review
-ralph --quality-review --quality-workers 5 --quality-max-iterations 3
+ralph --no-quality-review                              # disable quality review
+ralph --quality-workers 5 --quality-max-iterations 3   # tune parameters
 ```
 
 1. Five "lens" reviewers run in parallel, each examining the full changeset:
@@ -128,10 +128,10 @@ Options:
   --dir <path>                    Project directory (default: current directory)
   --plan <path>                   Generate prd.json from a plan file, review, then execute
   --workers <n>                   Parallel workers (default: 1 = serial)
-  --judge                         Enable Gemini judge verification
+  --no-judge                      Disable Gemini judge verification (enabled by default)
   --judge-max-rejections <n>      Max rejections before auto-pass (default: 2)
   --workspace-base <path>         Base directory for worker workspaces (default: /tmp/ralph-workspaces)
-  --quality-review                Enable final quality review after all stories pass
+  --no-quality-review             Disable final quality review (enabled by default)
   --quality-workers <n>           Parallel quality reviewers (default: 3)
   --quality-max-iterations <n>    Max review-fix cycles (default: 2)
   --idle                          Launch TUI without executing (display only)
@@ -145,9 +145,9 @@ Examples:
   ralph 5                                       Run with max 5 iterations
   ralph --plan .claude/plans/my-plan.md         Plan, review, then execute
   ralph --workers 3                             Run up to 3 stories in parallel
-  ralph --judge                                 Run with Gemini judge verification
-  ralph --quality-review                        Run with final quality gate
-  ralph --plan plan.md --workers 2 --judge      Full pipeline
+  ralph --no-judge                               Run without Gemini judge
+  ralph --no-quality-review                     Run without final quality gate
+  ralph --plan plan.md --workers 2              Full pipeline
 ```
 
 ## TUI Keybindings
