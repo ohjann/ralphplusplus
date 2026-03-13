@@ -1,0 +1,155 @@
+package costs
+
+import (
+	"sync"
+	"time"
+)
+
+// TokenUsage tracks token counts for a single API call or aggregation.
+type TokenUsage struct {
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens"`
+	CacheRead    int    `json:"cache_read"`
+	CacheWrite   int    `json:"cache_write"`
+	Model        string `json:"model"`
+	Provider     string `json:"provider"` // "claude" or "gemini"
+}
+
+// ModelPricing holds per-million-token prices for a model.
+type ModelPricing struct {
+	InputPricePerMToken  float64
+	OutputPricePerMToken float64
+}
+
+// PricingTable maps model name to its pricing.
+type PricingTable map[string]ModelPricing
+
+// DefaultPricing contains current pricing for Claude and Gemini models.
+var DefaultPricing = PricingTable{
+	// Claude models
+	"claude-opus-4-20250514":    {InputPricePerMToken: 15.0, OutputPricePerMToken: 75.0},
+	"claude-sonnet-4-20250514":  {InputPricePerMToken: 3.0, OutputPricePerMToken: 15.0},
+	"claude-haiku-4-20250506":   {InputPricePerMToken: 0.25, OutputPricePerMToken: 1.25},
+	"claude-opus-4-6":           {InputPricePerMToken: 15.0, OutputPricePerMToken: 75.0},
+	"claude-sonnet-4-6":         {InputPricePerMToken: 3.0, OutputPricePerMToken: 15.0},
+	"claude-haiku-4-5-20251001": {InputPricePerMToken: 0.25, OutputPricePerMToken: 1.25},
+	// Gemini models
+	"gemini-2.5-pro":   {InputPricePerMToken: 1.25, OutputPricePerMToken: 10.0},
+	"gemini-2.5-flash": {InputPricePerMToken: 0.15, OutputPricePerMToken: 0.60},
+}
+
+// IterationCost tracks the cost of a single iteration.
+type IterationCost struct {
+	TokenUsage TokenUsage    `json:"token_usage"`
+	Duration   time.Duration `json:"duration"`
+	Cost       float64       `json:"cost"`
+}
+
+// StoryCosting tracks costs for a single story.
+type StoryCosting struct {
+	StoryID    string          `json:"story_id"`
+	Iterations []IterationCost `json:"iterations"`
+	JudgeCosts []TokenUsage    `json:"judge_costs"`
+	TotalCost  float64         `json:"total_cost"`
+}
+
+// RunCosting tracks costs for an entire run. Safe for concurrent access.
+type RunCosting struct {
+	mu                sync.Mutex
+	Stories           map[string]*StoryCosting `json:"stories"`
+	QualityCost       TokenUsage               `json:"quality_cost"`
+	DAGCost           TokenUsage               `json:"dag_cost"`
+	PlanCost          TokenUsage               `json:"plan_cost"`
+	TotalCost         float64                  `json:"total_cost"`
+	StartTime         time.Time                `json:"start_time"`
+	TotalInputTokens  int                      `json:"total_input_tokens"`
+	TotalOutputTokens int                      `json:"total_output_tokens"`
+}
+
+// CalculateCost computes the cost from token counts and model pricing.
+func CalculateCost(usage TokenUsage, pricing PricingTable) float64 {
+	p, ok := pricing[usage.Model]
+	if !ok {
+		return 0
+	}
+	inputCost := float64(usage.InputTokens) * p.InputPricePerMToken / 1_000_000
+	outputCost := float64(usage.OutputTokens) * p.OutputPricePerMToken / 1_000_000
+	return inputCost + outputCost
+}
+
+// NewRunCosting initializes an empty RunCosting with StartTime set to now.
+func NewRunCosting() *RunCosting {
+	return &RunCosting{
+		Stories:   make(map[string]*StoryCosting),
+		StartTime: time.Now(),
+	}
+}
+
+// AddIteration adds an iteration cost to a story and updates totals.
+func (rc *RunCosting) AddIteration(storyID string, usage TokenUsage, duration time.Duration) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	cost := CalculateCost(usage, DefaultPricing)
+
+	sc, ok := rc.Stories[storyID]
+	if !ok {
+		sc = &StoryCosting{StoryID: storyID}
+		rc.Stories[storyID] = sc
+	}
+
+	sc.Iterations = append(sc.Iterations, IterationCost{
+		TokenUsage: usage,
+		Duration:   duration,
+		Cost:       cost,
+	})
+	sc.TotalCost += cost
+
+	rc.TotalCost += cost
+	rc.TotalInputTokens += usage.InputTokens
+	rc.TotalOutputTokens += usage.OutputTokens
+}
+
+// AddJudgeCost adds judge cost to a story.
+func (rc *RunCosting) AddJudgeCost(storyID string, usage TokenUsage) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	cost := CalculateCost(usage, DefaultPricing)
+
+	sc, ok := rc.Stories[storyID]
+	if !ok {
+		sc = &StoryCosting{StoryID: storyID}
+		rc.Stories[storyID] = sc
+	}
+
+	sc.JudgeCosts = append(sc.JudgeCosts, usage)
+	sc.TotalCost += cost
+
+	rc.TotalCost += cost
+	rc.TotalInputTokens += usage.InputTokens
+	rc.TotalOutputTokens += usage.OutputTokens
+}
+
+// CacheHitRate computes the cache hit rate from total cache reads vs total input tokens.
+func (rc *RunCosting) CacheHitRate() float64 {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	var totalCacheRead, totalInput int
+	for _, sc := range rc.Stories {
+		for _, ic := range sc.Iterations {
+			totalCacheRead += ic.TokenUsage.CacheRead
+			totalInput += ic.TokenUsage.InputTokens
+		}
+		for _, jc := range sc.JudgeCosts {
+			totalCacheRead += jc.CacheRead
+			totalInput += jc.InputTokens
+		}
+	}
+
+	if totalInput == 0 {
+		return 0
+	}
+	return float64(totalCacheRead) / float64(totalInput)
+}
