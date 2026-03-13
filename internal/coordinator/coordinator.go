@@ -595,6 +595,16 @@ type WorkerStuckMsg struct {
 	StoryID  string
 }
 
+// StoryTitle returns the title of a story by ID.
+func (c *Coordinator) StoryTitle(storyID string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if s, ok := c.stories[storyID]; ok {
+		return s.Title
+	}
+	return storyID
+}
+
 // IsCompleted returns true if the story was completed by a worker.
 func (c *Coordinator) IsCompleted(storyID string) bool {
 	c.mu.Lock()

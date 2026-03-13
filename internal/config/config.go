@@ -43,6 +43,8 @@ type Config struct {
 	MemoryCommand      string // "stats", "search", "prune", "reset" (empty = normal TUI mode)
 	MemoryQuery        string // query text for "ralph memory search <query>"
 	StatusPort         int    // --status-port <port>: remote status page (0 = disabled)
+	NotifyTopic        string // --notify <topic>: ntfy.sh topic for push notifications
+	NtfyServer         string // --ntfy-server <url>: self-hosted ntfy server URL
 
 	// Derived paths
 	PRDFile        string
@@ -238,6 +240,18 @@ func Parse(args []string) (*Config, error) {
 			}
 			cfg.StatusPort = n
 			i += 2
+		case "--notify":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--notify requires a topic string")
+			}
+			cfg.NotifyTopic = args[i+1]
+			i += 2
+		case "--ntfy-server":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--ntfy-server requires a URL")
+			}
+			cfg.NtfyServer = args[i+1]
+			i += 2
 		default:
 			// Check for --key=value forms
 			if len(args[i]) > 6 && args[i][:6] == "--dir=" {
@@ -342,6 +356,16 @@ func Parse(args []string) (*Config, error) {
 					return nil, fmt.Errorf("--status-port: invalid number %q", args[i][len("--status-port="):])
 				}
 				cfg.StatusPort = n
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--notify=") {
+				cfg.NotifyTopic = args[i][len("--notify="):]
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--ntfy-server=") {
+				cfg.NtfyServer = args[i][len("--ntfy-server="):]
 				i++
 				continue
 			}
@@ -470,6 +494,8 @@ Options:
   --memory-disable               Disable semantic memory (skip ChromaDB sidecar)
   --memory-port <n>              ChromaDB sidecar port (default: 9876)
   --status-port <port>           Start remote status page on given port (disabled by default)
+  --notify <topic>               Send push notifications via ntfy.sh to given topic
+  --ntfy-server <url>            Self-hosted ntfy server URL (default: https://ntfy.sh)
   --help, -h                      Show this help message
 
 Examples:

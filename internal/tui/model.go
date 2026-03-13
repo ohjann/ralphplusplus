@@ -18,6 +18,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/checkpoint"
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/memory"
+	"github.com/eoghanhynes/ralph/internal/notify"
 	"github.com/eoghanhynes/ralph/internal/coordinator"
 	"github.com/eoghanhynes/ralph/internal/dag"
 	"github.com/eoghanhynes/ralph/internal/debuglog"
@@ -124,10 +125,19 @@ type Model struct {
 	memoryEmbedder memory.Embedder
 	memoryContent  string // rendered content for the memory context panel tab
 	confirmTracker *memory.ConfirmationTracker
+
+	// Push notifications
+	notifier *notify.Notifier
 }
 
 func NewModel(cfg *config.Config, version string) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	var n *notify.Notifier
+	if cfg.NotifyTopic != "" {
+		n = notify.NewNotifier(cfg.NotifyTopic, cfg.NtfyServer)
+	}
+
 	return &Model{
 		cfg:            cfg,
 		version:        version,
@@ -142,6 +152,7 @@ func NewModel(cfg *config.Config, version string) *Model {
 		progressSpring: harmonica.NewSpring(harmonica.FPS(30), 6.0, 0.5),
 		workerLogCache: make(map[worker.WorkerID]string),
 		confirmTracker: memory.NewConfirmationTracker(),
+		notifier:       n,
 	}
 }
 
@@ -703,6 +714,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Show Claude error in activity panel
+			m.notifier.Error(m.ctx, msg.Err.Error())
 			m.claudeContent += fmt.Sprintf("\n── Claude Error ──\n%s\n", msg.Err)
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
@@ -721,6 +733,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil && m.currentStoryID != "" {
 			ss, _ := storystate.Load(m.cfg.ProjectDir, m.currentStoryID)
 			if ss.Status == storystate.StatusComplete {
+				m.notifier.StoryComplete(m.ctx, m.currentStoryID, m.currentStoryTitle)
 				if p, err := prd.Load(m.cfg.PRDFile); err == nil {
 					p.SetPasses(m.currentStoryID, true)
 					_ = prd.Save(m.cfg.PRDFile, p)
@@ -771,6 +784,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case stuckDetectedMsg:
 		debuglog.Log("stuck detected: story=%s pattern=%s count=%d", msg.Info.StoryID, msg.Info.Pattern, msg.Info.Count)
+		m.notifier.StoryStuck(m.ctx, msg.Info.StoryID, fmt.Sprintf("%s (%dx)", msg.Info.Pattern, msg.Info.Count))
 		// Cancel Claude — it's stuck
 		m.cancel()
 		// Recreate context for future operations
@@ -899,6 +913,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Cache the activity log before workspace cleanup
 			m.cacheWorkerLog(u.WorkerID)
 			if u.Passed && u.ChangeID != "" {
+				m.notifier.StoryComplete(m.ctx, u.StoryID, m.coord.StoryTitle(u.StoryID))
 				cmds = append(cmds, mergeBackCmd(m.ctx, m.coord, u))
 			} else {
 				// Abandon the committed change so it doesn't leave an orphaned
@@ -914,6 +929,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.claudeVP.SetContent(m.claudeContent)
 					m.claudeVP.GotoBottom()
 					m.prevClaudeLen = len(m.claudeContent)
+				} else {
+					errMsg := "story did not pass"
+					if u.Err != nil {
+						errMsg = u.Err.Error()
+					}
+					m.notifier.StoryFailed(m.ctx, u.StoryID, errMsg)
 				}
 				// Try to schedule more
 				m.coord.ScheduleReady(m.ctx)
@@ -938,6 +959,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if willRetry {
 				m.claudeContent += fmt.Sprintf("\n── Worker %d failed (%s): %v — retrying ──\n", u.WorkerID, u.StoryID, u.Err)
 			} else {
+				errMsg := "unknown error"
+				if u.Err != nil {
+					errMsg = u.Err.Error()
+				}
+				m.notifier.StoryFailed(m.ctx, u.StoryID, errMsg)
 				m.claudeContent += fmt.Sprintf("\n── Worker %d failed (%s): %v ──\n", u.WorkerID, u.StoryID, u.Err)
 			}
 			m.claudeVP.SetContent(m.claudeContent)
@@ -1180,6 +1206,7 @@ func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 
 // transitionToSummary starts generating a final summary of all changes.
 func (m *Model) transitionToSummary() (tea.Model, tea.Cmd) {
+	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, 0)
 	// Run confidence decay cycle before stopping sidecar (needs ChromaDB running)
 	if m.chromaClient != nil && m.confirmTracker != nil {
 		summary, err := memory.RunDecayCycle(m.ctx, m.chromaClient, m.confirmTracker)
@@ -1619,6 +1646,7 @@ func (m *Model) inferStorySkipReason(storyID string) string {
 
 // showCompletionReport generates and displays the completion report in the Claude panel.
 func (m *Model) showCompletionReport() {
+	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, 0)
 	report := m.generateCompletionReport()
 	debuglog.Log("completion report:\n%s", report)
 	m.claudeContent += report
