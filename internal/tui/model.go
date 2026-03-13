@@ -883,7 +883,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil && m.currentStoryID != "" {
 			ss, _ := storystate.Load(m.cfg.ProjectDir, m.currentStoryID)
 			if ss.Status == storystate.StatusComplete {
-				m.notifier.StoryComplete(m.ctx, m.currentStoryID, m.currentStoryTitle)
+				m.notifyStoryComplete(m.currentStoryID, m.currentStoryTitle)
 				if p, err := prd.Load(m.cfg.PRDFile); err == nil {
 					p.SetPasses(m.currentStoryID, true)
 					_ = prd.Save(m.cfg.PRDFile, p)
@@ -1028,6 +1028,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.coord = coordinator.New(m.cfg, m.storyDAG, m.cfg.Workers, incomplete)
 			m.coord.SetMemory(m.chromaClient, m.memoryEmbedder)
 			m.coord.SetRunCosting(m.runCosting)
+			m.coord.SetNotifier(m.notifier)
 			m.phase = phaseParallel
 			m.updateStatusPage()
 			m.coord.ScheduleReady(m.ctx)
@@ -1067,7 +1068,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Cache the activity log before workspace cleanup
 			m.cacheWorkerLog(u.WorkerID)
 			if u.Passed && u.ChangeID != "" {
-				m.notifier.StoryComplete(m.ctx, u.StoryID, m.coord.StoryTitle(u.StoryID))
+				m.notifyStoryComplete(u.StoryID, m.coord.StoryTitle(u.StoryID))
 				cmds = append(cmds, mergeBackCmd(m.ctx, m.coord, u))
 			} else {
 				// Abandon the committed change so it doesn't leave an orphaned
@@ -1209,6 +1210,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prevClaudeLen = newLen
 		}
 
+	case coordinator.WorkerStuckMsg:
+		m.notifier.StoryStuck(m.ctx, msg.StoryID, fmt.Sprintf("worker %d stuck", msg.WorkerID))
+
 	case judgeDoneMsg:
 		debuglog.Log("judgeDone: story=%s passed=%v reason=%s", m.currentStoryID, msg.Result.Passed, msg.Result.Reason)
 		// Show judge result in the context panel
@@ -1227,6 +1231,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Meta:    map[string]string{"verdict": "pass"},
 			})
 		} else {
+			m.notifier.StoryFailed(m.ctx, m.currentStoryID, "Judge rejected: "+msg.Result.Reason)
 			judge.IncrementRejectionCount(m.cfg.ProjectDir, m.currentStoryID)
 			_ = events.Append(m.cfg.ProjectDir, events.Event{
 				Type:    events.EventJudgeResult,
@@ -1364,7 +1369,7 @@ func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 
 // transitionToSummary starts generating a final summary of all changes.
 func (m *Model) transitionToSummary() (tea.Model, tea.Cmd) {
-	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, 0)
+	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, m.totalCost())
 	// Run confidence decay cycle before stopping sidecar (needs ChromaDB running)
 	if m.chromaClient != nil && m.confirmTracker != nil {
 		summary, err := memory.RunDecayCycle(m.ctx, m.chromaClient, m.confirmTracker)
@@ -1403,6 +1408,31 @@ func (m *Model) cacheWorkerLog(wID worker.WorkerID) {
 	}
 	if data, err := os.ReadFile(actPath); err == nil {
 		m.workerLogCache[wID] = string(data)
+	}
+}
+
+// totalCost returns the current run total cost, or 0 if cost tracking is not available.
+func (m *Model) totalCost() float64 {
+	if m.runCosting == nil {
+		return 0
+	}
+	return m.runCosting.GetTotalCost()
+}
+
+// storyCost returns the cost for a specific story, or 0 if not tracked.
+func (m *Model) storyCost(storyID string) float64 {
+	if m.runCosting == nil {
+		return 0
+	}
+	return m.runCosting.GetStoryCost(storyID)
+}
+
+// notifyStoryComplete sends a story-complete notification enriched with cost if available.
+func (m *Model) notifyStoryComplete(storyID, title string) {
+	if cost := m.storyCost(storyID); cost > 0 {
+		m.notifier.StoryComplete(m.ctx, storyID, fmt.Sprintf("%s ($%.2f)", title, cost))
+	} else {
+		m.notifier.StoryComplete(m.ctx, storyID, title)
 	}
 }
 
@@ -1811,7 +1841,7 @@ func (m *Model) inferStorySkipReason(storyID string) string {
 
 // showCompletionReport generates and displays the completion report in the Claude panel.
 func (m *Model) showCompletionReport() {
-	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, 0)
+	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, m.totalCost())
 	report := m.generateCompletionReport()
 	debuglog.Log("completion report:\n%s", report)
 	m.claudeContent += report

@@ -224,6 +224,25 @@ func NewFromSnapshot(snap CostSnapshot) *RunCosting {
 		TotalOutputTokens: snap.TotalOutputTokens,
 	}
 }
+
+// GetTotalCost returns the current total cost, safe for concurrent access.
+func (rc *RunCosting) GetTotalCost() float64 {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return rc.TotalCost
+}
+
+// GetStoryCost returns the total cost for a specific story, or 0 if not tracked.
+func (rc *RunCosting) GetStoryCost(storyID string) float64 {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if sc, ok := rc.Stories[storyID]; ok {
+		return sc.TotalCost
+	}
+	return 0
+}
+
+
 // CacheHitRate computes the cache hit rate from total cache reads vs total input tokens.
 func (rc *RunCosting) CacheHitRate() float64 {
 	rc.mu.Lock()

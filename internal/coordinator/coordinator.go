@@ -16,6 +16,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/dag"
 	"github.com/eoghanhynes/ralph/internal/memory"
+	"github.com/eoghanhynes/ralph/internal/notify"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/runner"
 	"github.com/eoghanhynes/ralph/internal/worker"
@@ -48,6 +49,7 @@ type Coordinator struct {
 	chromaClient    *memory.ChromaClient      // optional: for semantic memory in workers
 	embedder        memory.Embedder           // optional: for semantic memory in workers
 	runCosting      *costs.RunCosting         // optional: for including cost data in checkpoints
+	notifier        *notify.Notifier          // optional: for push notifications
 }
 
 func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory) *Coordinator {
@@ -108,6 +110,17 @@ func (c *Coordinator) SetMemory(client *memory.ChromaClient, embedder memory.Emb
 func (c *Coordinator) SetRunCosting(rc *costs.RunCosting) {
 	c.runCosting = rc
 }
+
+// SetNotifier configures optional push notification support.
+func (c *Coordinator) SetNotifier(n *notify.Notifier) {
+	c.notifier = n
+}
+
+// Notifier returns the coordinator's notifier (may be nil).
+func (c *Coordinator) Notifier() *notify.Notifier {
+	return c.notifier
+}
+
 
 // ScheduleReady launches workers for stories whose dependencies are met.
 // Returns the number of new workers launched.
