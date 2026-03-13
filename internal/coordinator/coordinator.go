@@ -605,6 +605,14 @@ func (c *Coordinator) StoryTitle(storyID string) string {
 	return storyID
 }
 
+// IsInProgress returns true if the story is currently being worked on by a worker.
+func (c *Coordinator) IsInProgress(storyID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.inProgress[storyID]
+	return ok
+}
+
 // IsCompleted returns true if the story was completed by a worker.
 func (c *Coordinator) IsCompleted(storyID string) bool {
 	c.mu.Lock()

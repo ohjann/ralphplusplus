@@ -161,6 +161,16 @@ func (rc *RunCosting) AddJudgeCost(storyID string, usage TokenUsage) {
 	rc.TotalOutputTokens += usage.OutputTokens
 }
 
+// StoryCost returns the total cost for a specific story.
+func (rc *RunCosting) StoryCost(storyID string) float64 {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	if sc, ok := rc.Stories[storyID]; ok {
+		return sc.TotalCost
+	}
+	return 0
+}
+
 // CacheHitRate computes the cache hit rate from total cache reads vs total input tokens.
 func (rc *RunCosting) CacheHitRate() float64 {
 	rc.mu.Lock()

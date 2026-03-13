@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -56,14 +57,21 @@ func (s *StatusServer) Start(port int) error {
 	mux.HandleFunc("/events", s.handleSSE)
 	mux.HandleFunc("/api/status", s.handleAPIStatus)
 
+	addr := fmt.Sprintf(":%d", port)
+
+	// Try to bind the port early so we can return an error if it's in use.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", addr, err)
+	}
+
 	s.server = &http.Server{
-		Addr:              fmt.Sprintf(":%d", port),
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go func() {
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("status page server error: %v\n", err)
 		}
 	}()

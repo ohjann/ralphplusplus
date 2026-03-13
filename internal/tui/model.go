@@ -20,6 +20,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/notify"
+	"github.com/eoghanhynes/ralph/internal/statuspage"
 	"github.com/eoghanhynes/ralph/internal/coordinator"
 	"github.com/eoghanhynes/ralph/internal/dag"
 	"github.com/eoghanhynes/ralph/internal/debuglog"
@@ -136,6 +137,9 @@ type Model struct {
 
 	// Push notifications
 	notifier *notify.Notifier
+
+	// Remote status page
+	statusServer *statuspage.StatusServer
 }
 
 func NewModel(cfg *config.Config, version string) *Model {
@@ -144,6 +148,19 @@ func NewModel(cfg *config.Config, version string) *Model {
 	var n *notify.Notifier
 	if cfg.NotifyTopic != "" {
 		n = notify.NewNotifier(cfg.NotifyTopic, cfg.NtfyServer)
+	}
+
+	// Start status page server if --status-port is configured
+	var ss *statuspage.StatusServer
+	if cfg.StatusPort > 0 {
+		ss = statuspage.New()
+		if err := ss.Start(cfg.StatusPort); err != nil {
+			debuglog.Log("warning: status page failed to start on port %d: %v", cfg.StatusPort, err)
+			ss = nil
+		} else {
+			debuglog.Log("Status page: http://localhost:%d", cfg.StatusPort)
+			fmt.Printf("Status page: http://localhost:%d\n", cfg.StatusPort)
+		}
 	}
 
 	return &Model{
@@ -163,6 +180,7 @@ func NewModel(cfg *config.Config, version string) *Model {
 		runCosting:     costs.NewRunCosting(),
 		confirmTracker: memory.NewConfirmationTracker(),
 		notifier:       n,
+		statusServer:   ss,
 	}
 }
 
@@ -176,6 +194,110 @@ func (m *Model) stopSidecar() {
 		if err := m.memorySidecar.Stop(); err != nil {
 			debuglog.Log("chromadb sidecar stop error: %v", err)
 		}
+	}
+}
+
+// stopStatusServer gracefully shuts down the status page server if running.
+func (m *Model) stopStatusServer() {
+	if m.statusServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := m.statusServer.Stop(ctx); err != nil {
+			debuglog.Log("status server stop error: %v", err)
+		}
+	}
+}
+
+// updateStatusPage pushes the current model state to the status page server.
+func (m *Model) updateStatusPage() {
+	if m.statusServer == nil {
+		return
+	}
+	m.statusServer.UpdateState(m.buildStatusState())
+}
+
+// buildStatusState constructs a StatusState from current Model fields.
+func (m *Model) buildStatusState() statuspage.StatusState {
+	state := statuspage.StatusState{
+		Phase:     phaseToString(m.phase),
+		TotalCost: m.runCosting.TotalCost,
+	}
+
+	elapsed := time.Since(m.startTime).Truncate(time.Second)
+	state.RunDuration = formatDuration(elapsed)
+
+	// Load PRD for story data and project name
+	if p, err := prd.Load(m.cfg.PRDFile); err == nil {
+		state.PRDName = p.Project
+		for _, s := range p.UserStories {
+			ss := statuspage.StoryStatus{
+				ID:    s.ID,
+				Title: s.Title,
+			}
+			if s.Passes {
+				ss.Status = "done"
+			} else if s.ID == m.currentStoryID && m.phase == phaseClaudeRun {
+				ss.Status = "running"
+			} else {
+				ss.Status = "queued"
+			}
+
+			// In parallel mode, check coordinator for running/failed status
+			if m.coord != nil {
+				if m.coord.IsInProgress(s.ID) {
+					ss.Status = "running"
+				} else if m.coord.IsFailed(s.ID) {
+					ss.Status = "failed"
+				}
+			}
+
+			// Add per-story cost from RunCosting
+			ss.Cost = m.runCosting.StoryCost(s.ID)
+
+			state.Stories = append(state.Stories, ss)
+		}
+	}
+
+	return state
+}
+
+// phaseToString converts a phase to a human-readable string for the status page.
+func phaseToString(p phase) string {
+	switch p {
+	case phaseInit:
+		return "Initializing"
+	case phaseIterating:
+		return "Finding story"
+	case phaseClaudeRun:
+		return "Claude running"
+	case phaseJudgeRun:
+		return "Judge reviewing"
+	case phasePlanning:
+		return "Planning"
+	case phaseReview:
+		return "Review"
+	case phaseDone:
+		return "Complete"
+	case phaseIdle:
+		return "Idle"
+	case phaseDagAnalysis:
+		return "Analyzing DAG"
+	case phaseParallel:
+		return "Parallel"
+	case phaseQualityReview:
+		return "Quality Review"
+	case phaseQualityFix:
+		return "Quality Fix"
+	case phaseQualityPrompt:
+		return "Quality Prompt"
+	case phaseSummary:
+		return "Summary"
+	case phaseResumePrompt:
+		return "Resume Prompt"
+	case phasePaused:
+		return "Paused"
+	default:
+		return "Unknown"
 	}
 }
 
@@ -263,6 +385,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.coord.CancelAll()
 				m.coord.CleanupAll(context.Background())
 			}
+			m.stopStatusServer()
 			m.stopSidecar()
 			m.cancel()
 			return m, tea.Quit
@@ -320,11 +443,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case msg.String() == "q":
 			if m.phase == phaseResumePrompt {
+				m.stopStatusServer()
 				m.stopSidecar()
 				m.cancel()
 				return m, tea.Quit
 			}
 			if m.phase == phaseReview {
+				m.stopStatusServer()
 				m.stopSidecar()
 				m.cancel()
 				return m, tea.Quit
@@ -334,6 +459,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.transitionToSummary()
 			}
 			if m.confirmQuit || m.phase == phaseDone || m.phase == phaseIdle {
+				m.stopStatusServer()
 				m.stopSidecar()
 				m.cancel()
 				return m, tea.Quit
@@ -688,6 +814,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentStoryID = msg.StoryID
 		m.currentStoryTitle = msg.StoryTitle
 		m.phase = phaseClaudeRun
+		m.updateStatusPage()
 		m.claudeContent = ""
 		m.prevClaudeLen = 0
 
@@ -714,6 +841,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Context cancelled = user quit
 			if m.ctx.Err() != nil {
 				debuglog.Log("claudeDone: context cancelled, quitting")
+				m.stopStatusServer()
 				m.stopSidecar()
 				return m, tea.Quit
 			}
@@ -743,6 +871,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return costUpdateMsg{Usage: *msg.TokenUsage, StoryID: m.currentStoryID}
 			})
 		}
+		m.updateStatusPage()
 
 		// Mark current story as passed in prd.json if agent reported it complete.
 		// The system owns the passes field — the agent no longer modifies prd.json.
@@ -801,6 +930,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stuckDetectedMsg:
 		debuglog.Log("stuck detected: story=%s pattern=%s count=%d", msg.Info.StoryID, msg.Info.Pattern, msg.Info.Count)
 		m.notifier.StoryStuck(m.ctx, msg.Info.StoryID, fmt.Sprintf("%s (%dx)", msg.Info.Pattern, msg.Info.Count))
+		m.updateStatusPage()
 		// Cancel Claude — it's stuck
 		m.cancel()
 		// Recreate context for future operations
@@ -893,6 +1023,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.coord = coordinator.New(m.cfg, m.storyDAG, m.cfg.Workers, incomplete)
 			m.coord.SetMemory(m.chromaClient, m.memoryEmbedder)
 			m.phase = phaseParallel
+			m.updateStatusPage()
 			m.coord.ScheduleReady(m.ctx)
 			cmds = append(cmds, m.coord.ListenCmd())
 		}
@@ -900,6 +1031,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case coordinator.WorkerUpdateMsg:
 		u := msg.Update
 		willRetry := m.coord.HandleUpdate(u)
+		m.updateStatusPage()
 
 		// Usage limit — pause everything and wait for user
 		if u.UsageLimit {
@@ -1013,6 +1145,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case coordinator.MergeCompleteMsg:
+		m.updateStatusPage()
 		if msg.Err != nil {
 			// Abandon the change so it doesn't leave an orphaned side branch.
 			if msg.ChangeID != "" {
@@ -1199,9 +1332,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.exitCode = 0
 		m.completionReason = "All stories completed successfully"
 		debuglog.Log("entering phaseDone: %s", m.completionReason)
+		m.updateStatusPage()
 
 	case costUpdateMsg:
 		m.runCosting.AddIteration(msg.StoryID, msg.Usage, 0)
+		m.updateStatusPage()
 	}
 
 	return m, tea.Batch(cmds...)
@@ -1212,6 +1347,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // Otherwise, transitions to summary generation.
 func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 	debuglog.Log("transitionToComplete: iteration=%d, currentStory=%s", m.iteration, m.currentStoryID)
+	m.updateStatusPage()
 	if m.cfg.QualityReview && m.qualityIteration == 0 {
 		m.qualityIteration = 1
 		m.phase = phaseQualityReview
@@ -1236,7 +1372,8 @@ func (m *Model) transitionToSummary() (tea.Model, tea.Cmd) {
 				summary.Confirmed, summary.Decayed, summary.Evicted)
 		}
 	}
-	// Stop ChromaDB sidecar — no more memory operations needed
+	// Stop status page and ChromaDB sidecar — no more updates needed
+	m.stopStatusServer()
 	m.stopSidecar()
 	// Best-effort checkpoint cleanup on clean completion
 	_ = checkpoint.Delete(m.cfg.ProjectDir)
