@@ -45,6 +45,8 @@ type Config struct {
 	StatusPort         int    // --status-port <port>: remote status page (0 = disabled)
 	NotifyTopic        string // --notify <topic>: ntfy.sh topic for push notifications
 	NtfyServer         string // --ntfy-server <url>: self-hosted ntfy server URL
+	HistoryCommand     bool   // true when "history" subcommand is used
+	HistoryAll         bool   // --all flag for history subcommand
 
 	// Derived paths
 	PRDFile        string
@@ -64,6 +66,41 @@ func Parse(args []string) (*Config, error) {
 		QualityWorkers:     3,
 		QualityMaxIters:    2,
 		Memory: DefaultMemoryConfig(),
+	}
+
+	// Check for "history" subcommand as first argument.
+	if len(args) > 0 && args[0] == "history" {
+		cfg.HistoryCommand = true
+		// Parse optional --all flag and --dir
+		for j := 1; j < len(args); j++ {
+			switch args[j] {
+			case "--all":
+				cfg.HistoryAll = true
+			case "--dir":
+				if j+1 < len(args) {
+					cfg.ProjectDir = args[j+1]
+					j++
+				}
+			default:
+				if strings.HasPrefix(args[j], "--dir=") {
+					cfg.ProjectDir = args[j][len("--dir="):]
+				}
+			}
+		}
+		cfg.RalphHome = resolveRalphHome()
+		if cfg.ProjectDir == "" {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return nil, fmt.Errorf("cannot determine working directory: %w", err)
+			}
+			cfg.ProjectDir = cwd
+		}
+		abs, err := filepath.Abs(cfg.ProjectDir)
+		if err != nil {
+			return nil, fmt.Errorf("cannot resolve project dir: %w", err)
+		}
+		cfg.ProjectDir = abs
+		return cfg, nil
 	}
 
 	// Check for "memory" subcommand as first argument.
@@ -506,6 +543,10 @@ Examples:
   ralph --judge-max-rejections 3  Allow up to 3 rejections per story
   ralph --plan .claude/plans/my-plan.md   Generate prd.json from plan, then execute
   ralph --no-quality-review       Run without final quality gate
+
+History Subcommand:
+  ralph history                          Show last 10 runs
+  ralph history --all                    Show all runs
 
 Memory Subcommands:
   ralph memory stats                     Show collection sizes, document counts, and average scores

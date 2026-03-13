@@ -729,6 +729,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case archiveDoneMsg:
+		// Show last run summary if history exists
+		if h, err := costs.LoadHistory(m.cfg.ProjectDir); err == nil && len(h.Runs) > 0 {
+			last := h.Runs[len(h.Runs)-1]
+			date := last.Date
+			if len(date) > 10 {
+				date = date[:10]
+			}
+			m.claudeContent += fmt.Sprintf("Last run: %s on %s, %d/%d stories, $%.2f, %.0f min\n",
+				last.PRD, date, last.StoriesCompleted, last.StoriesTotal, last.TotalCost, last.DurationMinutes)
+			m.claudeVP.SetContent(m.claudeContent)
+			m.prevClaudeLen = len(m.claudeContent)
+		}
+
 		// Start ChromaDB sidecar setup in background (unless disabled)
 		if !m.cfg.Memory.Disabled {
 			cmds = append(cmds, chromaSetupCmd(m.ctx, m.cfg))
