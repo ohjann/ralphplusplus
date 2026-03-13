@@ -513,6 +513,20 @@ func (c *Coordinator) CompletedCount() int {
 	return len(c.completed)
 }
 
+// FailedCount returns how many stories failed.
+func (c *Coordinator) FailedCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.failed)
+}
+
+// IterationCount returns total iterations dispatched.
+func (c *Coordinator) IterationCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.iterationCount
+}
+
 // Workers returns a snapshot of all workers for TUI display.
 func (c *Coordinator) Workers() map[worker.WorkerID]*worker.Worker {
 	c.mu.Lock()

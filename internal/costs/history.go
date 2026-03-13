@@ -11,17 +11,17 @@ const historyFileName = "run-history.json"
 
 // RunSummary holds the summary of a single completed PRD run.
 type RunSummary struct {
-	PRD                   string  `json:"prd"`
-	Date                  string  `json:"date"`
-	StoriesTotal          int     `json:"stories_total"`
-	StoriesCompleted      int     `json:"stories_completed"`
-	StoriesFailed         int     `json:"stories_failed"`
-	TotalCost             float64 `json:"total_cost"`
-	DurationMinutes       float64 `json:"duration_minutes"`
-	TotalIterations       int     `json:"total_iterations"`
+	PRD                  string  `json:"prd"`
+	Date                 string  `json:"date"`
+	StoriesTotal         int     `json:"stories_total"`
+	StoriesCompleted     int     `json:"stories_completed"`
+	StoriesFailed        int     `json:"stories_failed"`
+	TotalCost            float64 `json:"total_cost"`
+	DurationMinutes      float64 `json:"duration_minutes"`
+	TotalIterations      int     `json:"total_iterations"`
 	AvgIterationsPerStory float64 `json:"avg_iterations_per_story"`
-	StuckCount            int     `json:"stuck_count"`
-	JudgeRejectionRate    float64 `json:"judge_rejection_rate"`
+	StuckCount           int     `json:"stuck_count"`
+	JudgeRejectionRate   float64 `json:"judge_rejection_rate"`
 }
 
 // RunHistory holds a list of run summaries.
@@ -53,6 +53,7 @@ func LoadHistory(projectDir string) (RunHistory, error) {
 // SaveHistory writes the run history to .ralph/run-history.json with JSON indentation.
 func SaveHistory(projectDir string, history RunHistory) error {
 	path := historyPath(projectDir)
+	// Ensure the .ralph directory exists
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating .ralph directory: %w", err)
 	}

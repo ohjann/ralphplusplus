@@ -22,17 +22,17 @@ func TestSaveAndLoadHistory(t *testing.T) {
 	h := RunHistory{
 		Runs: []RunSummary{
 			{
-				PRD:                   "test-project",
-				Date:                  "2026-03-13T10:00:00Z",
-				StoriesTotal:          5,
-				StoriesCompleted:      4,
-				StoriesFailed:         1,
-				TotalCost:             1.23,
-				DurationMinutes:       45.5,
-				TotalIterations:       12,
+				PRD:              "test-project",
+				Date:             "2026-03-13T10:00:00Z",
+				StoriesTotal:     5,
+				StoriesCompleted: 4,
+				StoriesFailed:    1,
+				TotalCost:        1.23,
+				DurationMinutes:  45.5,
+				TotalIterations:  12,
 				AvgIterationsPerStory: 3.0,
-				StuckCount:            1,
-				JudgeRejectionRate:    0.25,
+				StuckCount:       1,
+				JudgeRejectionRate: 0.25,
 			},
 		},
 	}
@@ -58,12 +58,16 @@ func TestSaveAndLoadHistory(t *testing.T) {
 	if r.StoriesCompleted != 4 {
 		t.Errorf("StoriesCompleted = %d, want 4", r.StoriesCompleted)
 	}
+	if r.JudgeRejectionRate != 0.25 {
+		t.Errorf("JudgeRejectionRate = %f, want 0.25", r.JudgeRejectionRate)
+	}
 
 	// Verify the file is indented JSON
 	data, _ := os.ReadFile(filepath.Join(dir, ".ralph", "run-history.json"))
 	if len(data) == 0 {
 		t.Fatal("file is empty")
 	}
+	// Indented JSON should contain newlines
 	if !containsByte(data, '\n') {
 		t.Error("expected indented JSON with newlines")
 	}

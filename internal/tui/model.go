@@ -1160,6 +1160,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.completionReason = fmt.Sprintf("No active workers remaining (%d/%d completed)", m.coord.CompletedCount(), m.totalStories)
 				debuglog.Log("entering phaseDone: %s", m.completionReason)
 				m.showCompletionReport()
+			} else {
+				m.persistRunHistory()
 			}
 			return m, nil
 		}
@@ -1351,6 +1353,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prevClaudeLen = len(m.claudeContent)
 		// Best-effort checkpoint cleanup on clean completion
 		_ = checkpoint.Delete(m.cfg.ProjectDir)
+		m.persistRunHistory()
 		m.phase = phaseDone
 		m.allComplete = true
 		m.exitCode = 0
@@ -1854,6 +1857,7 @@ func (m *Model) inferStorySkipReason(storyID string) string {
 
 // showCompletionReport generates and displays the completion report in the Claude panel.
 func (m *Model) showCompletionReport() {
+	m.persistRunHistory()
 	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, m.totalCost())
 	report := m.generateCompletionReport()
 	debuglog.Log("completion report:\n%s", report)
@@ -1861,5 +1865,78 @@ func (m *Model) showCompletionReport() {
 	m.claudeVP.SetContent(m.claudeContent)
 	m.claudeVP.GotoBottom()
 	m.prevClaudeLen = len(m.claudeContent)
+}
+
+// persistRunHistory computes a RunSummary from the current state and appends it to run-history.json.
+func (m *Model) persistRunHistory() {
+	p, err := prd.Load(m.cfg.PRDFile)
+	if err != nil {
+		debuglog.Log("persistRunHistory: failed to load PRD: %v", err)
+		return
+	}
+
+	var completed, failed int
+	for _, s := range p.UserStories {
+		if s.Passes {
+			completed++
+		}
+	}
+
+	totalIterations := m.iteration
+	if m.coord != nil {
+		totalIterations = m.coord.IterationCount()
+		failed = m.coord.FailedCount()
+	} else {
+		failed = len(p.UserStories) - completed
+	}
+
+	var avgIter float64
+	if completed > 0 {
+		avgIter = float64(totalIterations) / float64(completed)
+	}
+
+	// Compute judge rejection rate from events
+	var judgeTotal, judgeRejections, stuckCount int
+	evts, err := events.Load(m.cfg.ProjectDir)
+	if err == nil {
+		for _, e := range evts {
+			switch e.Type {
+			case events.EventJudgeResult:
+				judgeTotal++
+				if e.Meta["verdict"] == "fail" {
+					judgeRejections++
+				}
+			case events.EventStuck:
+				stuckCount++
+			}
+		}
+	}
+
+	var rejectionRate float64
+	if judgeTotal > 0 {
+		rejectionRate = float64(judgeRejections) / float64(judgeTotal)
+	}
+
+	durationMinutes := time.Since(m.startTime).Minutes()
+
+	summary := costs.RunSummary{
+		PRD:                  p.Project,
+		Date:                 time.Now().Format(time.RFC3339),
+		StoriesTotal:         len(p.UserStories),
+		StoriesCompleted:     completed,
+		StoriesFailed:        failed,
+		TotalCost:            0, // populated when RunCosting is wired in
+		DurationMinutes:      durationMinutes,
+		TotalIterations:      totalIterations,
+		AvgIterationsPerStory: avgIter,
+		StuckCount:           stuckCount,
+		JudgeRejectionRate:   rejectionRate,
+	}
+
+	if err := costs.AppendRun(m.cfg.ProjectDir, summary); err != nil {
+		debuglog.Log("persistRunHistory: failed to append run: %v", err)
+	} else {
+		debuglog.Log("persistRunHistory: appended run summary for %s", p.Project)
+	}
 }
 
