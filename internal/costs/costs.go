@@ -66,6 +66,36 @@ type RunCosting struct {
 	TotalOutputTokens int                      `json:"total_output_tokens"`
 }
 
+// Lock acquires the mutex for external callers that need consistent reads across fields.
+func (rc *RunCosting) Lock() {
+	rc.mu.Lock()
+}
+
+// Unlock releases the mutex.
+func (rc *RunCosting) Unlock() {
+	rc.mu.Unlock()
+}
+
+// CacheHitRateUnlocked computes cache hit rate without acquiring the lock.
+// Caller must hold the lock.
+func (rc *RunCosting) CacheHitRateUnlocked() float64 {
+	var totalCacheRead, totalInput int
+	for _, sc := range rc.Stories {
+		for _, ic := range sc.Iterations {
+			totalCacheRead += ic.TokenUsage.CacheRead
+			totalInput += ic.TokenUsage.InputTokens
+		}
+		for _, jc := range sc.JudgeCosts {
+			totalCacheRead += jc.CacheRead
+			totalInput += jc.InputTokens
+		}
+	}
+	if totalInput == 0 {
+		return 0
+	}
+	return float64(totalCacheRead) / float64(totalInput)
+}
+
 // CalculateCost computes the cost from token counts and model pricing.
 func CalculateCost(usage TokenUsage, pricing PricingTable) float64 {
 	p, ok := pricing[usage.Model]

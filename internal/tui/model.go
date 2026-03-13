@@ -69,6 +69,10 @@ type Model struct {
 	judgeContent    string
 	qualityContent  string
 
+	// Cost tracking
+	runCosting   *costs.RunCosting
+	costsContent string
+
 	// Story data for the stories panel
 	storyDisplayInfos []StoryDisplayInfo
 	animFrame         int // animation frame for spinners
@@ -156,6 +160,7 @@ func NewModel(cfg *config.Config, version string) *Model {
 		progressSpring: harmonica.NewSpring(harmonica.FPS(30), 6.0, 0.5),
 		runCosting:     costs.NewRunCosting(),
 		workerLogCache: make(map[worker.WorkerID]string),
+		runCosting:     costs.NewRunCosting(),
 		confirmTracker: memory.NewConfirmationTracker(),
 		notifier:       n,
 	}
@@ -661,6 +666,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case memoryStatsMsg:
 		m.memoryContent = msg.Content
+
+	case costUpdateMsg:
+		if m.runCosting != nil {
+			m.runCosting.AddIteration(msg.StoryID, msg.Usage, 0)
+			m.costsContent = renderCostsContent(m.runCosting, m.storyDisplayInfos)
+		}
 
 	case pipelineEmbedDoneMsg:
 		if msg.Err != nil {
@@ -1379,6 +1390,7 @@ func (m *Model) View() string {
 		JudgeContent:    m.judgeContent,
 		QualityContent:  m.qualityContent,
 		MemoryContent:   m.memoryContent,
+		CostsContent:    m.costsContent,
 		Phase:           m.phase,
 	}
 	ctxPanel := renderContextPanel(

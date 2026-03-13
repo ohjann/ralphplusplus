@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/eoghanhynes/ralph/internal/costs"
 )
 
 // contextMode determines what the context panel shows.
@@ -19,6 +20,7 @@ const (
 	contextJudge                       // judge results
 	contextQuality                     // quality review assessment
 	contextMemory                      // memory statistics and context
+	contextCosts                       // cost tracking breakdown
 	contextModeCount                   // sentinel: total number of modes
 )
 
@@ -36,6 +38,7 @@ type contextPanelData struct {
 	JudgeContent    string
 	QualityContent  string
 	MemoryContent   string
+	CostsContent    string
 	Phase           phase
 }
 
@@ -89,6 +92,11 @@ func renderContextPanel(vp *viewport.Model, data contextPanelData, active bool, 
 		if content == "" {
 			content = styleMuted.Render("  Waiting for memory data...")
 		}
+	case contextCosts:
+		content = data.CostsContent
+		if content == "" {
+			content = styleMuted.Render("  No cost data yet")
+		}
 	}
 
 	vp.SetContent(content)
@@ -118,6 +126,7 @@ func renderContextTabs(data contextPanelData) string {
 		{contextJudge, "⚖", "Judge", true},
 		{contextQuality, "◇", "Quality", true},
 		{contextMemory, "⧫", "Memory", true},
+		{contextCosts, "$", "Costs", true},
 	}
 
 	var parts []string
@@ -256,6 +265,106 @@ func renderWorktreeCompact(content string) string {
 		}
 		sb.WriteString("\n")
 	}
+
+	return sb.String()
+}
+
+// formatTokens formats a token count with K/M suffixes.
+func formatTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+// renderCostsContent builds the costs panel content from RunCosting and story display info.
+func renderCostsContent(rc *costs.RunCosting, stories []StoryDisplayInfo) string {
+	if rc == nil {
+		return ""
+	}
+
+	rc.Lock()
+	defer rc.Unlock()
+
+	// Check if any data exists
+	if rc.TotalCost == 0 && rc.TotalInputTokens == 0 && len(rc.Stories) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+
+	// Total run cost
+	sb.WriteString(fmt.Sprintf("  Current Run: $%.2f\n", rc.TotalCost))
+	sb.WriteString("  " + strings.Repeat("─", 40) + "\n")
+
+	// Per-story breakdown, ordered by story display order
+	for _, sdi := range stories {
+		sc, ok := rc.Stories[sdi.ID]
+
+		status := "queued"
+		if sdi.Passed {
+			status = "done"
+		} else if sdi.Running {
+			status = "running"
+		} else if sdi.Failed {
+			status = "failed"
+		}
+
+		if !ok {
+			// No cost data for this story
+			sb.WriteString(fmt.Sprintf("  %s (%s)%s—\n", sdi.ID, status, strings.Repeat(" ", max(1, 20-len(sdi.ID)-len(status)))))
+			continue
+		}
+
+		iterCount := len(sc.Iterations)
+		iterLabel := "iteration"
+		if iterCount != 1 {
+			iterLabel = "iterations"
+		}
+		sb.WriteString(fmt.Sprintf("  %s (%s)%s$%.2f  (%d %s)\n",
+			sdi.ID, status,
+			strings.Repeat(" ", max(1, 20-len(sdi.ID)-len(status))),
+			sc.TotalCost, iterCount, iterLabel))
+
+		// Judge sub-items for running stories
+		if len(sc.JudgeCosts) > 0 {
+			judgeTotalCost := 0.0
+			for _, jc := range sc.JudgeCosts {
+				judgeTotalCost += costs.CalculateCost(jc, costs.DefaultPricing)
+			}
+			sb.WriteString(fmt.Sprintf("    └─ Judge (%dx)%s$%.2f\n",
+				len(sc.JudgeCosts),
+				strings.Repeat(" ", max(1, 14-len(fmt.Sprintf("%d", len(sc.JudgeCosts))))),
+				judgeTotalCost))
+		}
+	}
+
+	// Section totals
+	sb.WriteString("  " + strings.Repeat("─", 40) + "\n")
+
+	qualityCost := costs.CalculateCost(rc.QualityCost, costs.DefaultPricing)
+	dagCost := costs.CalculateCost(rc.DAGCost, costs.DefaultPricing)
+
+	if qualityCost > 0 {
+		sb.WriteString(fmt.Sprintf("  Quality review        $%.2f\n", qualityCost))
+	}
+	if dagCost > 0 {
+		sb.WriteString(fmt.Sprintf("  DAG analysis          $%.2f\n", dagCost))
+	}
+
+	// Token counts
+	sb.WriteString("\n")
+	sb.WriteString(fmt.Sprintf("  Tokens: %s in / %s out\n",
+		formatTokens(rc.TotalInputTokens),
+		formatTokens(rc.TotalOutputTokens)))
+
+	// Cache hit rate
+	cacheRate := rc.CacheHitRateUnlocked()
+	sb.WriteString(fmt.Sprintf("  Cache hit rate: %.0f%%\n", cacheRate*100))
 
 	return sb.String()
 }
