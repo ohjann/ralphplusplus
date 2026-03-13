@@ -171,6 +171,59 @@ func (rc *RunCosting) StoryCost(storyID string) float64 {
 	return 0
 }
 
+// CostSnapshot is a JSON-serializable snapshot of RunCosting for checkpoint persistence.
+type CostSnapshot struct {
+	Stories           map[string]*StoryCosting `json:"stories"`
+	QualityCost       TokenUsage               `json:"quality_cost"`
+	DAGCost           TokenUsage               `json:"dag_cost"`
+	PlanCost          TokenUsage               `json:"plan_cost"`
+	TotalCost         float64                  `json:"total_cost"`
+	TotalInputTokens  int                      `json:"total_input_tokens"`
+	TotalOutputTokens int                      `json:"total_output_tokens"`
+}
+
+// Snapshot returns a serializable copy of the current costing state.
+func (rc *RunCosting) Snapshot() CostSnapshot {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	// Deep copy stories map
+	stories := make(map[string]*StoryCosting, len(rc.Stories))
+	for id, sc := range rc.Stories {
+		cp := *sc
+		cp.Iterations = append([]IterationCost(nil), sc.Iterations...)
+		cp.JudgeCosts = append([]TokenUsage(nil), sc.JudgeCosts...)
+		stories[id] = &cp
+	}
+
+	return CostSnapshot{
+		Stories:           stories,
+		QualityCost:       rc.QualityCost,
+		DAGCost:           rc.DAGCost,
+		PlanCost:          rc.PlanCost,
+		TotalCost:         rc.TotalCost,
+		TotalInputTokens:  rc.TotalInputTokens,
+		TotalOutputTokens: rc.TotalOutputTokens,
+	}
+}
+
+// NewFromSnapshot creates a RunCosting restored from a checkpoint snapshot.
+func NewFromSnapshot(snap CostSnapshot) *RunCosting {
+	stories := snap.Stories
+	if stories == nil {
+		stories = make(map[string]*StoryCosting)
+	}
+	return &RunCosting{
+		Stories:           stories,
+		QualityCost:       snap.QualityCost,
+		DAGCost:           snap.DAGCost,
+		PlanCost:          snap.PlanCost,
+		TotalCost:         snap.TotalCost,
+		StartTime:         time.Now(),
+		TotalInputTokens:  snap.TotalInputTokens,
+		TotalOutputTokens: snap.TotalOutputTokens,
+	}
+}
 // CacheHitRate computes the cache hit rate from total cache reads vs total input tokens.
 func (rc *RunCosting) CacheHitRate() float64 {
 	rc.mu.Lock()

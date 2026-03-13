@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/eoghanhynes/ralph/internal/costs"
 )
 
 // Checkpoint represents the saved state of a ralph run for resume capability.
@@ -20,6 +22,7 @@ type Checkpoint struct {
 	DAG              map[string][]string    `json:"dag"`
 	IterationCount   int                    `json:"iteration_count"`
 	Timestamp        time.Time              `json:"timestamp"`
+	CostData         *costs.CostSnapshot    `json:"cost_data,omitempty"`
 }
 
 // FailedStory tracks retry information for a failed story.

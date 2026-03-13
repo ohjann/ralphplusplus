@@ -70,8 +70,6 @@ type Model struct {
 	judgeContent    string
 	qualityContent  string
 
-	// Cost tracking
-	runCosting   *costs.RunCosting
 	costsContent string
 
 	// Story data for the stories panel
@@ -177,7 +175,6 @@ func NewModel(cfg *config.Config, version string) *Model {
 		progressSpring: harmonica.NewSpring(harmonica.FPS(30), 6.0, 0.5),
 		runCosting:     costs.NewRunCosting(),
 		workerLogCache: make(map[worker.WorkerID]string),
-		runCosting:     costs.NewRunCosting(),
 		confirmTracker: memory.NewConfirmationTracker(),
 		notifier:       n,
 		statusServer:   ss,
@@ -395,6 +392,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.iteration = cp.IterationCount
 				m.completedStories = len(cp.CompletedStories)
 
+				// Restore cost data from checkpoint (nil CostData = start fresh)
+				if cp.CostData != nil {
+					m.runCosting = costs.NewFromSnapshot(*cp.CostData)
+					m.costsContent = renderCostsContent(m.runCosting, m.storyDisplayInfos)
+				}
+
 				if cp.Phase == "parallel" && m.cfg.Workers > 1 {
 					p, err := prd.Load(m.cfg.PRDFile)
 					if err != nil {
@@ -418,6 +421,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						cp.CompletedStories, cp.FailedStories, cp.IterationCount,
 					)
 					m.coord.SetMemory(m.chromaClient, m.memoryEmbedder)
+					m.coord.SetRunCosting(m.runCosting)
 					m.phase = phaseParallel
 					m.coord.ScheduleReady(m.ctx)
 					cmds = append(cmds, m.coord.ListenCmd())
@@ -797,6 +801,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.runCosting != nil {
 			m.runCosting.AddIteration(msg.StoryID, msg.Usage, 0)
 			m.costsContent = renderCostsContent(m.runCosting, m.storyDisplayInfos)
+			m.updateStatusPage()
 		}
 
 	case pipelineEmbedDoneMsg:
@@ -1022,6 +1027,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.coord = coordinator.New(m.cfg, m.storyDAG, m.cfg.Workers, incomplete)
 			m.coord.SetMemory(m.chromaClient, m.memoryEmbedder)
+			m.coord.SetRunCosting(m.runCosting)
 			m.phase = phaseParallel
 			m.updateStatusPage()
 			m.coord.ScheduleReady(m.ctx)
@@ -1334,9 +1340,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		debuglog.Log("entering phaseDone: %s", m.completionReason)
 		m.updateStatusPage()
 
-	case costUpdateMsg:
-		m.runCosting.AddIteration(msg.StoryID, msg.Usage, 0)
-		m.updateStatusPage()
 	}
 
 	return m, tea.Batch(cmds...)
@@ -1436,6 +1439,11 @@ func (m *Model) writeSerialCheckpoint(iterErr error) {
 		DAG:              nil,
 		IterationCount:   m.iteration,
 		Timestamp:        time.Now(),
+	}
+
+	if m.runCosting != nil {
+		snap := m.runCosting.Snapshot()
+		cp.CostData = &snap
 	}
 
 	_ = checkpoint.Save(m.cfg.ProjectDir, cp)

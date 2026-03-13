@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/eoghanhynes/ralph/internal/checkpoint"
 	"github.com/eoghanhynes/ralph/internal/config"
+	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/dag"
 	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
@@ -46,6 +47,7 @@ type Coordinator struct {
 	iterationCount  int                       // total iterations dispatched
 	chromaClient    *memory.ChromaClient      // optional: for semantic memory in workers
 	embedder        memory.Embedder           // optional: for semantic memory in workers
+	runCosting      *costs.RunCosting         // optional: for including cost data in checkpoints
 }
 
 func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory) *Coordinator {
@@ -100,6 +102,11 @@ func NewFromCheckpoint(
 func (c *Coordinator) SetMemory(client *memory.ChromaClient, embedder memory.Embedder) {
 	c.chromaClient = client
 	c.embedder = embedder
+}
+
+// SetRunCosting sets the RunCosting reference so checkpoints include cost data.
+func (c *Coordinator) SetRunCosting(rc *costs.RunCosting) {
+	c.runCosting = rc
 }
 
 // ScheduleReady launches workers for stories whose dependencies are met.
@@ -271,6 +278,11 @@ func (c *Coordinator) writeCheckpointLocked() {
 		InProgress:       inProgress,
 		DAG:              dagMap,
 		IterationCount:   c.iterationCount,
+	}
+
+	if c.runCosting != nil {
+		snap := c.runCosting.Snapshot()
+		cp.CostData = &snap
 	}
 
 	if err := checkpoint.Save(c.cfg.ProjectDir, cp); err != nil {
