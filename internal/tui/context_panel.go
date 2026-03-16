@@ -95,7 +95,7 @@ func renderContextPanel(vp *viewport.Model, data contextPanelData, active bool, 
 	case contextCosts:
 		content = data.CostsContent
 		if content == "" {
-			content = styleMuted.Render("  No cost data yet")
+			content = styleMuted.Render("  No usage data yet")
 		}
 	}
 
@@ -126,7 +126,7 @@ func renderContextTabs(data contextPanelData) string {
 		{contextJudge, "⚖", "Judge", true},
 		{contextQuality, "◇", "Quality", true},
 		{contextMemory, "⧫", "Memory", true},
-		{contextCosts, "$", "Costs", true},
+		{contextCosts, "◎", "Usage", true},
 	}
 
 	var parts []string
@@ -310,7 +310,8 @@ func formatTokens(n int) string {
 	}
 }
 
-// renderCostsContent builds the costs panel content from RunCosting and story display info.
+// renderCostsContent builds the usage panel content from RunCosting and story display info.
+// Works for both API-key users (shows tokens + costs) and Max subscribers (shows iterations + turns).
 func renderCostsContent(rc *costs.RunCosting, stories []StoryDisplayInfo) string {
 	if rc == nil {
 		return ""
@@ -319,18 +320,39 @@ func renderCostsContent(rc *costs.RunCosting, stories []StoryDisplayInfo) string
 	rc.Lock()
 	defer rc.Unlock()
 
-	// Check if any data exists
-	if rc.TotalCost == 0 && rc.TotalInputTokens == 0 && len(rc.Stories) == 0 {
+	if len(rc.Stories) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
 
-	// Total run cost
-	sb.WriteString(fmt.Sprintf("  Current Run: $%.2f\n", rc.TotalCost))
+	// Determine if we have token data (API key) or just iteration data (Max subscription)
+	hasTokenData := rc.TotalInputTokens > 0 || rc.TotalOutputTokens > 0
+
+	// Compute aggregate metrics
+	totalIters := 0
+	totalTurns := 0
+	totalDurationMS := 0
+	for _, sc := range rc.Stories {
+		totalIters += len(sc.Iterations)
+		for _, ic := range sc.Iterations {
+			totalTurns += ic.TokenUsage.NumTurns
+			totalDurationMS += ic.TokenUsage.DurationMS
+		}
+	}
+
+	// Summary header
+	if hasTokenData {
+		sb.WriteString(fmt.Sprintf("  Current Run: $%.2f\n", rc.TotalCost))
+	}
+	sb.WriteString(fmt.Sprintf("  Iterations: %d | Turns: %d", totalIters, totalTurns))
+	if totalDurationMS > 0 {
+		sb.WriteString(fmt.Sprintf(" | API time: %s", formatDurationMS(totalDurationMS)))
+	}
+	sb.WriteString("\n")
 	sb.WriteString("  " + strings.Repeat("─", 40) + "\n")
 
-	// Per-story breakdown, ordered by story display order
+	// Per-story breakdown
 	for _, sdi := range stories {
 		sc, ok := rc.Stories[sdi.ID]
 
@@ -344,58 +366,61 @@ func renderCostsContent(rc *costs.RunCosting, stories []StoryDisplayInfo) string
 		}
 
 		if !ok {
-			// No cost data for this story
 			sb.WriteString(fmt.Sprintf("  %s (%s)%s—\n", sdi.ID, status, strings.Repeat(" ", max(1, 20-len(sdi.ID)-len(status)))))
 			continue
 		}
 
 		iterCount := len(sc.Iterations)
-		iterLabel := "iteration"
+		iterLabel := "iter"
 		if iterCount != 1 {
-			iterLabel = "iterations"
+			iterLabel = "iters"
 		}
-		sb.WriteString(fmt.Sprintf("  %s (%s)%s$%.2f  (%d %s)\n",
+		storyTurns := 0
+		for _, ic := range sc.Iterations {
+			storyTurns += ic.TokenUsage.NumTurns
+		}
+
+		detail := fmt.Sprintf("%d %s, %d turns", iterCount, iterLabel, storyTurns)
+		if hasTokenData {
+			detail = fmt.Sprintf("$%.2f  %s", sc.TotalCost, detail)
+		}
+
+		sb.WriteString(fmt.Sprintf("  %s (%s)%s%s\n",
 			sdi.ID, status,
 			strings.Repeat(" ", max(1, 20-len(sdi.ID)-len(status))),
-			sc.TotalCost, iterCount, iterLabel))
+			detail))
 
-		// Judge sub-items for running stories
 		if len(sc.JudgeCosts) > 0 {
-			judgeTotalCost := 0.0
-			for _, jc := range sc.JudgeCosts {
-				judgeTotalCost += costs.CalculateCost(jc, costs.DefaultPricing)
-			}
-			sb.WriteString(fmt.Sprintf("    └─ Judge (%dx)%s$%.2f\n",
-				len(sc.JudgeCosts),
-				strings.Repeat(" ", max(1, 14-len(fmt.Sprintf("%d", len(sc.JudgeCosts))))),
-				judgeTotalCost))
+			sb.WriteString(fmt.Sprintf("    └─ Judge (%dx)\n", len(sc.JudgeCosts)))
 		}
 	}
 
-	// Section totals
-	sb.WriteString("  " + strings.Repeat("─", 40) + "\n")
+	// Token counts (only shown for API key users)
+	if hasTokenData {
+		sb.WriteString("  " + strings.Repeat("─", 40) + "\n")
+		sb.WriteString(fmt.Sprintf("  Tokens: %s in / %s out\n",
+			formatTokens(rc.TotalInputTokens),
+			formatTokens(rc.TotalOutputTokens)))
 
-	qualityCost := costs.CalculateCost(rc.QualityCost, costs.DefaultPricing)
-	dagCost := costs.CalculateCost(rc.DAGCost, costs.DefaultPricing)
-
-	if qualityCost > 0 {
-		sb.WriteString(fmt.Sprintf("  Quality review        $%.2f\n", qualityCost))
+		cacheRate := rc.CacheHitRateUnlocked()
+		sb.WriteString(fmt.Sprintf("  Cache hit rate: %.0f%%\n", cacheRate*100))
 	}
-	if dagCost > 0 {
-		sb.WriteString(fmt.Sprintf("  DAG analysis          $%.2f\n", dagCost))
-	}
-
-	// Token counts
-	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("  Tokens: %s in / %s out\n",
-		formatTokens(rc.TotalInputTokens),
-		formatTokens(rc.TotalOutputTokens)))
-
-	// Cache hit rate
-	cacheRate := rc.CacheHitRateUnlocked()
-	sb.WriteString(fmt.Sprintf("  Cache hit rate: %.0f%%\n", cacheRate*100))
 
 	return sb.String()
+}
+
+// formatDurationMS formats milliseconds into a human-readable duration.
+func formatDurationMS(ms int) string {
+	switch {
+	case ms >= 3_600_000:
+		return fmt.Sprintf("%.1fh", float64(ms)/3_600_000)
+	case ms >= 60_000:
+		return fmt.Sprintf("%.1fm", float64(ms)/60_000)
+	case ms >= 1_000:
+		return fmt.Sprintf("%.1fs", float64(ms)/1_000)
+	default:
+		return fmt.Sprintf("%dms", ms)
+	}
 }
 
 // autoSelectContextMode picks the best tab based on the current phase.

@@ -1104,6 +1104,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		willRetry := m.coord.HandleUpdate(u)
 		m.updateStatusPage()
 
+		// Track usage data from parallel workers
+		if u.TokenUsage != nil && m.runCosting != nil {
+			m.runCosting.AddIteration(u.StoryID, *u.TokenUsage, 0)
+			m.costsContent = renderCostsContent(m.runCosting, m.storyDisplayInfos)
+		}
+
 		// Usage limit — pause everything and wait for user
 		if u.UsageLimit {
 			m.pausedDuring = phaseParallel

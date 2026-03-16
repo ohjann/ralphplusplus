@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/eoghanhynes/ralph/internal/config"
+	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/judge"
 	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
@@ -72,19 +73,23 @@ type WorkerUpdate struct {
 	Retryable   bool   // true for transient errors (network, timeouts)
 	UsageLimit  bool   // true when Claude hit usage/rate limit
 	JudgeResult *judge.Result
+	TokenUsage  *costs.TokenUsage // token/turn usage from Claude run
 }
 
 // Run executes the full worker lifecycle in the workspace.
 func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
+	var claudeUsage *costs.TokenUsage // captured from RunClaude, forwarded in updates
+
 	send := func(state WorkerState, err error, passed bool, changeID string) {
 		w.State = state
 		updateCh <- WorkerUpdate{
-			WorkerID: w.ID,
-			StoryID:  w.StoryID,
-			State:    state,
-			Err:      err,
-			Passed:   passed,
-			ChangeID: changeID,
+			WorkerID:   w.ID,
+			StoryID:    w.StoryID,
+			State:      state,
+			Err:        err,
+			Passed:     passed,
+			ChangeID:   changeID,
+			TokenUsage: claudeUsage,
 		}
 	}
 
@@ -156,10 +161,11 @@ Do NOT check if all stories are complete. Do NOT emit the COMPLETE signal.
 Just implement your story, commit, update progress.md, and stop.`, w.StoryID)
 
 	logPath := runner.LogFilePath(wsLogDir, w.Iteration)
-	_, err = runner.RunClaude(w.Ctx, ws.Dir, prompt, logPath, runner.RunClaudeOpts{
+	usage, err := runner.RunClaude(w.Ctx, ws.Dir, prompt, logPath, runner.RunClaudeOpts{
 		Iteration: w.Iteration,
 		StoryID:   w.StoryID,
 	})
+	claudeUsage = usage // make available to send() helper
 	if err != nil {
 		if w.Ctx.Err() != nil {
 			send(WorkerFailed, w.Ctx.Err(), false, "")
@@ -175,6 +181,7 @@ Just implement your story, commit, update progress.md, and stop.`, w.StoryID)
 				State:      WorkerFailed,
 				Err:        err,
 				UsageLimit: true,
+				TokenUsage: claudeUsage,
 			}
 			return
 		}
@@ -224,6 +231,7 @@ Just implement your story, commit, update progress.md, and stop.`, w.StoryID)
 			Passed:      passed,
 			ChangeID:    changeID,
 			JudgeResult: &result,
+			TokenUsage:  claudeUsage,
 		}
 		return
 	}

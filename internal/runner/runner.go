@@ -392,6 +392,8 @@ type streamProcessor struct {
 	outputTokens int
 	cacheRead    int
 	cacheWrite   int
+	numTurns     int
+	durationMS   int
 }
 
 // tokenUsage returns the accumulated token usage as a costs.TokenUsage.
@@ -403,6 +405,8 @@ func (sp *streamProcessor) tokenUsage() costs.TokenUsage {
 		CacheWrite:   sp.cacheWrite,
 		Model:        sp.model,
 		Provider:     "claude",
+		NumTurns:     sp.numTurns,
+		DurationMS:   sp.durationMS,
 	}
 }
 
@@ -428,11 +432,50 @@ func (sp *streamProcessor) processLine(line string) {
 		return
 	}
 
-	// The stream-json format wraps API events in a "stream_event" envelope:
-	//   {"type":"stream_event","event":{"type":"content_block_delta",...}}
-	// Unwrap the inner event if present; also handle bare events for compatibility.
-	event := raw
+	// Claude Code CLI emits several top-level event types:
+	//   "stream_event" — wraps raw API events (message_start, content_block_delta, etc.)
+	//   "system" — init, hooks
+	//   "assistant" — complete assistant message with usage
+	//   "result" — final result with aggregated usage, num_turns, duration
 	topType, _ := raw["type"].(string)
+
+	// Handle top-level Claude Code CLI events that carry usage/metadata
+	switch topType {
+	case "result":
+		if usage, ok := raw["usage"].(map[string]interface{}); ok {
+			sp.parseUsage(usage)
+		}
+		if numTurns, ok := raw["num_turns"].(float64); ok {
+			sp.numTurns = int(numTurns)
+		}
+		if durMS, ok := raw["duration_ms"].(float64); ok {
+			sp.durationMS = int(durMS)
+		}
+		if model, ok := raw["model"].(string); ok && sp.model == "" {
+			sp.model = model
+		}
+		return
+
+	case "assistant":
+		if msg, ok := raw["message"].(map[string]interface{}); ok {
+			if model, ok := msg["model"].(string); ok && model != "<synthetic>" && sp.model == "" {
+				sp.model = model
+			}
+			if usage, ok := msg["usage"].(map[string]interface{}); ok {
+				sp.parseUsage(usage)
+			}
+		}
+		return
+
+	case "system":
+		if model, ok := raw["model"].(string); ok && sp.model == "" {
+			sp.model = model
+		}
+		return
+	}
+
+	// Unwrap stream_event envelope for raw API events
+	event := raw
 	if topType == "stream_event" {
 		inner, ok := raw["event"].(map[string]interface{})
 		if !ok {

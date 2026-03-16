@@ -12,7 +12,9 @@ type TokenUsage struct {
 	CacheRead    int    `json:"cache_read"`
 	CacheWrite   int    `json:"cache_write"`
 	Model        string `json:"model"`
-	Provider     string `json:"provider"` // "claude" or "gemini"
+	Provider     string `json:"provider"`           // "claude" or "gemini"
+	NumTurns     int    `json:"num_turns,omitempty"` // conversation turns (from Claude Code CLI)
+	DurationMS   int    `json:"duration_ms,omitempty"`
 }
 
 // ModelPricing holds per-million-token prices for a model.

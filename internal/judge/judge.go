@@ -88,9 +88,9 @@ func RunJudge(ctx context.Context, ralphHome, projectDir, prdFile, storyID strin
 	}
 
 	// Parse verdict
-	verdict := parseVerdict(output)
-	if verdict == nil {
-		return Result{Passed: true, Warning: "could not parse judge verdict JSON", TokenUsage: tokenUsage}
+	verdict, parseErr := parseVerdict(output)
+	if parseErr != nil {
+		return Result{Passed: true, Warning: parseErr.Error(), TokenUsage: tokenUsage}
 	}
 
 	if verdict.Verdict == "PASS" {
@@ -194,7 +194,36 @@ func getDiffs(ctx context.Context, preRevs []DirRev) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func parseVerdict(output string) *Verdict {
+// parseVerdictError describes why verdict parsing failed.
+type parseVerdictError struct {
+	Reason    string // "no JSON found", "unmarshal failed", etc.
+	RawOutput string // truncated raw output for debugging
+	JSONStr   string // extracted JSON string (if any)
+	Err       error  // underlying error (if any)
+}
+
+func (e *parseVerdictError) Error() string {
+	msg := fmt.Sprintf("could not parse judge verdict JSON: %s", e.Reason)
+	if e.Err != nil {
+		msg += fmt.Sprintf(" (%v)", e.Err)
+	}
+	if e.JSONStr != "" {
+		excerpt := e.JSONStr
+		if len(excerpt) > 200 {
+			excerpt = excerpt[:200] + "..."
+		}
+		msg += fmt.Sprintf("\n  extracted JSON: %s", excerpt)
+	} else if e.RawOutput != "" {
+		excerpt := e.RawOutput
+		if len(excerpt) > 200 {
+			excerpt = excerpt[:200] + "..."
+		}
+		msg += fmt.Sprintf("\n  raw output: %s", excerpt)
+	}
+	return msg
+}
+
+func parseVerdict(output string) (*Verdict, error) {
 	// Strip markdown fences
 	output = strings.TrimSpace(output)
 	output = strings.TrimPrefix(output, "```json")
@@ -202,19 +231,23 @@ func parseVerdict(output string) *Verdict {
 	output = strings.TrimSuffix(output, "```")
 	output = strings.TrimSpace(output)
 
+	if output == "" {
+		return nil, &parseVerdictError{Reason: "empty output after stripping markdown fences"}
+	}
+
 	// Try to extract JSON block
 	start := strings.Index(output, "{")
 	end := strings.LastIndex(output, "}")
 	if start < 0 || end < 0 || end <= start {
-		return nil
+		return nil, &parseVerdictError{Reason: "no JSON object found in output", RawOutput: output}
 	}
 	jsonStr := output[start : end+1]
 
 	var v Verdict
 	if err := json.Unmarshal([]byte(jsonStr), &v); err != nil {
-		return nil
+		return nil, &parseVerdictError{Reason: "unmarshal failed", JSONStr: jsonStr, Err: err}
 	}
-	return &v
+	return &v, nil
 }
 
 // FormatResult returns a human-readable summary of a judge result.

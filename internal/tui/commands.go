@@ -532,7 +532,8 @@ func memoryStatsCmd(ctx context.Context, client *memory.ChromaClient, disabled b
 		b.WriteString(fmt.Sprintf("\n  Total documents: %d\n", totalDocs))
 
 		if !o.hasEmbedder {
-			b.WriteString("\n  ⚠ Embedder not available — no new documents will be stored\n")
+			b.WriteString("\n  ⚠ Embedder not available — no documents will be stored or retrieved\n")
+			b.WriteString("    Set VOYAGE_API_KEY or ANTHROPIC_API_KEY to enable semantic memory\n")
 		}
 
 		return memoryStatsMsg{Content: b.String()}

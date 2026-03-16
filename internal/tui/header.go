@@ -43,7 +43,18 @@ func renderHeader(m *Model, width int) string {
 	elapsed := time.Since(m.startTime).Truncate(time.Second)
 	elapsedBlock := fmt.Sprintf("⏱ %s", formatDuration(elapsed))
 
-	costBlock := styleCost.Render(fmt.Sprintf("$%.2f", m.runCosting.TotalCost))
+	// Show cost if available (API key), otherwise show iteration count
+	var costBlock string
+	if m.runCosting.TotalInputTokens > 0 || m.runCosting.TotalOutputTokens > 0 {
+		costBlock = styleCost.Render(fmt.Sprintf("$%.2f", m.runCosting.TotalCost))
+	} else {
+		totalIters := len(m.runCosting.Stories)
+		if totalIters > 0 {
+			costBlock = styleCost.Render(fmt.Sprintf("%d stories tracked", totalIters))
+		} else {
+			costBlock = styleCost.Render("—")
+		}
+	}
 
 	var badges []string
 	if m.cfg.JudgeEnabled {
