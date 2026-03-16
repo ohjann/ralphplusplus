@@ -13,13 +13,14 @@ import (
 
 // StoryDisplayInfo holds everything needed to render a story row.
 type StoryDisplayInfo struct {
-	ID        string
-	Title     string
-	Passed    bool
-	Running   bool
-	Failed    bool
-	WorkerID  worker.WorkerID
-	StartTime time.Time
+	ID             string
+	Title          string
+	Passed         bool
+	Running        bool
+	Failed         bool
+	WorkerID       worker.WorkerID
+	StartTime      time.Time
+	IterationCount int
 }
 
 func newStoriesViewport(width, height int) viewport.Model {
@@ -110,6 +111,11 @@ func renderStoryList(stories []StoryDisplayInfo, width int, animFrame int) strin
 			titleStyle(truncate(s.Title, width-len(s.ID)-15)),
 		)
 
+		// Iteration count for running stories
+		if s.Running && s.IterationCount > 0 {
+			line += " " + styleMuted.Render(fmt.Sprintf("(iter %d)", s.IterationCount))
+		}
+
 		// Worker badge for parallel mode
 		if s.Running && s.WorkerID > 0 {
 			badge := styleWorkerBadge.Render(fmt.Sprintf("W%d", s.WorkerID))
@@ -169,16 +175,19 @@ func truncate(s string, maxLen int) string {
 }
 
 // BuildStoryDisplayInfos creates display info from the model state.
+// sequentialIteration is the current iteration count for sequential (non-parallel) mode.
 func BuildStoryDisplayInfos(stories []prd.UserStory, currentStoryID string, coord interface {
 	Workers() map[worker.WorkerID]*worker.Worker
-}, phase phase) []StoryDisplayInfo {
+}, phase phase, sequentialIteration int) []StoryDisplayInfo {
 	// Build worker assignments map
 	workerAssignments := make(map[string]worker.WorkerID)
+	workerIterations := make(map[string]int)
 	workerStartTimes := make(map[string]time.Time)
 	if coord != nil {
 		for wID, w := range coord.Workers() {
 			if w.State == worker.WorkerRunning || w.State == worker.WorkerSetup || w.State == worker.WorkerJudging {
 				workerAssignments[w.StoryID] = wID
+				workerIterations[w.StoryID] = w.Iteration
 			}
 		}
 	}
@@ -196,8 +205,10 @@ func BuildStoryDisplayInfos(stories []prd.UserStory, currentStoryID string, coor
 		if wID, ok := workerAssignments[s.ID]; ok {
 			info.Running = true
 			info.WorkerID = wID
+			info.IterationCount = workerIterations[s.ID]
 		} else if s.ID == currentStoryID && (phase == phaseClaudeRun || phase == phaseJudgeRun) {
 			info.Running = true
+			info.IterationCount = sequentialIteration
 		}
 
 		infos = append(infos, info)

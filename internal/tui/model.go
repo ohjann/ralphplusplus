@@ -617,7 +617,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.coord != nil {
 				coordIface = m.coord
 			}
-			m.storyDisplayInfos = BuildStoryDisplayInfos(p.UserStories, m.currentStoryID, coordIface, m.phase)
+			m.storyDisplayInfos = BuildStoryDisplayInfos(p.UserStories, m.currentStoryID, coordIface, m.phase, m.iteration)
 		}
 
 		// Auto-select context mode based on phase (skip if user manually switched)
