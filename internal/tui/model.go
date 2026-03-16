@@ -136,6 +136,10 @@ type Model struct {
 	memoryRetrieval  *MemoryRetrievalMsg // last retrieval results for display
 	confirmTracker   *memory.ConfirmationTracker
 
+	// Stuck alert (shown as status bar)
+	stuckAlert    *runner.StuckInfo
+	stuckAlertAt  time.Time
+
 	// Push notifications
 	notifier *notify.Notifier
 
@@ -352,7 +356,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 		// Recompute viewport dimensions so SetContent wraps at the correct width
-		available := m.height - 4 // header(3) + footer(1)
+		chrome := 4 // header(3) + footer(1)
+		if m.stuckAlert != nil {
+			chrome++ // status bar
+		}
+		available := m.height - chrome
 		if available < 10 {
 			available = 10
 		}
@@ -699,6 +707,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.chromaClient != nil {
 			cmds = append(cmds, memoryStatsCmd(m.ctx, m.chromaClient, m.cfg.Memory.Disabled, withEmbedder(m.memoryEmbedder != nil)))
 		}
+		// Auto-dismiss stuck alert after 30s
+		if m.stuckAlert != nil && time.Since(m.stuckAlertAt) > 30*time.Second {
+			m.stuckAlert = nil
+		}
 
 	// --- Data updates ---
 	case progressContentMsg:
@@ -996,6 +1008,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case stuckDetectedMsg:
 		debuglog.Log("stuck detected: story=%s pattern=%s count=%d", msg.Info.StoryID, msg.Info.Pattern, msg.Info.Count)
+		info := msg.Info
+		m.stuckAlert = &info
+		m.stuckAlertAt = time.Now()
 		m.notifier.StoryStuck(m.ctx, msg.Info.StoryID, fmt.Sprintf("%s (%dx)", msg.Info.Pattern, msg.Info.Count))
 		m.updateStatusPage()
 		// Cancel Claude — it's stuck
@@ -1647,10 +1662,14 @@ func (m *Model) View() string {
 		return m.renderResumePrompt()
 	}
 
-	// Layout: header(3) + top panels + claude activity + footer(1)
+	// Layout: header(3) + top panels + claude activity + [status bar(1)] + footer(1)
 	headerHeight := 3
 	footerHeight := 1
-	available := m.height - headerHeight - footerHeight
+	statusBarHeight := 0
+	if m.stuckAlert != nil {
+		statusBarHeight = 1
+	}
+	available := m.height - headerHeight - footerHeight - statusBarHeight
 	if available < 10 {
 		available = 10
 	}
@@ -1749,12 +1768,13 @@ func (m *Model) View() string {
 
 	footer := renderFooter(m.width, m.confirmQuit, m.phase == phaseDone, m.phase == phaseIdle, m.phase == phaseParallel, m.phase == phaseReview, m.phase == phaseQualityPrompt, m.phase == phaseResumePrompt, m.phase == phasePaused)
 
-	output := lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		topRow,
-		claudePanel,
-		footer,
-	)
+	parts := []string{header, topRow, claudePanel}
+	if m.stuckAlert != nil {
+		parts = append(parts, renderStuckBar(m.stuckAlert, m.width))
+	}
+	parts = append(parts, footer)
+
+	output := lipgloss.JoinVertical(lipgloss.Left, parts...)
 
 	// Clamp to exactly terminal height to prevent scrolling/jitter
 	lines := strings.Split(output, "\n")
@@ -1829,6 +1849,25 @@ func clampLines(s string, n int) string {
 		lines = append(lines, "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderStuckBar(info *runner.StuckInfo, width int) string {
+	icon := " ⚠ STUCK "
+	detail := fmt.Sprintf(" %s — %s (%dx) ", info.StoryID, info.Pattern, info.Count)
+	if len(info.Commands) > 0 {
+		cmd := info.Commands[0]
+		if len(cmd) > 60 {
+			cmd = cmd[:57] + "..."
+		}
+		detail += "→ " + cmd + " "
+	}
+	content := styleStuckBar.Render(icon) + styleStuckBarDetail.Render(detail)
+	// Pad to full width with the danger background
+	contentWidth := lipgloss.Width(content)
+	if contentWidth < width {
+		content += styleStuckBarDetail.Render(strings.Repeat(" ", width-contentWidth))
+	}
+	return content
 }
 
 func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bool, review bool, qualityPrompt bool, resumePrompt bool, paused bool) string {

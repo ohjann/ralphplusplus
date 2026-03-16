@@ -161,4 +161,14 @@ var (
 	styleTagInactive = lipgloss.NewStyle().
 				Foreground(colorMuted).
 				Padding(0, 1)
+
+	// Status bar (stuck alert)
+	styleStuckBar = lipgloss.NewStyle().
+			Foreground(colorSurface0).
+			Background(colorDanger).
+			Bold(true)
+
+	styleStuckBarDetail = lipgloss.NewStyle().
+				Foreground(colorSurface0).
+				Background(colorDanger)
 )
