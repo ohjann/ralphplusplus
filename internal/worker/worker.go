@@ -218,7 +218,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	}
 
 	// 2. Architect phase: run architect agent if applicable
-	if shouldRunArchitect(w.StoryID, w.Iteration, ws.Dir, wsPRD) {
+	if !cfg.NoArchitect && shouldRunArchitect(w.StoryID, w.Iteration, ws.Dir, wsPRD) {
 		send(WorkerRunning, roles.RoleArchitect, nil, false, "")
 
 		archOpts := makeBuildOpts(memoryOpts, roles.RoleArchitect)

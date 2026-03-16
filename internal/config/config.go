@@ -48,6 +48,7 @@ type Config struct {
 	EnableMonitoring   bool   // --enable-monitoring: activate ntfy + status page from .env
 	HistoryCommand     bool   // true when "history" subcommand is used
 	HistoryAll         bool   // --all flag for history subcommand
+	NoArchitect        bool   // --no-architect: globally skip architect phase for all stories
 
 	// Derived paths
 	PRDFile        string
@@ -292,6 +293,9 @@ func Parse(args []string) (*Config, error) {
 			i += 2
 		case "--enable-monitoring":
 			cfg.EnableMonitoring = true
+			i++
+		case "--no-architect":
+			cfg.NoArchitect = true
 			i++
 		default:
 			// Check for --key=value forms
@@ -600,6 +604,7 @@ Options:
   --notify <topic>               Send push notifications via ntfy.sh to given topic
   --ntfy-server <url>            Self-hosted ntfy server URL (default: https://ntfy.sh)
   --enable-monitoring            Enable ntfy + status page using .ralph/.env config
+  --no-architect                  Skip architect phase for all stories (go straight to implementer)
   --help, -h                      Show this help message
 
 Examples:

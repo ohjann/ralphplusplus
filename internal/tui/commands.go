@@ -252,7 +252,7 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 		story := p.FindStory(storyID)
 
 		// Determine if we need the architect phase
-		runArchitect := needsArchitect(cfg.ProjectDir, storyID, story)
+		runArchitect := !cfg.NoArchitect && needsArchitect(cfg.ProjectDir, storyID, story)
 
 		var totalUsage *costs.TokenUsage
 
