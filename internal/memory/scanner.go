@@ -8,7 +8,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"log"
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +39,7 @@ func ScanCodebase(ctx context.Context, projectDir string, client *ChromaClient, 
 	if err != nil {
 		return fmt.Errorf("collect files: %w", err)
 	}
-	log.Printf("[memory/scanner] found %d files to consider in %s", len(files), projectDir)
+	debuglog.Log("[memory/scanner] found %d files to consider in %s", len(files), projectDir)
 
 	// Get existing documents to check mod times for incremental scanning.
 	existing := make(map[string]float64) // file_path -> stored mod time (unix)
@@ -65,7 +65,7 @@ func ScanCodebase(ctx context.Context, projectDir string, client *ChromaClient, 
 		}
 		toEmbed = append(toEmbed, f)
 	}
-	log.Printf("[memory/scanner] files to embed: %d, skipped (unchanged): %d", len(toEmbed), skipped)
+	debuglog.Log("[memory/scanner] files to embed: %d, skipped (unchanged): %d", len(toEmbed), skipped)
 
 	if len(toEmbed) == 0 {
 		return nil
@@ -116,7 +116,7 @@ func ScanCodebase(ctx context.Context, projectDir string, client *ChromaClient, 
 		embedded += len(batch)
 	}
 
-	log.Printf("[memory/scanner] embedded %d files into %s", embedded, CollectionCodebase.Name)
+	debuglog.Log("[memory/scanner] embedded %d files into %s", embedded, CollectionCodebase.Name)
 	return nil
 }
 

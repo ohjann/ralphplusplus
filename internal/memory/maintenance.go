@@ -3,9 +3,10 @@ package memory
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
+
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 )
 
 // ConfirmationTracker tracks which document IDs were retrieved and led to
@@ -60,10 +61,10 @@ func RunDecayCycle(ctx context.Context, client *ChromaClient, tracker *Confirmat
 	for _, col := range collections {
 		summary, err := decayCollection(ctx, client, tracker, col.Name)
 		if err != nil {
-			log.Printf("[memory/maintenance] error processing collection %s: %v", col.Name, err)
+			debuglog.Log("[memory/maintenance] error processing collection %s: %v", col.Name, err)
 			continue
 		}
-		log.Printf("[memory/maintenance] %s: confirmed=%d decayed=%d evicted=%d",
+		debuglog.Log("[memory/maintenance] %s: confirmed=%d decayed=%d evicted=%d",
 			col.Name, summary.Confirmed, summary.Decayed, summary.Evicted)
 		total.Confirmed += summary.Confirmed
 		total.Decayed += summary.Decayed

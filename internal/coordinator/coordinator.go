@@ -3,7 +3,7 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -62,7 +62,7 @@ func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory
 	// Compute PRD hash at initialization for reuse across checkpoint writes
 	prdHash, err := checkpoint.ComputePRDHash(cfg.PRDFile)
 	if err != nil {
-		log.Printf("warning: could not compute PRD hash: %v", err)
+		debuglog.Log("warning: could not compute PRD hash: %v", err)
 	}
 
 	return &Coordinator{
@@ -299,7 +299,7 @@ func (c *Coordinator) writeCheckpointLocked() {
 	}
 
 	if err := checkpoint.Save(c.cfg.ProjectDir, cp); err != nil {
-		log.Printf("warning: failed to write checkpoint: %v", err)
+		debuglog.Log("warning: failed to write checkpoint: %v", err)
 	}
 }
 

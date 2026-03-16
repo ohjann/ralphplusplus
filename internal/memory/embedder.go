@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"net/http"
 	"os"
 	"sync"
@@ -171,7 +171,7 @@ func (e *AnthropicEmbedder) callAPI(ctx context.Context, texts []string) ([][]fl
 			// Log dimensions on first successful call.
 			if len(embeddings) > 0 && len(embeddings[0]) > 0 {
 				e.logOnce.Do(func() {
-					log.Printf("voyage embedding dimensions: %d", len(embeddings[0]))
+					debuglog.Log("voyage embedding dimensions: %d", len(embeddings[0]))
 				})
 			}
 

@@ -3,7 +3,7 @@ package notify
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -48,7 +48,7 @@ func (n *Notifier) Notify(ctx context.Context, title string, message string, pri
 			url := fmt.Sprintf("%s/%s", n.serverURL, n.topic)
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(message))
 			if err != nil {
-				log.Printf("notify: failed to create request: %v", err)
+				debuglog.Log("notify: failed to create request: %v", err)
 				return
 			}
 			req.Header.Set("Title", title)
@@ -57,12 +57,12 @@ func (n *Notifier) Notify(ctx context.Context, title string, message string, pri
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				log.Printf("notify: failed to send notification: %v", err)
+				debuglog.Log("notify: failed to send notification: %v", err)
 				return
 			}
 			resp.Body.Close()
 			if resp.StatusCode >= 400 {
-				log.Printf("notify: server returned %d for %q", resp.StatusCode, title)
+				debuglog.Log("notify: server returned %d for %q", resp.StatusCode, title)
 			}
 		}()
 	}

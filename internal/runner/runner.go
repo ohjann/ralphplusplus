@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,7 +82,7 @@ If progress.md contains a [CONTEXT EXHAUSTED] entry for %s, continue from where 
 			opts[0].MemoryOpts,
 		)
 		if err != nil {
-			log.Printf("warning: semantic memory retrieval failed: %v", err)
+			debuglog.Log("warning: semantic memory retrieval failed: %v", err)
 		} else {
 			retrieval = memCtx
 			if memCtx.Text != "" {
@@ -496,7 +496,7 @@ func (sp *streamProcessor) processLine(line string) {
 			if usage, ok := msg["usage"].(map[string]interface{}); ok {
 				sp.parseUsage(usage)
 			} else {
-				log.Printf("warning: message_start event missing usage field")
+				debuglog.Log("warning: message_start event missing usage field")
 			}
 		}
 
@@ -505,7 +505,7 @@ func (sp *streamProcessor) processLine(line string) {
 		if usage, ok := event["usage"].(map[string]interface{}); ok {
 			sp.parseUsage(usage)
 		} else {
-			log.Printf("warning: message_delta event missing usage field")
+			debuglog.Log("warning: message_delta event missing usage field")
 		}
 
 	case "content_block_start":

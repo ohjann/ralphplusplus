@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"net/http"
 	"sort"
 	"strings"
@@ -38,7 +38,7 @@ func DeduplicateInsert(ctx context.Context, client *ChromaClient, collection str
 	if len(results) > 0 && results[0].Distance < 0.1 {
 		existing := results[0].Document
 		merged := mergeDocuments(existing, doc)
-		log.Printf("[memory/hygiene] dedup merge: existing=%s new=%s collection=%s", existing.ID, doc.ID, collection)
+		debuglog.Log("[memory/hygiene] dedup merge: existing=%s new=%s collection=%s", existing.ID, doc.ID, collection)
 		return client.UpdateDocument(ctx, collection, merged)
 	}
 
@@ -98,7 +98,7 @@ func EnforceCollectionCap(ctx context.Context, client *ChromaClient, collection 
 		}
 	}
 
-	log.Printf("[memory/hygiene] cap enforcement: evicted %d documents from %s (cap=%d)", toDelete, collection, maxDocs)
+	debuglog.Log("[memory/hygiene] cap enforcement: evicted %d documents from %s (cap=%d)", toDelete, collection, maxDocs)
 	return nil
 }
 
