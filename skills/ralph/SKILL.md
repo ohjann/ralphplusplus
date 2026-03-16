@@ -64,24 +64,29 @@ Before writing, confirm the project root by checking for markers like `package.j
 
 ---
 
-## Story Size: The Number One Rule
+## Story Size: Coherent, Self-Contained Changes
 
-**Each story must be completable in ONE Ralph iteration (one context window).**
+**Each story should represent one coherent, logically related change.**
 
-Ralph spawns a fresh Claude Code instance per iteration with no memory of previous work. If a story is too big, the LLM runs out of context before finishing and produces broken code.
+A well-sized story touches all the files needed to deliver a single concern end-to-end. Stories can span 5–15 files if the changes are all facets of the same logical change — what matters is that the change is self-contained and independently verifiable.
 
 ### Right-sized stories:
-- Add a database column and migration
-- Add a UI component to an existing page
-- Update a server action with new logic
-- Add a filter dropdown to a list
+- Add a database column, update the server action that uses it, and adjust the UI that displays it (one feature, multiple layers)
+- Refactor all API endpoints to use a new middleware pattern (one concern across many files)
+- Add a UI component to an existing page with its supporting queries
+- Update a server action with new logic and its tests
 
-### Too big (split these):
-- "Build the entire dashboard" - Split into: schema, queries, UI components, filters
-- "Add authentication" - Split into: schema, middleware, login UI, session handling
-- "Refactor the API" - Split into one story per endpoint or pattern
+### Too big — split by concern:
+- "Build the entire dashboard" — Split by concern: schema/migrations, data queries, UI components, filtering logic
+- "Add authentication" — Split by concern: schema, middleware, login UI, session handling
+- "Refactor the API" — Split if it mixes unrelated concerns (e.g., error handling + pagination + auth)
 
-**Rule of thumb:** If you cannot describe the change in 2-3 sentences, it is too big.
+### Rule of thumb:
+If a story's acceptance criteria require **unrelated types of work**, split it. If all criteria are **facets of the same change**, keep them together.
+
+**Split** a story when it mixes concerns like schema changes AND unrelated UI work AND unrelated middleware — these are independent changes that should be verified separately.
+
+**Keep together** a story that adds a new field to the schema, updates the query, and shows it in the UI — these are tightly coupled parts of one feature.
 
 ---
 
@@ -282,7 +287,7 @@ Before writing prd.json, verify:
 
 - [ ] **Output path is project root** (not `.claude/`, not `skills/`, not any subdirectory)
 - [ ] **Previous run archived** (if prd.json exists with different branchName, archive it first)
-- [ ] Each story is completable in one iteration (small enough)
+- [ ] Each story is a coherent, self-contained change (one concern end-to-end)
 - [ ] Stories are ordered by dependency (schema to backend to UI)
 - [ ] Every story has "Typecheck passes" as criterion
 - [ ] UI stories have "Verify in browser using rodney" as criterion
