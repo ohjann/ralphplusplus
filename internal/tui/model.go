@@ -146,10 +146,8 @@ type Model struct {
 func NewModel(cfg *config.Config, version string) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	var n *notify.Notifier
-	if cfg.NotifyTopic != "" {
-		n = notify.NewNotifier(cfg.NotifyTopic, cfg.NtfyServer)
-	}
+	// Always create notifier for terminal notifications; ntfy push only fires if topic is set
+	n := notify.NewNotifier(cfg.NotifyTopic, cfg.NtfyServer)
 
 	// Start status page server if --status-port is configured
 	var ss *statuspage.StatusServer
