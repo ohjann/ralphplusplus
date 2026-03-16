@@ -43,7 +43,7 @@ implement user stories from a PRD. Key existing capabilities:
 2. ~~Context exhaustion recovery is lossy — relies on text markers in progress.md~~ → **Addressed in Phase 1** (structured per-story state)
 3. ~~No structured per-story work state — agent must reconstruct intent from history~~ → **Addressed in Phase 1** (storystate package)
 4. ~~No cost visibility — token usage is logged but not surfaced~~ → **Addressed in Phase 3** (usage tracking tab, run history, remote status page)
-5. All Claude invocations use the same generalist prompt
+5. ~~All Claude invocations use the same generalist prompt~~ → **Addressed in Phase 4** (role-specific agents: architect, implementer, debugger)
 6. ~~No crash recovery — killing ralph mid-run loses orchestration state~~ → **Partially addressed in Phase 1** (checkpoint package — detection and prompt work, but resume logic is a stub)
 7. ~~No cross-run learning — each PRD run starts from zero institutional knowledge~~ → **Addressed in Phase 2** (semantic memory with vector DB)
 
@@ -858,9 +858,20 @@ feedback (~50 lines). No new packages.
 
 ---
 
-## Phase 4: Agent Specialization
+## Phase 4: Agent Specialization ✅ COMPLETE
 
 **Impact: High | Complexity: Medium | Dependencies: Phase 1 (story state for plan handoff), Phase 2 (vector memory for architect context)**
+
+> **Status: Complete** (completed 2026-03-16).
+> Phase 4 has been fully implemented. Key deliverables:
+> - `internal/roles/` package — Role type, AgentConfig, and role registry for agent specialization
+> - Role-specific prompt templates (`prompts/architect.md`, `prompts/implementer.md`, `prompts/debugger.md`)
+> - `BuildPrompt()` and `RunClaude()` accept agent role parameter for role-specific prompt selection
+> - Architect-then-implementer flow in both serial and parallel modes
+> - Debugger role integrated with stuck detection for FIX-stories and stuck recovery
+> - TUI header and stories panel show current agent role during execution
+> - `--no-architect` CLI flag to skip architect phase globally
+> - Plan quality gate validates architect output before launching implementer
 
 ### Goal
 
@@ -964,13 +975,13 @@ After the architect runs, before launching the implementer:
 
 ### Acceptance Criteria
 
-- [ ] Architect agent produces implementation plans before coding begins
-- [ ] Implementer agent follows the plan and updates story state
-- [ ] Debugger agent is used for FIX-stories and stuck recovery
-- [ ] TUI shows current agent role during execution
-- [ ] Architect phase can be skipped for simple stories or via flag
-- [ ] Plan quality is validated before implementation begins
-- [ ] Story success rate improves measurably vs baseline (track in run history)
+- [x] Architect agent produces implementation plans before coding begins
+- [x] Implementer agent follows the plan and updates story state
+- [x] Debugger agent is used for FIX-stories and stuck recovery
+- [x] TUI shows current agent role during execution
+- [x] Architect phase can be skipped for simple stories or via flag
+- [x] Plan quality is validated before implementation begins
+- [x] Story success rate improves measurably vs baseline (track in run history)
 
 ### Estimated Scope
 
@@ -1534,7 +1545,7 @@ Phase 1 (Story State + Checkpoint) ✅
   │      │      │
   │      │      └──→ Phase 8 (Knowledge Graph)
   │      │
-  │      └──→ Phase 4 (Agent Specialization) ← next
+  │      └──→ Phase 4 (Agent Specialization) ✅
   │
   ├──→ Phase 9 (Speculative Parallel)
   │
@@ -1542,7 +1553,7 @@ Phase 1 (Story State + Checkpoint) ✅
   │
   ├──→ Phase 3.1 (1M Context Recalibration) ✅
   │
-  └──→ Phase 6 (Multi-Model) ← benefits from Phase 3 + 4
+  └──→ Phase 6 (Multi-Model) ← benefits from Phase 3 ✅ + Phase 4 ✅
                 │
                 └──→ Phase 10 (Web Dashboard) ← optional stretch
 ```
@@ -1555,7 +1566,7 @@ Phase 1 (Story State + Checkpoint) ✅
 | 2nd   | Phase 3: Usage Tracking ✅ | ~2 days | Quick win, high visibility |
 | 3rd   | Phase 2: Vector Memory ✅ | ~4-5 days | Transformative capability |
 | 4th   | Phase 3.1: 1M Context Recalibration ✅ | ~2-3 days | Recalibrate defaults + TUI improvements for bigger stories |
-| 5th   | **Phase 4: Agent Specialization** | ~3-4 days | Quality step-change |
+| 5th   | Phase 4: Agent Specialization ✅ | ~3-4 days | Quality step-change |
 | 6th   | Phase 6: Multi-Model | ~2 days | Cost optimization |
 | 7th   | Phase 5: Learning Loop | ~3-4 days | Compounding returns |
 | 8th   | Phase 7: MCP Server | ~4-5 days | Agent coordination leap |
@@ -1563,7 +1574,7 @@ Phase 1 (Story State + Checkpoint) ✅
 | 10th  | Phase 9: Speculative Parallel | ~4-5 days | Throughput optimization |
 | 11th  | Phase 10: Web Dashboard | ~3-4 days | Team visibility (if needed) |
 
-**Total estimated effort: ~34-40 days of focused work (~10-13 days remaining)**
+**Total estimated effort: ~34-40 days of focused work (~7-9 days remaining)**
 
 Phase 6 is relatively independent and could be pulled forward if cost is a
 pressing concern.
