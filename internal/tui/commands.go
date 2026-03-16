@@ -291,13 +291,14 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 			debuglog.Log("runClaudeCmd: architect phase complete, plan validated (%d bytes)", len(planContent))
 		}
 
-		// --- Implementer phase ---
-		debuglog.Log("runClaudeCmd: running implementer phase for story=%s", storyID)
-
-		// Determine the role for the implementer run
+		// --- Implementer / Debugger phase ---
+		// If stuck info exists for this story, use the debugger role instead
 		implRole := roles.RoleImplementer
-		// FIX- stories skip architect and use implementer directly
-		// (role is still set for prompt selection)
+		if runner.HasStuckInfo(cfg.ProjectDir, storyID) {
+			implRole = roles.RoleDebugger
+			debuglog.Log("runClaudeCmd: stuck info found, using debugger role for story=%s", storyID)
+		}
+		debuglog.Log("runClaudeCmd: running %s phase for story=%s", implRole, storyID)
 
 		var implOpts []runner.BuildPromptOpts
 		if chromaClient != nil && embedder != nil && !cfg.Memory.Disabled {

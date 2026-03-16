@@ -225,8 +225,37 @@ func buildStoryStateContext(projectDir, storyID string) string {
 	return b.String()
 }
 
+// HasStuckInfo returns true if there are any stuck-*.json files for the given
+// story in the project's .ralph/ directory. This is used to decide whether to
+// dispatch the debugger role instead of the implementer on retry.
+func HasStuckInfo(projectDir, storyID string) bool {
+	ralphDir := filepath.Join(projectDir, ".ralph")
+	entries, err := os.ReadDir(ralphDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "stuck-") || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(ralphDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var info StuckInfo
+		if err := json.Unmarshal(data, &info); err != nil {
+			continue
+		}
+		if info.StoryID == "" || info.StoryID == storyID {
+			return true
+		}
+	}
+	return false
+}
+
 // buildDebuggerStuckContext finds the most recent stuck-*.json file for the
-// story and formats it as context for the debugger role.
+// story and formats it as context for the debugger role. It also includes
+// errors_encountered from the story's state.json for additional context.
 func buildDebuggerStuckContext(projectDir, storyID string) string {
 	ralphDir := filepath.Join(projectDir, ".ralph")
 	entries, err := os.ReadDir(ralphDir)
@@ -269,6 +298,19 @@ func buildDebuggerStuckContext(projectDir, storyID string) string {
 	if len(latest.Commands) > 0 {
 		b.WriteString(fmt.Sprintf("- **Repeated commands:** %s\n", strings.Join(latest.Commands, ", ")))
 	}
+
+	// Include errors_encountered from state.json for additional debugging context
+	ss, err := storystate.Load(projectDir, storyID)
+	if err == nil && len(ss.ErrorsEncountered) > 0 {
+		b.WriteString("\n## ERRORS ENCOUNTERED (from state.json)\n")
+		for _, e := range ss.ErrorsEncountered {
+			b.WriteString(fmt.Sprintf("- **Error:** %s\n", e.Error))
+			if e.Resolution != "" {
+				b.WriteString(fmt.Sprintf("  **Resolution:** %s\n", e.Resolution))
+			}
+		}
+	}
+
 	return b.String()
 }
 

@@ -308,3 +308,106 @@ func TestBuildPromptImplementerHasIterationConstraint(t *testing.T) {
 		t.Error("implementer role should have THIS ITERATION constraint")
 	}
 }
+
+func TestHasStuckInfo(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+
+	// No .ralph dir — should return false
+	if HasStuckInfo(dir, "TEST-001") {
+		t.Error("expected false when no .ralph dir")
+	}
+
+	// Create .ralph dir but no stuck files
+	_ = os.MkdirAll(ralphDir, 0o755)
+	if HasStuckInfo(dir, "TEST-001") {
+		t.Error("expected false when no stuck files")
+	}
+
+	// Create stuck file for different story
+	info := StuckInfo{Pattern: "test", StoryID: "OTHER-001", Iteration: 1, Count: 3}
+	data, _ := json.Marshal(info)
+	_ = os.WriteFile(filepath.Join(ralphDir, "stuck-1.json"), data, 0o644)
+	if HasStuckInfo(dir, "TEST-001") {
+		t.Error("expected false when stuck file is for different story")
+	}
+
+	// Create stuck file for matching story
+	info2 := StuckInfo{Pattern: "loop", StoryID: "TEST-001", Iteration: 2, Count: 5}
+	data2, _ := json.Marshal(info2)
+	_ = os.WriteFile(filepath.Join(ralphDir, "stuck-2.json"), data2, 0o644)
+	if !HasStuckInfo(dir, "TEST-001") {
+		t.Error("expected true when stuck file matches story")
+	}
+
+	// Stuck file with empty story ID should match any story
+	dir2 := t.TempDir()
+	ralphDir2 := filepath.Join(dir2, ".ralph")
+	_ = os.MkdirAll(ralphDir2, 0o755)
+	info3 := StuckInfo{Pattern: "generic", StoryID: "", Iteration: 1, Count: 2}
+	data3, _ := json.Marshal(info3)
+	_ = os.WriteFile(filepath.Join(ralphDir2, "stuck-1.json"), data3, 0o644)
+	if !HasStuckInfo(dir2, "ANY-STORY") {
+		t.Error("expected true when stuck file has empty story ID")
+	}
+}
+
+func TestBuildDebuggerStuckContextIncludesErrors(t *testing.T) {
+	dir := t.TempDir()
+	ralphHome := t.TempDir()
+
+	// Create debugger prompt
+	promptsDir := filepath.Join(ralphHome, "prompts")
+	_ = os.MkdirAll(promptsDir, 0o755)
+	_ = os.WriteFile(filepath.Join(promptsDir, "debugger.md"), []byte("debugger base"), 0o644)
+
+	// Create stuck info
+	ralphDir := filepath.Join(dir, ".ralph")
+	_ = os.MkdirAll(ralphDir, 0o755)
+	stuckInfo := StuckInfo{Pattern: "repeated_test", StoryID: "TEST-020", Iteration: 2, Count: 4, Commands: []string{"make test"}}
+	data, _ := json.Marshal(stuckInfo)
+	_ = os.WriteFile(filepath.Join(ralphDir, "stuck-2.json"), data, 0o644)
+
+	// Create state.json with errors_encountered
+	storyDir := filepath.Join(dir, ".ralph", "stories", "TEST-020")
+	_ = os.MkdirAll(storyDir, 0o755)
+	state := storystate.StoryState{
+		StoryID:        "TEST-020",
+		Status:         "in_progress",
+		IterationCount: 2,
+		ErrorsEncountered: []storystate.ErrorEntry{
+			{Error: "type mismatch on Foo", Resolution: "changed to Bar"},
+			{Error: "nil pointer in handler", Resolution: ""},
+		},
+		LastUpdated: time.Now(),
+	}
+	stateData, _ := json.Marshal(state)
+	_ = os.WriteFile(filepath.Join(storyDir, "state.json"), stateData, 0o644)
+
+	// Build prompt with debugger role
+	prompt, _, err := BuildPrompt(ralphHome, dir, "TEST-020", nil, BuildPromptOpts{
+		Role: roles.RoleDebugger,
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if !strings.Contains(prompt, "STUCK DETECTION INFO") {
+		t.Error("should contain stuck detection info section")
+	}
+	if !strings.Contains(prompt, "repeated_test") {
+		t.Error("should contain the stuck pattern")
+	}
+	if !strings.Contains(prompt, "ERRORS ENCOUNTERED") {
+		t.Error("should contain errors encountered section")
+	}
+	if !strings.Contains(prompt, "type mismatch on Foo") {
+		t.Error("should contain error details")
+	}
+	if !strings.Contains(prompt, "changed to Bar") {
+		t.Error("should contain error resolution")
+	}
+	if !strings.Contains(prompt, "nil pointer in handler") {
+		t.Error("should contain second error")
+	}
+}

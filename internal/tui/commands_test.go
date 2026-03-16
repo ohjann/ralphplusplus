@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/prd"
+	"github.com/eoghanhynes/ralph/internal/roles"
+	"github.com/eoghanhynes/ralph/internal/runner"
 )
 
 func TestNeedsArchitect(t *testing.T) {
@@ -127,5 +130,50 @@ func TestCombineTokenUsage(t *testing.T) {
 	}
 	if combineTokenUsage(nil, nil) != nil {
 		t.Error("combineTokenUsage(nil, nil) should return nil")
+	}
+}
+
+func TestDebuggerRoleSelectedWhenStuck(t *testing.T) {
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	_ = os.MkdirAll(ralphDir, 0o755)
+
+	// No stuck info — should use implementer
+	if runner.HasStuckInfo(dir, "P4-001") {
+		t.Error("expected no stuck info initially")
+	}
+
+	// Write stuck info for the story
+	info := runner.StuckInfo{
+		Pattern:   "repeated_bash_command",
+		Commands:  []string{"make test"},
+		Count:     5,
+		Iteration: 3,
+		StoryID:   "P4-001",
+	}
+	data, _ := json.Marshal(info)
+	_ = os.WriteFile(filepath.Join(ralphDir, "stuck-3.json"), data, 0o644)
+
+	// Now should detect stuck info — debugger role should be selected
+	if !runner.HasStuckInfo(dir, "P4-001") {
+		t.Error("expected stuck info to be detected")
+	}
+
+	// Verify role selection logic
+	implRole := roles.RoleImplementer
+	if runner.HasStuckInfo(dir, "P4-001") {
+		implRole = roles.RoleDebugger
+	}
+	if implRole != roles.RoleDebugger {
+		t.Errorf("expected RoleDebugger, got %s", implRole)
+	}
+
+	// Different story should not trigger debugger
+	implRole2 := roles.RoleImplementer
+	if runner.HasStuckInfo(dir, "P4-999") {
+		implRole2 = roles.RoleDebugger
+	}
+	if implRole2 != roles.RoleImplementer {
+		t.Errorf("expected RoleImplementer for non-stuck story, got %s", implRole2)
 	}
 }

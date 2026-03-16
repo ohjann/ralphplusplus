@@ -267,13 +267,17 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 		}
 	}
 
-	// 3. Build prompt and run implementer
-	send(WorkerRunning, roles.RoleImplementer, nil, false, "")
+	// 3. Build prompt and run implementer (or debugger if stuck)
+	implRole := roles.RoleImplementer
+	if runner.HasStuckInfo(ws.Dir, w.StoryID) {
+		implRole = roles.RoleDebugger
+	}
+	send(WorkerRunning, implRole, nil, false, "")
 
-	implOpts := makeBuildOpts(memoryOpts, roles.RoleImplementer)
+	implOpts := makeBuildOpts(memoryOpts, implRole)
 	prompt, _, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, implOpts...)
 	if err != nil {
-		send(WorkerFailed, roles.RoleImplementer, fmt.Errorf("build prompt: %w", err), false, "")
+		send(WorkerFailed, implRole, fmt.Errorf("build prompt: %w", err), false, "")
 		return
 	}
 	prompt = appendParallelMode(prompt, w.StoryID)
@@ -282,12 +286,12 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	usage, err := runner.RunClaude(w.Ctx, ws.Dir, prompt, logPath, runner.RunClaudeOpts{
 		Iteration: w.Iteration,
 		StoryID:   w.StoryID,
-		Role:      roles.RoleImplementer,
+		Role:      implRole,
 	})
-	claudeUsage = accumulateUsage(claudeUsage, usage) // accumulate architect + implementer usage
+	claudeUsage = accumulateUsage(claudeUsage, usage) // accumulate architect + implementer/debugger usage
 	if err != nil {
 		if w.Ctx.Err() != nil {
-			send(WorkerFailed, roles.RoleImplementer, w.Ctx.Err(), false, "")
+			send(WorkerFailed, implRole, w.Ctx.Err(), false, "")
 			return
 		}
 		// Usage limit — signal to pause, don't retry automatically
@@ -298,7 +302,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 				WorkerID:   w.ID,
 				StoryID:    w.StoryID,
 				State:      WorkerFailed,
-				Role:       roles.RoleImplementer,
+				Role:       implRole,
 				Err:        err,
 				UsageLimit: true,
 				TokenUsage: claudeUsage,

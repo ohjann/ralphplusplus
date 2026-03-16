@@ -358,3 +358,41 @@ func TestWorkerUpdateHasRoleField(t *testing.T) {
 		t.Errorf("Role = %s, want %s", update.Role, roles.RoleArchitect)
 	}
 }
+
+func TestDebuggerRoleWhenStuckInWorker(t *testing.T) {
+	// Verify that HasStuckInfo drives debugger role selection
+	dir := t.TempDir()
+	ralphDir := filepath.Join(dir, ".ralph")
+	_ = os.MkdirAll(ralphDir, 0o755)
+
+	// No stuck info — implementer role
+	implRole := roles.RoleImplementer
+	if runner.HasStuckInfo(dir, "P4-001") {
+		implRole = roles.RoleDebugger
+	}
+	if implRole != roles.RoleImplementer {
+		t.Errorf("expected RoleImplementer without stuck info, got %s", implRole)
+	}
+
+	// Write stuck info
+	stuckData := []byte(`{"pattern":"repeated_bash_command","repeated_commands":["make test"],"count":5,"iteration":3,"story_id":"P4-001"}`)
+	_ = os.WriteFile(filepath.Join(ralphDir, "stuck-3.json"), stuckData, 0o644)
+
+	// With stuck info — debugger role
+	implRole = roles.RoleImplementer
+	if runner.HasStuckInfo(dir, "P4-001") {
+		implRole = roles.RoleDebugger
+	}
+	if implRole != roles.RoleDebugger {
+		t.Errorf("expected RoleDebugger with stuck info, got %s", implRole)
+	}
+
+	// makeBuildOpts should work with debugger role
+	opts := makeBuildOpts(nil, implRole)
+	if len(opts) != 1 {
+		t.Fatalf("expected 1 opt, got %d", len(opts))
+	}
+	if opts[0].Role != roles.RoleDebugger {
+		t.Errorf("expected RoleDebugger in BuildPromptOpts, got %s", opts[0].Role)
+	}
+}
