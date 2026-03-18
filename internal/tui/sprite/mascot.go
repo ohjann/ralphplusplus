@@ -6,7 +6,9 @@ type Mascot struct {
 	Spr         *Sprite
 	World       World
 	AI          *AI
-	Interactive bool // when true, AI is paused and user controls the sprite
+	Interactive bool    // when true, AI is paused and user controls the sprite
+	lastX       float64 // previous X for detecting movement stopped in interactive mode
+	idleTicks   int     // ticks since last movement in interactive mode
 }
 
 // NewMascot creates a Mascot with a sprite that will be placed on the bottom
@@ -67,7 +69,21 @@ func (m *Mascot) Tick() {
 	}
 	if !m.Interactive {
 		m.AI.Tick(m.Spr, &m.World)
+	} else if m.Spr.OnGround && (m.Spr.Action == WalkLeft || m.Spr.Action == WalkRight) {
+		// In interactive mode, only reset to idle if the sprite hasn't
+		// moved for a couple of ticks (i.e. the player stopped pressing keys).
+		if m.Spr.X == m.lastX {
+			m.idleTicks++
+			if m.idleTicks > 5 {
+				m.Spr.Action = Idle
+				m.Spr.Frame = 0
+				m.Spr.FrameTick = 0
+			}
+		} else {
+			m.idleTicks = 0
+		}
 	}
+	m.lastX = m.Spr.X
 	m.Spr.Update(&m.World)
 }
 

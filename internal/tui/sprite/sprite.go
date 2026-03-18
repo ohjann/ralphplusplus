@@ -31,15 +31,28 @@ var (
 	cW = lipgloss.Color("#CDD6F4") // White
 	cD = lipgloss.Color("#45475A") // Dark (surface)
 	cV = lipgloss.Color("#CBA6F7") // Violet / Mauve
-	cL = lipgloss.Color("#A6E3A1") // Lime (same as green)
 	cS = lipgloss.Color("#585B70") // Subtle dark
+	cN = lipgloss.Color("#7F849C") // Neutral (overlay1)
 )
 
-// px is a shorthand type for an 8×8 pixel grid.
-// Empty string = transparent pixel.
-type px = [8][8]lipgloss.Color
+// Pixel grid dimensions.
+const (
+	pixelW = 8 // pixels wide
+	pixelH = 6 // pixels tall (must be even)
+)
 
-// frame holds one animation frame as an 8×8 pixel grid.
+// SpriteWidth is the width of the sprite in terminal columns.
+// Half-block rendering: 1 pixel = 1 column.
+const SpriteWidth = pixelW
+
+// SpriteHeight is the height of the sprite in terminal rows.
+// Half-block rendering: 2 pixel rows = 1 terminal row.
+const SpriteHeight = pixelH / 2
+
+// px is the pixel grid type for a single frame (6 rows × 8 cols).
+type px = [pixelH][pixelW]lipgloss.Color
+
+// frame holds one animation frame as a pixel grid.
 type frame struct {
 	Pixels px
 }
@@ -73,138 +86,130 @@ var actionFrames = map[Action][]frame{
 }
 
 // ---------------------------------------------------------------------------
-// Sprite pixel data — little green alien guy
+// Sprite pixel data — boxy ghost character (8×8)
+// Wide white head with two dark eyes, brown belt, narrow body, stubby legs
+// Based on retro sprite sheet reference
 // ---------------------------------------------------------------------------
 var (
-	// Shorthand aliases for this sprite
-	g = cG // body
-	w = cW // eyes
-	d = cD // dark (pupils/mouth)
+	w = cW // body (white)
+	d = cD // eyes (dark)
+	b = lipgloss.Color("#7F5539") // belt (dark brown)
 
+	// User-specified pixel grid (6 rows × 8 cols):
+	//   Row 0: .  .  H  H  H  H  .  .    head
+	//   Row 1: .  .  H  E  H  E  .  .    eyes
+	//   Row 2: .  A  B  B  B  B  A  .    arms + body
+	//   Row 3: A  .  B  B  B  B  .  A    arms + body
+	//   Row 4: .  .  K  K  K  K  .  .    belt
+	//   Row 5: .  .  L  .  .  L  .  .    legs
+	// H=head, E=eye, A=arm, B=body, K=belt, L=leg
+
+	// Idle: eyes centered
 	spriteIdle1 = px{
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, w, d, w, d, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, g, "", "", g, g, ""},
-		{"", g, g, "", "", g, g, ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", w, d, w, d, "", ""},
+		{"", w, w, w, w, w, w, ""},
+		{w, "", w, w, w, w, "", w},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", w, "", "", w, "", ""},
 	}
 	spriteIdle2 = px{
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, d, w, d, w, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, g, "", "", g, g, ""},
-		{"", g, g, "", "", g, g, ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", w, d, w, d, "", ""},
+		{"", w, w, w, w, w, w, ""},
+		{w, "", w, w, w, w, "", w},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", w, "", "", w, "", ""},
 	}
 
+	// Walk left: eyes shifted left, single-pixel legs 1px apart alternating
 	spriteWalkL1 = px{
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, w, d, w, d, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, g, "", g, g, "", ""},
-		{"", g, "", "", g, "", "", ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", d, w, d, w, "", ""},
+		{"", w, w, w, w, w, w, ""},
+		{w, "", w, w, w, w, "", w},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", w, "", "", w, "", ""},  // left leg forward, right back
 	}
 	spriteWalkL2 = px{
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, w, d, w, d, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, "", g, g, ""},
-		{"", "", "", g, "", g, "", ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", d, w, d, w, "", ""},
+		{"", w, w, w, w, w, w, ""},
+		{w, "", w, w, w, w, "", w},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", "", w, w, "", "", ""},  // legs swap
 	}
 
+	// Walk right: eyes shifted right, single-pixel legs 1px apart alternating
 	spriteWalkR1 = px{
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, d, w, d, w, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, "", g, g, ""},
-		{"", "", "", g, "", g, "", ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", w, d, w, d, "", ""},
+		{"", w, w, w, w, w, w, ""},
+		{w, "", w, w, w, w, "", w},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", w, "", "", w, "", ""},  // left leg forward, right back
 	}
 	spriteWalkR2 = px{
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, d, w, d, w, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, g, "", g, g, "", ""},
-		{"", g, "", "", g, "", "", ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", w, d, w, d, "", ""},
+		{"", w, w, w, w, w, w, ""},
+		{w, "", w, w, w, w, "", w},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", "", w, w, "", "", ""},  // legs swap
 	}
 
+	// Jump: arms up alongside head
 	spriteJump1 = px{
-		{"", g, "", "", "", "", g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, w, d, w, d, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, g, "", "", g, g, ""},
+		{w, "", w, w, w, w, "", w},
+		{w, "", w, d, w, d, "", w},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", w, "", "", w, "", ""},
 	}
 	spriteJump2 = px{
-		{"", g, "", "", "", "", g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, d, w, d, w, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, "", "", g, "", ""},
+		{w, "", w, w, w, w, "", w},
+		{w, "", d, w, d, w, "", w},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", "", w, w, "", "", ""},
 	}
 
+	// Climb: alternating arm positions
 	spriteClimb1 = px{
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, w, d, w, d, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", "", g, "", "", g, "", ""},
-		{"", g, "", "", "", "", g, ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", w, d, w, d, "", ""},
+		{w, "", w, w, w, w, "", ""},
+		{"", "", w, w, w, w, "", w},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", w, "", "", w, "", ""},
 	}
 	spriteClimb2 = px{
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, d, w, d, w, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, "", "", "", "", g, ""},
-		{"", "", g, "", "", g, "", ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", w, d, w, d, "", ""},
+		{"", "", w, w, w, w, "", w},
+		{w, "", w, w, w, w, "", ""},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", w, "", "", w, "", ""},
 	}
 
+	// Fall: arms spread wide
 	spriteFall1 = px{
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, d, w, d, w, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, "", "", "", "", g, ""},
-		{"", g, "", "", "", "", g, ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", w, d, w, d, "", ""},
+		{w, w, w, w, w, w, w, w},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", w, "", "", w, "", ""},
 	}
 	spriteFall2 = px{
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", g, w, d, w, d, g, ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, g, g, g, "", ""},
-		{"", g, g, g, g, g, g, ""},
-		{"", "", g, "", "", g, "", ""},
-		{"", "", "", "", "", "", "", ""},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", d, w, d, w, "", ""},
+		{w, w, w, w, w, w, w, w},
+		{"", "", w, w, w, w, "", ""},
+		{"", "", b, b, b, b, "", ""},
+		{"", "", "", w, w, "", "", ""},
 	}
 )
 
@@ -232,16 +237,10 @@ func NewSprite(x, y float64) *Sprite {
 	}
 }
 
-// SpriteWidth is the width of the sprite in terminal columns.
-const SpriteWidth = 8
-
-// SpriteHeight is the height of the sprite in terminal rows.
-// 8 pixel rows / 2 pixels per half-block = 4 rows.
-const SpriteHeight = 4
-
 // Frames returns the styled lines for the current animation frame.
-// Each 8×8 pixel grid is rendered as 4 lines of 8 half-block characters,
-// where each character encodes two vertical pixels using ▀ with fg/bg colors.
+// Each pair of pixel rows is rendered as one line of half-block characters (▀/▄).
+// Each character encodes two vertical pixels using fg (top) and bg (bottom) colors.
+// This gives square-looking pixels since terminal chars are ~2x taller than wide.
 func (s *Sprite) Frames() []string {
 	frames := actionFrames[s.Action]
 	if len(frames) == 0 {
@@ -254,30 +253,24 @@ func (s *Sprite) Frames() []string {
 	for row := 0; row < SpriteHeight; row++ {
 		topRow := row * 2
 		botRow := row*2 + 1
-		var b strings.Builder
+		var buf strings.Builder
 		for col := 0; col < SpriteWidth; col++ {
 			top := f.Pixels[topRow][col]
 			bot := f.Pixels[botRow][col]
 			if top == "" && bot == "" {
-				// Both transparent — output a space.
-				b.WriteRune(' ')
+				buf.WriteRune(' ')
 			} else if top != "" && bot != "" {
-				// Both pixels filled — ▀ with fg=top, bg=bottom.
-				style := lipgloss.NewStyle().
-					Foreground(top).
-					Background(bot)
-				b.WriteString(style.Render("▀"))
+				style := lipgloss.NewStyle().Foreground(top).Background(bot)
+				buf.WriteString(style.Render("▀"))
 			} else if top != "" {
-				// Only top pixel — ▀ with fg=top, no bg.
 				style := lipgloss.NewStyle().Foreground(top)
-				b.WriteString(style.Render("▀"))
+				buf.WriteString(style.Render("▀"))
 			} else {
-				// Only bottom pixel — ▄ with fg=bottom, no bg.
 				style := lipgloss.NewStyle().Foreground(bot)
-				b.WriteString(style.Render("▄"))
+				buf.WriteString(style.Render("▄"))
 			}
 		}
-		result[row] = b.String()
+		result[row] = buf.String()
 	}
 	return result
 }

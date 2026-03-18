@@ -70,8 +70,11 @@ func Create(ctx context.Context, projectDir, storyID, baseDir string) (CreateRes
 	return CreateResult{Dir: wsDir, BaseChangeID: baseChangeID}, nil
 }
 
-// Destroy forgets a workspace and removes its directory.
+// Destroy runs the teardown hook (if any), forgets the workspace, and removes its directory.
 func Destroy(ctx context.Context, projectDir, wsName, wsDir string) error {
+	// Run project-specific teardown (.ralph/workspace-teardown.sh) before cleanup.
+	RunTeardown(ctx, wsDir)
+
 	// Forget the workspace — this also cleans up the workspace's working-copy commit.
 	cmd := exec.CommandContext(ctx, "jj", "workspace", "forget", wsName)
 	cmd.Dir = projectDir
@@ -79,6 +82,18 @@ func Destroy(ctx context.Context, projectDir, wsName, wsDir string) error {
 
 	// Remove the directory
 	return os.RemoveAll(wsDir)
+}
+
+// RunTeardown runs .ralph/workspace-teardown.sh if it exists. Best-effort — errors are ignored.
+func RunTeardown(ctx context.Context, wsDir string) {
+	teardownScript := filepath.Join(wsDir, ".ralph", "workspace-teardown.sh")
+	if _, err := os.Stat(teardownScript); os.IsNotExist(err) {
+		return
+	}
+	cmd := exec.CommandContext(ctx, "bash", teardownScript)
+	cmd.Dir = wsDir
+	cmd.Env = append(os.Environ(), "WORKSPACE_DIR="+wsDir)
+	_ = cmd.Run() // best-effort
 }
 
 // AbandonChange removes a change from the jj graph. Use this to clean up
@@ -211,6 +226,35 @@ func CommitWorkspace(ctx context.Context, wsDir, storyID, title, baseChangeID st
 	}
 
 	return strings.TrimSpace(string(idOut)), nil
+}
+
+// SetupResult holds the outcome of RunSetup.
+type SetupResult struct {
+	Warning string // non-empty if setup was skipped (e.g. no script found)
+	Ran     bool   // true if the setup script was executed
+}
+
+// RunSetup runs .ralph/workspace-setup.sh in the workspace directory if it exists.
+// This allows projects to define setup steps (e.g. copying node_modules, .env files,
+// generating clients) that run after workspace creation. If the script does not exist,
+// a warning is returned and execution continues normally.
+func RunSetup(ctx context.Context, wsDir string) (SetupResult, error) {
+	setupScript := filepath.Join(wsDir, ".ralph", "workspace-setup.sh")
+	if _, err := os.Stat(setupScript); os.IsNotExist(err) {
+		return SetupResult{Warning: "no .ralph/workspace-setup.sh found, skipping project setup"}, nil
+	}
+
+	cmd := exec.CommandContext(ctx, "bash", setupScript)
+	cmd.Dir = wsDir
+	cmd.Env = append(os.Environ(),
+		"WORKSPACE_DIR="+wsDir,
+		"RALPH_WORKSPACE=1",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return SetupResult{}, fmt.Errorf("workspace-setup.sh failed: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return SetupResult{Ran: true}, nil
 }
 
 // CopyState copies prd.json, progress.md, and .ralph/ state into the workspace.

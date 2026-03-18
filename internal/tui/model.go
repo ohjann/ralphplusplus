@@ -148,6 +148,10 @@ type Model struct {
 	hintInput     textarea.Model
 	hintActive    bool // true when user is typing a hint
 
+	// Status bar (vim-like, bottom of screen)
+	statusText  string
+	statusLevel statusLevel
+
 	// Push notifications
 	notifier *notify.Notifier
 
@@ -1153,6 +1157,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateStatusPage()
 		}
 
+	case statusMsg:
+		m.statusText = msg.Text
+		m.statusLevel = msg.Level
+		cmds = append(cmds, tea.Tick(5*time.Second, func(time.Time) tea.Msg {
+			return statusClearMsg{}
+		}))
+
+	case statusClearMsg:
+		m.statusText = ""
+
 	case pipelineEmbedDoneMsg:
 		if msg.Err != nil {
 			debuglog.Log("pipeline embed failed for %s (non-fatal): %v", msg.StoryID, msg.Err)
@@ -1431,6 +1445,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update rate limit info from parallel workers
 		if u.RateLimitInfo != nil {
 			m.rateLimitInfo = u.RateLimitInfo
+		}
+
+		// Forward worker status messages to the status bar
+		if u.StatusText != "" {
+			m.statusText = u.StatusText
+			if u.StatusWarn {
+				m.statusLevel = statusWarn
+			} else {
+				m.statusLevel = statusInfo
+			}
+			cmds = append(cmds, tea.Tick(5*time.Second, func(time.Time) tea.Msg {
+				return statusClearMsg{}
+			}))
 		}
 
 		// Usage limit — pause everything and wait for user
@@ -1983,11 +2010,15 @@ func (m *Model) View() string {
 	if m.stuckAlert != nil {
 		statusBarHeight = 1
 	}
+	statusLineHeight := 0
+	if m.statusText != "" {
+		statusLineHeight = 1
+	}
 	hintHeight := 0
 	if m.hintActive {
 		hintHeight = 3
 	}
-	available := m.height - headerHeight - footerHeight - statusBarHeight - hintHeight
+	available := m.height - headerHeight - footerHeight - statusBarHeight - statusLineHeight - hintHeight
 	if available < 10 {
 		available = 10
 	}
@@ -2092,6 +2123,9 @@ func (m *Model) View() string {
 	}
 	if m.hintActive {
 		parts = append(parts, renderHintInput(m.hintInput, m.width))
+	}
+	if m.statusText != "" {
+		parts = append(parts, renderStatusLine(m.statusText, m.statusLevel, m.width))
 	}
 	parts = append(parts, footer)
 
@@ -2211,6 +2245,22 @@ func renderStuckBar(info *runner.StuckInfo, width int, hintActive bool) string {
 	contentWidth := lipgloss.Width(content)
 	if contentWidth < width {
 		content += styleStuckBarDetail.Render(strings.Repeat(" ", width-contentWidth))
+	}
+	return content
+}
+
+func renderStatusLine(text string, level statusLevel, width int) string {
+	style := styleStatusInfo
+	switch level {
+	case statusWarn:
+		style = styleStatusWarn
+	case statusError:
+		style = styleStatusError
+	}
+	content := style.Render(" " + text + " ")
+	contentWidth := lipgloss.Width(content)
+	if contentWidth < width {
+		content += style.Render(strings.Repeat(" ", width-contentWidth))
 	}
 	return content
 }

@@ -80,6 +80,8 @@ type WorkerUpdate struct {
 	JudgeResult   *judge.Result
 	TokenUsage    *costs.TokenUsage    // token/turn usage from Claude run
 	RateLimitInfo *costs.RateLimitInfo // latest rate limit info from Claude CLI
+	StatusText    string               // optional status message for TUI status bar
+	StatusWarn    bool                 // true if status is a warning
 }
 
 // shouldRunArchitect determines if the architect agent should run before the implementer.
@@ -195,6 +197,23 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	if err := workspace.CopyState(cfg.ProjectDir, ws.Dir, w.StoryID); err != nil {
 		send(WorkerFailed, "", fmt.Errorf("copy state: %w", err), false, "")
 		return
+	}
+
+	// Run project-specific workspace setup (.ralph/workspace-setup.sh)
+	setupResult, err := workspace.RunSetup(w.Ctx, ws.Dir)
+	if err != nil {
+		send(WorkerFailed, "", fmt.Errorf("workspace setup: %w", err), false, "")
+		return
+	}
+	if setupResult.Warning != "" {
+		w.State = WorkerSetup
+		updateCh <- WorkerUpdate{
+			WorkerID:   w.ID,
+			StoryID:    w.StoryID,
+			State:      WorkerSetup,
+			StatusText: setupResult.Warning,
+			StatusWarn: true,
+		}
 	}
 
 	// Ensure log directory exists in workspace

@@ -171,4 +171,19 @@ var (
 	styleStuckBarDetail = lipgloss.NewStyle().
 				Foreground(colorSurface0).
 				Background(colorDanger)
+
+	// Status line (vim-like, bottom of screen)
+	styleStatusInfo = lipgloss.NewStyle().
+			Foreground(colorText).
+			Background(colorSurface1)
+
+	styleStatusWarn = lipgloss.NewStyle().
+			Foreground(colorSurface0).
+			Background(colorPrimary).
+			Bold(true)
+
+	styleStatusError = lipgloss.NewStyle().
+				Foreground(colorSurface0).
+				Background(colorDanger).
+				Bold(true)
 )

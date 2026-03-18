@@ -128,6 +128,22 @@ type rateLimitUpdateMsg struct {
 	Info *costs.RateLimitInfo
 }
 
+// Status bar
+type statusLevel int
+
+const (
+	statusInfo statusLevel = iota
+	statusWarn
+	statusError
+)
+
+type statusMsg struct {
+	Text  string
+	Level statusLevel
+}
+
+type statusClearMsg struct{}
+
 // Terminal size
 type windowSizeMsg struct {
 	Width  int

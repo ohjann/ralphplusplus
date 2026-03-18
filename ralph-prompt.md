@@ -89,9 +89,11 @@ If a quality check (typecheck, lint, test, browser verification) fails:
 
 For any story that changes UI, you MUST verify it works in the browser:
 
-1. Load the `rodney` skill
-2. Navigate to the relevant page
-3. Verify the UI changes work as expected
+1. Check if a dev server is already running for this workspace:
+   - Read `.ralph/dev-server.port` — if it exists, the server is running on that port
+   - If the file doesn't exist, follow the project's CLAUDE.md instructions to start one
+2. Load the `rodney` skill
+3. Navigate to `http://localhost:<port>` and verify the UI changes work as expected
 4. Take a screenshot if helpful for the progress log
 
 A frontend story is NOT complete until browser verification passes.

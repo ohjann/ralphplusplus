@@ -70,8 +70,8 @@ func (a *AI) Tick(s *Sprite, w *World) {
 // tickPatrol walks in the current direction until edge or random distance.
 func (a *AI) tickPatrol(s *Sprite, w *World) {
 	if a.ticksInState == 1 {
-		// Starting patrol: pick a random distance between 5-20 steps.
-		a.patrolDist = 5 + a.rng.Intn(16)
+		// Starting patrol: pick a random distance between 15-50 steps.
+		a.patrolDist = 15 + a.rng.Intn(36)
 		if s.Dir == 0 {
 			s.Dir = 1
 		}
@@ -91,7 +91,7 @@ func (a *AI) tickPatrol(s *Sprite, w *World) {
 // tickIdle pauses for 3-8 ticks then resumes patrol.
 func (a *AI) tickIdle(s *Sprite, w *World) {
 	if a.ticksInState == 1 {
-		a.targetTicks = 3 + a.rng.Intn(6)
+		a.targetTicks = 15 + a.rng.Intn(25)
 		s.Action = Idle
 		s.Frame = 0
 		s.FrameTick = 0
@@ -208,20 +208,23 @@ func (a *AI) tickWandering(s *Sprite, w *World) {
 }
 
 // chooseNextState transitions from patrol based on weighted probabilities:
-// 40% reverse patrol, 20% idle, 20% climb, 20% jump.
+// 20% reverse patrol, 25% continue same direction, 25% idle, 15% climb, 15% jump.
 func (a *AI) chooseNextState(s *Sprite, w *World) {
 	roll := a.rng.Intn(100)
 	switch {
-	case roll < 40:
+	case roll < 25:
+		// Keep going same direction.
+		a.transitionTo(AIPatrol)
+	case roll < 45:
 		// Reverse direction and keep patrolling.
 		s.Dir = -s.Dir
 		if s.Dir == 0 {
 			s.Dir = 1
 		}
 		a.transitionTo(AIPatrol)
-	case roll < 60:
+	case roll < 70:
 		a.transitionTo(AIIdle)
-	case roll < 80:
+	case roll < 85:
 		a.transitionTo(AIClimbing)
 	default:
 		a.transitionTo(AIJumping)
