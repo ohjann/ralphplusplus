@@ -101,6 +101,8 @@ func (a *AI) tickIdle(s *Sprite, w *World) {
 }
 
 // tickJumping lets the physics engine handle the jump.
+// Note: physics Update is called by Mascot.Tick after AI.Tick, so we must NOT
+// call s.Update here to avoid double-applying gravity.
 func (a *AI) tickJumping(s *Sprite, w *World) {
 	if a.ticksInState == 1 {
 		s.Jump()
@@ -110,7 +112,6 @@ func (a *AI) tickJumping(s *Sprite, w *World) {
 			return
 		}
 	}
-	s.Update(w)
 	if s.OnGround {
 		a.transitionTo(AIPatrol)
 	}
@@ -149,8 +150,9 @@ func (a *AI) tickClimbing(s *Sprite, w *World) {
 		}
 	} else {
 		// On ladder: keep climbing.
+		// Note: physics Update is called by Mascot.Tick after AI.Tick,
+		// so we must NOT call s.Update here to avoid double-ticking.
 		s.StartClimb(a.climbDir)
-		s.Update(w)
 
 		// Check if we've reached a platform.
 		ix, iy := int(s.X), int(s.Y)

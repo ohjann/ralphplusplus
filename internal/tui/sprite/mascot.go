@@ -17,23 +17,51 @@ func NewMascot() *Mascot {
 }
 
 // Resize rebuilds the world geometry from the given layout parameters
-// and repositions the sprite if necessary.
+// and repositions the sprite onto the closest valid platform.
 func (m *Mascot) Resize(lp LayoutParams) {
 	m.World = BuildWorld(lp)
-	// Place sprite on the first platform if it's out of bounds.
-	if len(m.World.Platforms) > 0 {
-		p := m.World.Platforms[0]
-		ix, iy := int(m.Spr.X), int(m.Spr.Y)
-		if ix < p.X1 || ix+m.Spr.Width()-1 > p.X2 || iy < 0 || iy >= m.World.Height {
-			m.Spr.X = float64(p.X1 + (p.X2-p.X1)/2)
-			m.Spr.Y = float64(p.Y - m.Spr.Height())
-			m.Spr.OnGround = true
+	if len(m.World.Platforms) == 0 {
+		return
+	}
+
+	// Find the closest platform to the sprite's current Y position.
+	bestIdx := 0
+	bestDist := int(^uint(0) >> 1)
+	iy := int(m.Spr.Y)
+	for i, p := range m.World.Platforms {
+		dy := iy - (p.Y - m.Spr.Height())
+		if dy < 0 {
+			dy = -dy
+		}
+		if dy < bestDist {
+			bestDist = dy
+			bestIdx = i
 		}
 	}
+
+	p := m.World.Platforms[bestIdx]
+	ix := int(m.Spr.X)
+
+	// Clamp X to stay within the platform.
+	if ix < p.X1 {
+		m.Spr.X = float64(p.X1)
+	} else if ix+m.Spr.Width()-1 > p.X2 {
+		m.Spr.X = float64(p.X2 - m.Spr.Width() + 1)
+	}
+
+	// Snap Y to the platform surface.
+	m.Spr.Y = float64(p.Y - m.Spr.Height())
+	m.Spr.OnGround = true
+	m.Spr.OnLadder = false
+	m.Spr.VelY = 0
 }
 
 // Tick advances the mascot by one frame (AI + physics).
+// It skips ticking if the world has not been initialized yet (no platforms).
 func (m *Mascot) Tick() {
+	if len(m.World.Platforms) == 0 {
+		return
+	}
 	m.AI.Tick(m.Spr, &m.World)
 	m.Spr.Update(&m.World)
 }
