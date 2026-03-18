@@ -341,13 +341,13 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 		if chromaClient != nil && embedder != nil && !cfg.Memory.Disabled {
 			retriever := memory.NewRetriever(chromaClient, embedder)
 			if retriever != nil {
+				retriever.RepoID = memory.RepoID(cfg.ProjectDir)
 				implOpts = append(implOpts, runner.BuildPromptOpts{
 					Memory: retriever,
 					MemoryOpts: memory.RetrievalOptions{
-						TopK:       cfg.Memory.TopK,
-						MinScore:   cfg.Memory.MinScore,
-						MaxTokens:  cfg.Memory.MaxTokens,
-						ProjectDir: cfg.ProjectDir,
+						TopK:      cfg.Memory.TopK,
+						MinScore:  cfg.Memory.MinScore,
+						MaxTokens: cfg.Memory.MaxTokens,
 					},
 					Role: implRole,
 				})
@@ -628,7 +628,7 @@ func chromaSetupCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
 // codebaseScanCmd runs the codebase scanner in the background.
 func codebaseScanCmd(ctx context.Context, cfg *config.Config, client *memory.ChromaClient, embedder memory.Embedder) tea.Cmd {
 	return safeCmd(func() tea.Msg {
-		if err := memory.ScanCodebase(ctx, cfg.ProjectDir, client, embedder); err != nil {
+		if err := memory.ScanCodebase(ctx, cfg.ProjectDir, client, embedder, memory.RepoID(cfg.ProjectDir)); err != nil {
 			debuglog.Log("codebase scan failed: %v", err)
 			return codebaseScanDoneMsg{Err: err}
 		}
@@ -642,6 +642,7 @@ func codebaseScanCmd(ctx context.Context, cfg *config.Config, client *memory.Chr
 func runPipelineCmd(ctx context.Context, client *memory.ChromaClient, embedder memory.Embedder, projectDir, storyID string, contextExhausted bool) tea.Cmd {
 	return safeCmd(func() tea.Msg {
 		pipeline := memory.NewPipeline(client, embedder)
+		pipeline.RepoID = memory.RepoID(projectDir)
 
 		var err error
 		if contextExhausted {

@@ -232,10 +232,9 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 			memoryOpts = append(memoryOpts, runner.BuildPromptOpts{
 				Memory: retriever,
 				MemoryOpts: memory.RetrievalOptions{
-					TopK:       cfg.Memory.TopK,
-					MinScore:   cfg.Memory.MinScore,
-					MaxTokens:  cfg.Memory.MaxTokens,
-					ProjectDir: cfg.ProjectDir,
+					TopK:      cfg.Memory.TopK,
+					MinScore:  cfg.Memory.MinScore,
+					MaxTokens: cfg.Memory.MaxTokens,
 				},
 			})
 		}

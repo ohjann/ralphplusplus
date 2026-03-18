@@ -14,11 +14,11 @@ import (
 
 // RetrievalOptions controls how semantic retrieval behaves.
 type RetrievalOptions struct {
-	TopK       int     // Number of results per collection (default 5)
-	MinScore   float64 // Minimum similarity score threshold (default 0.7)
-	MaxTokens  int     // Token budget for formatted output (default 2000)
-	Disabled   bool    // If true, return empty string immediately
-	ProjectDir string  // Project directory for scoping lesson queries (optional)
+	TopK      int     // Number of results per collection (default 5)
+	MinScore  float64 // Minimum similarity score threshold (default 0.7)
+	MaxTokens int     // Token budget for formatted output (default 2000)
+	Disabled  bool    // If true, return empty string immediately
+	RepoID    string  // If set, only retrieve documents from this repository
 }
 
 // DocRef identifies a document in a specific collection, with optional
@@ -117,6 +117,12 @@ func RetrieveContext(
 		return RetrievalResult{}, fmt.Errorf("embed query: %w", err)
 	}
 
+	// Build optional repo filter for scoped retrieval.
+	var filter []QueryFilter
+	if opts.RepoID != "" {
+		filter = []QueryFilter{{Where: map[string]interface{}{"repo_id": opts.RepoID}}}
+	}
+
 	// Query all collections concurrently and gather results.
 	collections := AllCollections()
 	now := time.Now()
@@ -131,23 +137,11 @@ func RetrieveContext(
 	allResults := make([]colResults, 0, len(collections))
 	var queryErrors []error
 
-	// Build project filter for lesson collections.
-	var projectFilter map[string]interface{}
-	if opts.ProjectDir != "" {
-		projectFilter = map[string]interface{}{"project_id": GenerateProjectID(opts.ProjectDir)}
-	}
-
 	for _, col := range collections {
 		wg.Add(1)
 		go func(colName string) {
 			defer wg.Done()
-			var results []QueryResult
-			var err error
-			if isLessonCollection(colName) && projectFilter != nil {
-				results, err = client.QueryCollectionFiltered(ctx, colName, embedding, opts.TopK, projectFilter)
-			} else {
-				results, err = client.QueryCollection(ctx, colName, embedding, opts.TopK)
-			}
+			results, err := client.QueryCollection(ctx, colName, embedding, opts.TopK, filter...)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {

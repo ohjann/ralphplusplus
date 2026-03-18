@@ -34,7 +34,8 @@ const maxFileSize = 100 * 1024
 // ScanCodebase walks the project directory, extracts summaries from source and
 // config files, and embeds them into the ralph_codebase collection. It skips
 // files that haven't changed since the last scan (by comparing file mod time).
-func ScanCodebase(ctx context.Context, projectDir string, client *ChromaClient, embedder Embedder) error {
+// If repoID is non-empty, each document is tagged with repo_id metadata.
+func ScanCodebase(ctx context.Context, projectDir string, client *ChromaClient, embedder Embedder, repoID ...string) error {
 	files, err := collectFiles(projectDir)
 	if err != nil {
 		return fmt.Errorf("collect files: %w", err)
@@ -94,19 +95,27 @@ func ScanCodebase(ctx context.Context, projectDir string, client *ChromaClient, 
 			return fmt.Errorf("embed batch %d-%d: %w", i, end-1, err)
 		}
 
+		rid := ""
+		if len(repoID) > 0 {
+			rid = repoID[0]
+		}
 		upsertDocs := make([]Document, len(batch))
 		for j, f := range batch {
 			docID := fileDocID(f.relPath)
+			meta := map[string]interface{}{
+				"file_path":        f.relPath,
+				"package_name":     docMetas[j].packageName,
+				"exported_symbols": docMetas[j].exportedSymbols,
+				"file_mod_time":    float64(f.modTime),
+			}
+			if rid != "" {
+				meta["repo_id"] = rid
+			}
 			upsertDocs[j] = Document{
 				ID:        docID,
 				Content:   summaries[j],
 				Embedding: embeddings[j],
-				Metadata: map[string]interface{}{
-					"file_path":        f.relPath,
-					"package_name":     docMetas[j].packageName,
-					"exported_symbols": docMetas[j].exportedSymbols,
-					"file_mod_time":    float64(f.modTime),
-				},
+				Metadata:  meta,
 			}
 		}
 

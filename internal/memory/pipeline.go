@@ -16,6 +16,7 @@ import (
 type Pipeline struct {
 	Client   *ChromaClient
 	Embedder Embedder
+	RepoID   string // scopes stored documents to this repository
 }
 
 // NewPipeline creates a new Pipeline with the given ChromaDB client and embedder.
@@ -80,6 +81,13 @@ func (p *Pipeline) processStory(ctx context.Context, projectDir, storyID, status
 	return nil
 }
 
+// stampRepoID adds repo_id to the metadata map if the pipeline has one set.
+func (p *Pipeline) stampRepoID(meta map[string]interface{}) {
+	if p.RepoID != "" {
+		meta["repo_id"] = p.RepoID
+	}
+}
+
 // embedPatterns extracts patterns from pattern events and embeds each as a
 // separate document in ralph_patterns.
 func (p *Pipeline) embedPatterns(ctx context.Context, storyID string, evts []events.Event, now time.Time) error {
@@ -95,16 +103,18 @@ func (p *Pipeline) embedPatterns(ctx context.Context, storyID string, evts []eve
 			if pattern == "" {
 				continue
 			}
+			meta := map[string]interface{}{
+				"story_id":        storyID,
+				"timestamp":       ev.Timestamp.Format(time.RFC3339),
+				"files_involved":  strings.Join(ev.Files, ","),
+				"relevance_score": 1.0,
+				"last_confirmed":  now.Format(time.RFC3339),
+			}
+			p.stampRepoID(meta)
 			doc := Document{
-				ID:      contentHash("pattern", storyID, pattern),
-				Content: pattern,
-				Metadata: map[string]interface{}{
-					"story_id":        storyID,
-					"timestamp":       ev.Timestamp.Format(time.RFC3339),
-					"files_involved":  strings.Join(ev.Files, ","),
-					"relevance_score": 1.0,
-					"last_confirmed":  now.Format(time.RFC3339),
-				},
+				ID:       contentHash("pattern", storyID, pattern),
+				Content:  pattern,
+				Metadata: meta,
 			}
 			docs = append(docs, doc)
 			texts = append(texts, pattern)
@@ -158,18 +168,21 @@ func (p *Pipeline) embedCompletion(ctx context.Context, storyID string, state st
 		return err
 	}
 
+	meta := map[string]interface{}{
+		"story_id":        storyID,
+		"status":          status,
+		"files_touched":   strings.Join(state.FilesTouched, ","),
+		"iteration_count": float64(state.IterationCount),
+		"relevance_score": 1.0,
+		"last_confirmed":  now.Format(time.RFC3339),
+	}
+	p.stampRepoID(meta)
+
 	doc := Document{
 		ID:        docID,
 		Content:   content,
 		Embedding: embedding,
-		Metadata: map[string]interface{}{
-			"story_id":        storyID,
-			"status":          status,
-			"files_touched":   strings.Join(state.FilesTouched, ","),
-			"iteration_count": float64(state.IterationCount),
-			"relevance_score": 1.0,
-			"last_confirmed":  now.Format(time.RFC3339),
-		},
+		Metadata:  meta,
 	}
 
 	return DeduplicateInsertBatch(ctx, p.Client, CollectionCompletions.Name, []Document{doc})
@@ -187,16 +200,18 @@ func (p *Pipeline) embedErrors(ctx context.Context, storyID string, state storys
 
 	for _, entry := range state.ErrorsEncountered {
 		content := fmt.Sprintf("Error: %s\nResolution: %s", entry.Error, entry.Resolution)
+		meta := map[string]interface{}{
+			"story_id":        storyID,
+			"error_type":      entry.Error,
+			"resolution":      entry.Resolution,
+			"relevance_score": 1.0,
+			"last_confirmed":  now.Format(time.RFC3339),
+		}
+		p.stampRepoID(meta)
 		doc := Document{
-			ID:      contentHash("error", storyID, content),
-			Content: content,
-			Metadata: map[string]interface{}{
-				"story_id":        storyID,
-				"error_type":      entry.Error,
-				"resolution":      entry.Resolution,
-				"relevance_score": 1.0,
-				"last_confirmed":  now.Format(time.RFC3339),
-			},
+			ID:       contentHash("error", storyID, content),
+			Content:  content,
+			Metadata: meta,
 		}
 		docs = append(docs, doc)
 		texts = append(texts, content)
@@ -233,15 +248,17 @@ func (p *Pipeline) embedDecisions(ctx context.Context, storyID, decisions string
 		if block == "" {
 			continue
 		}
+		meta := map[string]interface{}{
+			"story_id":        storyID,
+			"timestamp":       now.Format(time.RFC3339),
+			"relevance_score": 1.0,
+			"last_confirmed":  now.Format(time.RFC3339),
+		}
+		p.stampRepoID(meta)
 		doc := Document{
-			ID:      contentHash("decision", storyID, block),
-			Content: block,
-			Metadata: map[string]interface{}{
-				"story_id":        storyID,
-				"timestamp":       now.Format(time.RFC3339),
-				"relevance_score": 1.0,
-				"last_confirmed":  now.Format(time.RFC3339),
-			},
+			ID:       contentHash("decision", storyID, block),
+			Content:  block,
+			Metadata: meta,
 		}
 		docs = append(docs, doc)
 		texts = append(texts, block)
@@ -311,8 +328,8 @@ func EmbedLessons(ctx context.Context, client *ChromaClient, embedder Embedder, 
 		return nil
 	}
 
-	projectID := GenerateProjectID(projectDir)
-	projectFilter := map[string]interface{}{"project_id": projectID}
+	repoID := RepoID(projectDir)
+	repoFilter := QueryFilter{Where: map[string]interface{}{"repo_id": repoID}}
 
 	for _, lesson := range lessons {
 		content := lesson.Pattern + "\n" + lesson.Recommendation
@@ -330,12 +347,12 @@ func EmbedLessons(ctx context.Context, client *ChromaClient, embedder Embedder, 
 				"confidence":      lesson.Confidence,
 				"times_confirmed": float64(lesson.TimesConfirmed),
 				"relevance_score": lesson.Confidence,
-				"project_id":      projectID,
+				"repo_id":         repoID,
 			},
 		}
 
-		// Check for near-duplicate within the same project
-		results, err := client.QueryCollectionFiltered(ctx, CollectionLessons.Name, embedding, 1, projectFilter)
+		// Check for near-duplicate within the same repo
+		results, err := client.QueryCollection(ctx, CollectionLessons.Name, embedding, 1, repoFilter)
 		if err == nil && len(results) > 0 && results[0].Distance < 0.1 {
 			// Near-duplicate found — increment times_confirmed and bump confidence
 			existing := results[0].Document
