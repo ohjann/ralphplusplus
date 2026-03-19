@@ -990,40 +990,62 @@ worker, coordinator, and TUI.
 
 ---
 
-## Phase 5: Learning Loop / Self-Improving System
+## Phase 5: Learning Loop / Self-Improving System (Revised)
 
-**Impact: Medium-High | Complexity: Medium | Dependencies: Phase 2 (vector DB for semantic storage), Phase 3 (run history for analysis input)**
+**Impact: Medium-High | Complexity: Medium | Dependencies: Phase 2 (vector DB — already complete), Phase 3 (run history — already complete)**
+
+> **Revision note (2026-03-19):** The original Phase 5 was written before
+> Phase 2 was implemented. The memory pipeline already provides cross-run
+> learning — patterns, completions, errors, and decisions are embedded on
+> story completion and retrieved semantically in future runs. This revision
+> focuses on the **gaps** that remain: holistic post-run synthesis,
+> anti-pattern detection, and closing the skill feedback loop. Prompt
+> refinement (original 5d) has been cut — the base prompt is hand-tuned
+> and working; auto-suggesting edits is a footgun.
 
 ### Goal
 
-Ralph should get measurably better at each successive PRD run by automatically
-extracting and applying lessons from past runs.
+Extract higher-level cross-story insights that the per-story memory pipeline
+misses, detect recurring failure patterns, and close the feedback loop so
+the `/ralph` skill generates better PRDs over time.
 
 ### Context for Builder
 
-Currently, `ralph-prompt.md` is a static template. Patterns are consolidated
-manually in the "Codebase Patterns" section of progress.md. There's no
-mechanism for ralph to learn that, for example, "stories involving the auth
-module always need 2+ iterations" or "tests in module X are flaky and need
-retries."
+The memory pipeline (`internal/memory/pipeline.go`) already embeds patterns,
+completions, errors, and decisions into ChromaDB on story completion. These
+are retrieved by `BuildPrompt()` via `internal/memory/retrieval.go` and
+injected into future iterations. This is per-story learning and it works.
 
-Run history (Phase 3) provides quantitative data. Vector memory (Phase 2)
-provides qualitative data. This phase connects them.
+What's missing:
+1. **Holistic analysis** — no step synthesizes cross-story insights after a
+   full PRD run completes (e.g., "stories touching module X averaged 3.2
+   iterations vs 1.4 elsewhere")
+2. **Anti-pattern aggregation** — recurring failures are stored individually
+   in `ralph_errors` but never grouped or surfaced as systemic issues
+3. **Skill feedback** — the `/ralph` skill generates prd.json with static
+   heuristics, never learning from execution outcomes
+
+Run history (`internal/costs/`) provides quantitative data. Vector memory
+(`internal/memory/`) provides qualitative data. This phase connects them.
 
 ### What to Build
 
-#### 5a. Post-Run Analysis
+#### 5a. Post-Run Synthesis
 
-Create `internal/learning/` package:
+Add a post-run analysis step to the existing memory pipeline (extend
+`internal/memory/pipeline.go` — no new package needed):
 
-After a PRD run completes, automatically invoke a fast model to analyze:
+After a PRD run completes, invoke a fast model to analyze the full run
+holistically:
 - Which stories required retries and why?
 - Which stories got stuck and what was the pattern?
 - Which stories were rejected by judge and what was missing?
-- What codebase-specific patterns emerged?
+- What cross-story patterns emerged that individual story embeddings miss?
 
-Output: structured lessons stored in vector DB (`ralph_lessons` collection)
-and in `.ralph/lessons.json` for human review.
+Output: synthesized lessons stored in a new `ralph_lessons` ChromaDB
+collection (high-signal, cross-story insights only — not duplicating what's
+already in `ralph_patterns`, `ralph_errors`, etc.) and persisted to
+`.ralph/lessons.json` for human review.
 
 ```json
 {
@@ -1041,61 +1063,52 @@ and in `.ralph/lessons.json` for human review.
 }
 ```
 
-#### 5b. Dynamic Prompt Augmentation
+**Key design rule: `ralph-prompt.md` stays static and hand-tuned. Lessons
+are NEVER appended to it.** Lessons are injected dynamically at prompt build
+time via the same vector retrieval pipeline — subject to the existing
+`--memory-max-tokens` budget. Lessons gain confidence as confirmed across
+runs. Low-confidence lessons (single occurrence) are injected with lower
+priority.
 
-**Critical design rule: `ralph-prompt.md` stays static and hand-tuned.
-Lessons are NEVER appended to it.** Instead, lessons are injected dynamically
-at prompt build time via the same vector retrieval pipeline as Phase 2.
+**Collection hygiene:** `ralph_lessons` follows the same dedup, decay, and
+cap rules as other collections. Max 100 documents. Dedup at >0.9 cosine
+similarity. Confidence decay of 0.85 per unconfirmed run.
 
-At the start of each iteration, `BuildPrompt()` queries `ralph_lessons`
-collection with the current story's context. Relevant lessons are injected
-into a bounded "Lessons from Previous Runs" section — subject to the same
-`--memory-max-tokens` budget that governs all vector DB context injection.
+#### 5b. Anti-Pattern Detection
 
-Lessons gain confidence as they're confirmed across runs. Low-confidence
-lessons (single occurrence) are injected with lower priority. The retrieval
-budget ensures the lesson section cannot grow unbounded regardless of how
-many lessons accumulate in the vector DB.
+Query `ralph_errors` and `ralph_completions` collections to detect recurring
+failure modes across runs:
+- Same file causing stuck detection repeatedly → flag as **fragile area**
+- Same test failing across stories → flag as **flaky test**
+- Same judge rejection reason → flag as **common oversight**
+- Module-level iteration averages significantly above baseline → flag as
+  **high-friction area**
 
-#### 5c. Anti-Pattern Detection
+**Surface in the TUI:** New section in the Usage tab showing detected
+anti-patterns with occurrence counts and affected stories.
 
-Track recurring failure modes:
-- Same file causing stuck detection repeatedly → flag as "fragile area"
-- Same test failing across stories → flag as "flaky test"
-- Same judge rejection reason → flag as "common oversight"
+**Inject into prompts:** When a story touches files/modules flagged as
+anti-patterns, include a targeted warning in `BuildPrompt()`:
+```
+⚠️ KNOWN ISSUE: internal/api/handler.go has caused stuck detection in 3
+of the last 5 stories that modified it. Common root cause: test database
+not running. Ensure test DB is available before running integration tests.
+```
 
-Surface these in the TUI (new section in costs/analytics tab) and
-automatically inject relevant anti-patterns into prompts for related stories.
+Anti-pattern data is derived from existing collections — no new embedding
+needed, just aggregation queries.
 
-#### 5d. Prompt Refinement (Not Growth)
-
-After N runs (configurable, default 5), offer to generate a **refined**
-`ralph-prompt.md`. This is NOT about appending lessons — it's about
-tightening the base prompt:
-- Remove instructions that are redundant with learned behaviour
-- Sharpen instructions that aren't producing good results
-- Simplify wording where the agent consistently understands intent
-
-The prompt should get *sharper and shorter* over time, not longer. Lessons
-stay in the vector DB where they're retrieved dynamically. The base prompt
-is the stable core.
-
-This is always human-reviewed — ralph suggests a diff, the user approves
-or rejects. The current prompt is backed up to
-`.ralph/archive/ralph-prompt-{date}.md` before any changes.
-
-#### 5e. Skill Feedback Loop
+#### 5c. Skill Feedback Loop
 
 The `/ralph` skill (`skills/ralph/SKILL.md`) generates prd.json files that
 ralph then executes. Currently, the skill has no awareness of what works
 well in practice — it uses static heuristics for story sizing, ordering,
-and acceptance criteria. This creates a broken feedback loop: ralph learns
-from execution, but the skill that creates the *input* never improves.
+and acceptance criteria.
 
 **Close the loop:**
 
-After post-run analysis (5a), extract lessons specifically relevant to PRD
-quality and store them in a `ralph_prd_lessons` vector DB collection:
+After post-run synthesis (5a), extract lessons specifically relevant to PRD
+quality and store them in a `ralph_prd_lessons` ChromaDB collection:
 
 - **Story sizing lessons**: "Stories touching `internal/api/` fail when they
   mix schema changes with endpoint logic — split by concern, not file count"
@@ -1109,10 +1122,9 @@ quality and store them in a `ralph_prd_lessons` vector DB collection:
 **Skill integration:**
 
 The skill itself (`SKILL.md`) stays static — same principle as
-`ralph-prompt.md`. When the skill runs, it queries `ralph_prd_lessons` for
-the current project and injects relevant lessons as additional constraints
-before generating the PRD. The skill's output gets shaped by learned lessons
-without the skill template growing.
+`ralph-prompt.md`. When the skill runs, it reads `.ralph/lessons.json`
+(or queries `ralph_prd_lessons` if ChromaDB is available) and injects
+relevant lessons as additional constraints before generating the PRD.
 
 **Example injection into skill context:**
 ```
@@ -1126,131 +1138,142 @@ without the skill template growing.
   (confidence: 0.75, confirmed 2 times)
 ```
 
+**Collection hygiene:** `ralph_prd_lessons` max 50 documents. Same dedup
+and decay rules. These lessons are inherently slower to accumulate (one
+batch per PRD run) so a smaller cap is appropriate.
+
 ### Acceptance Criteria
 
-- [ ] Post-run analysis generates structured lessons automatically
-- [ ] Lessons are embedded in vector DB and persisted in JSON
-- [ ] Relevant lessons are injected into prompts for new stories
+- [ ] Post-run synthesis generates cross-story lessons automatically after PRD completion
+- [ ] Lessons are stored in `ralph_lessons` collection and `.ralph/lessons.json`
+- [ ] Relevant lessons are injected into prompts for new stories via existing retrieval pipeline
 - [ ] Confidence scoring tracks lesson reliability across runs
-- [ ] Anti-patterns are detected and surfaced in TUI
-- [ ] Prompt refinement suggestions make the prompt shorter/sharper, not longer
-- [ ] Base prompt is backed up before any refinement changes
+- [ ] Anti-patterns are detected by aggregating `ralph_errors` and surfaced in TUI Usage tab
+- [ ] Anti-pattern warnings are injected into prompts for stories touching flagged areas
 - [ ] PRD-quality lessons are extracted and stored in `ralph_prd_lessons` collection
-- [ ] `/ralph` skill queries learned lessons before generating prd.json
+- [ ] `/ralph` skill reads learned lessons before generating prd.json
 - [ ] Generated PRDs reflect learned sizing, ordering, and criteria patterns
 
 ### Estimated Scope
 
-~600-800 lines of Go code. One new analysis prompt template. Modifications
-to runner, TUI, and skill invocation pipeline.
+~500-700 lines of Go code. One new analysis prompt template. Extends
+existing memory pipeline. Modifications to runner (prompt injection), TUI
+(anti-pattern display), and skill invocation. Two new ChromaDB collections
+(`ralph_lessons`, `ralph_prd_lessons`).
 
 ---
 
-## Phase 6: Multi-Model Orchestration
+## Phase 6: Multi-Model Orchestration (Revised)
 
-**Impact: Medium | Complexity: Low | Dependencies: Phase 3 (cost tracking to measure savings), Phase 4 (agent roles to assign models)**
+**Impact: Medium | Complexity: Low | Dependencies: Phase 4 (agent roles — already complete)**
+
+> **Revision note (2026-03-19):** Original framing was cost optimization
+> ("target: 30-50% reduction"). The user is on Claude Max subscription, so
+> per-token cost is irrelevant. Reframed as speed + quality allocation:
+> Opus for planning/debugging (quality), Sonnet for implementation (speed),
+> Haiku for utility tasks (speed). Also note that multi-model is partially
+> in place already — judge uses Gemini via `internal/exec/gemini.go`. The
+> complexity heuristic (6b original) has been dropped — just map roles to
+> tiers directly. Simpler, easier to reason about, and avoidable if it
+> doesn't measurably help.
 
 ### Goal
 
-Use the right model for each task — expensive models for complex work,
-fast/cheap models for mechanical tasks. Reduce cost without sacrificing
-quality.
+Use the right model for each agent role — high-quality models for planning
+and debugging, fast models for implementation and utility tasks. Optimize
+for speed and output quality, not cost.
 
 ### Context for Builder
 
 Currently, Claude is invoked via `internal/runner/runner.go` which calls the
-`claude` CLI. Gemini is invoked via `internal/exec/gemini.go` for judge and
-autofix. The model is not configurable per-invocation.
+`claude` CLI. The model is not configurable per-invocation — all Claude
+calls use the same default model. Gemini is already used for judge and
+autofix via `internal/exec/gemini.go`, so multi-model is partially in place.
+
+The roles system (`internal/roles/roles.go`) already defines `AgentConfig`
+per role with `Model string` field — it just isn't wired through to the
+CLI invocation yet.
 
 ### What to Build
 
-#### 6a. Model Configuration
+#### 6a. Role-to-Model Mapping
 
-Extend `internal/config/` and `internal/roles/`:
+Extend `internal/roles/roles.go` default configs:
 
-```go
-type ModelTier string
+| Role | Default Model | Rationale |
+|------|--------------|-----------|
+| Architect | `opus` | Planning benefits from deeper reasoning |
+| Implementer | `sonnet` | Fast execution of a known plan |
+| Debugger | `opus` | Root cause analysis needs depth |
+| Reviewer | `sonnet` | Mechanical lens-based review |
 
-const (
-    TierHigh   ModelTier = "high"   // Opus — complex stories, architecture
-    TierMedium ModelTier = "medium" // Sonnet — standard implementation
-    TierFast   ModelTier = "fast"   // Haiku — mechanical tasks, analysis
-)
+Add to `internal/config/`:
+- `--model <name>` — override model for all roles (existing behavior)
+- `--architect-model <name>` — override for architect only
+- `--implementer-model <name>` — override for implementer only
 
-// Default mapping (configurable via CLI flags)
-var DefaultModels = map[ModelTier]string{
-    TierHigh:   "opus",
-    TierMedium: "sonnet",
-    TierFast:   "haiku",
-}
-```
+#### 6b. Fast Model for Utility Tasks
 
-#### 6b. Automatic Tier Assignment
-
-Assign model tiers based on:
-- **Agent role**: Architect → High, Implementer → Medium, Debugger → High
-- **Story complexity heuristic**: description length × acceptance criteria
-  count × dependency depth
-- **Override**: `--model-tier high` forces all invocations to use the high tier
-- Simple stories (short description, few criteria, no deps) → Medium tier
-- FIX-stories → Medium tier (scoped, mechanical)
-
-#### 6c. Fast Model for Utility Tasks
-
-Use the fast tier (Haiku-class) for:
+Use Haiku-class models for tasks that don't need full Claude:
 - DAG analysis (`internal/dag/`)
-- Stuck detection analysis
-- Memory retrieval re-ranking
-- Post-run lesson extraction
-- Commit message generation
+- Post-run lesson extraction (Phase 5)
 - Plan validation (Phase 4)
 
-These are currently using full Claude which is overkill.
+DAG analysis currently runs full Claude CLI to analyze story dependencies.
+This is a structured output task (JSON array) that Haiku handles well.
 
-#### 6d. Runner Integration
+#### 6c. Runner Integration
 
 Modify `internal/runner/runner.go`:
-- Accept model parameter: `RunClaude(ctx, opts RunOptions)` where RunOptions
-  includes `Model string`
-- Pass `--model` flag to the `claude` CLI invocation
-- Track model used per iteration in cost tracking (Phase 3)
+- `RunClaude()` already accepts options — add `Model string` to the options
+- Pass `--model` flag to the `claude` CLI invocation when set
+- Track model used per iteration in usage tracking (Phase 3)
+- The `AgentConfig.Model` field in roles already exists — wire it through
 
 ### Acceptance Criteria
 
-- [ ] Model tier is configurable per agent role
-- [ ] Automatic complexity-based tier assignment works correctly
-- [ ] Utility tasks (DAG, stuck analysis, etc.) use fast tier
-- [ ] Cost savings are measurable via Phase 3 tracking (target: 30-50% reduction)
+- [ ] Model is configurable per agent role via roles.go defaults
+- [ ] `--model`, `--architect-model`, `--implementer-model` CLI flags work
+- [ ] Utility tasks (DAG analysis, plan validation) use fast tier
+- [ ] Model used is tracked per iteration in usage data
 - [ ] Quality does not regress (judge pass rate stays stable or improves)
-- [ ] `--model-tier` override works for forcing a specific tier
+- [ ] Speed improvement is measurable for implementation iterations
 
 ### Estimated Scope
 
-~300-400 lines of Go code. Modifications to runner, config, roles, dag,
-and utility invocation sites.
+~200-300 lines of Go code. Modifications to runner, config, and roles.
+Straightforward wiring — the role system already has the Model field.
 
 ---
 
-## Phase 7: MCP Tool Server
+## Phase 7: MCP Tool Server (Revised — Scoped Down)
 
-**Impact: Medium-High | Complexity: Medium | Dependencies: Phase 2 (vector memory to expose), Phase 1 (story state to expose)**
+**Impact: Medium | Complexity: Medium | Dependencies: Phase 2 (vector memory — already complete), Phase 1 (story state — already complete)**
+
+> **Revision note (2026-03-19):** With 1M context, `BuildPrompt()` already
+> injects memory, story state, PRD context, and events effectively. The
+> original justification — letting agents pull context on-demand because
+> context was scarce — no longer applies. This revision scopes MCP to the
+> capabilities that static prompt injection **cannot** provide: real-time
+> sibling status, blocker signaling, and live pattern reporting. Tools like
+> `ralph_query_memory` and `ralph_get_story_plan` are redundant with what
+> `BuildPrompt()` already injects and have been cut.
 
 ### Goal
 
-Create a bidirectional communication channel between ralph and its child
-Claude instances. Instead of fire-and-forget, agents can query ralph for
-memory, check sibling story status, and coordinate.
+Enable real-time coordination between ralph and its child Claude instances
+during parallel execution. Agents can check live sibling status, signal
+blockers, and push pattern discoveries without waiting for story completion.
 
 ### Context for Builder
 
 MCP (Model Context Protocol) allows Claude Code to connect to external tool
-servers that provide additional capabilities. Claude Code supports MCP servers
-via its configuration. If ralph runs an MCP server, each Claude instance
-launched by ralph can be configured to connect to it.
+servers. Claude Code supports MCP servers via its configuration or CLI flags.
+If ralph runs an MCP server, each Claude instance can connect to it.
 
 Currently, Claude instances are launched by `internal/runner/runner.go` via
-the `claude` CLI with `--output-format stream-json --verbose`. MCP servers
-can be configured via Claude Code's settings or CLI flags.
+the `claude` CLI. All context is injected at prompt build time — agents
+have no way to check what happened *after* their prompt was assembled.
 
 ### What to Build
 
@@ -1258,29 +1281,25 @@ can be configured via Claude Code's settings or CLI flags.
 
 Create `internal/mcp/` package implementing an MCP tool server:
 
-**Tools to expose:**
+**Tools to expose (focused set — 3 tools, not 7):**
 
 ```
-ralph_query_memory(query: string, collection: string, top_k: int)
-  → Returns semantically relevant memories from the vector DB
+ralph_get_sibling_status(story_id?: string)
+  → Returns live status of all stories (or a specific one): status,
+    files touched, current iteration, completion state. This is the
+    key capability that prompt injection can't provide — the status
+    may have changed since the prompt was built.
 
-ralph_get_story_status(story_id: string)
-  → Returns current status, files touched, completion state of any story
-
-ralph_get_story_plan(story_id: string)
-  → Returns the architect's plan for a story
-
-ralph_list_stories()
-  → Returns all stories with their current status
+ralph_report_blocker(description: string, blocked_by_story: string)
+  → Agent signals it's blocked on another story's output. Coordinator
+    pauses the worker and resumes when the blocking story completes.
+    Enables dynamic dependency resolution beyond the static DAG.
 
 ralph_report_pattern(pattern: string, category: string)
-  → Agent proactively reports a discovered pattern (embedded immediately)
-
-ralph_report_blocker(description: string, related_story: string)
-  → Agent signals it's blocked on another story's output
-
-ralph_get_codebase_map(module: string)
-  → Returns knowledge graph data for a module (Phase 9 prerequisite)
+  → Agent proactively pushes a discovered pattern for immediate
+    embedding into the vector DB. Currently patterns are only
+    extracted on story *completion* — this enables real-time sharing
+    between parallel workers mid-execution.
 ```
 
 #### 7b. Server Lifecycle
@@ -1289,18 +1308,21 @@ ralph_get_codebase_map(module: string)
 - Port is passed to each Claude invocation via MCP configuration
 - Server shuts down cleanly on ralph exit
 - Server handles concurrent requests (multiple parallel workers)
+- Use a Go MCP SDK (e.g., `github.com/mark3labs/mcp-go`) to avoid
+  implementing the protocol from scratch
 
 #### 7c. Claude Integration
 
 Modify `internal/runner/runner.go`:
-- Add MCP server configuration to Claude CLI invocation
-- This likely means writing a temporary `.claude/settings.json` or using
-  CLI flags for MCP server connection
+- Write a temporary MCP config file per worker that points to ralph's
+  MCP server, or pass via `--mcp-config` CLI flag
+- MCP config includes the server's localhost URL and available tools
 
-Modify prompt templates:
-- Inform agents about available MCP tools
-- Encourage use of `ralph_query_memory` for context retrieval
-- Encourage use of `ralph_report_pattern` for knowledge sharing
+Modify prompt templates (minimal additions):
+- Inform agents that `ralph_get_sibling_status` is available for checking
+  if a dependency has completed mid-execution
+- Inform agents that `ralph_report_blocker` is available if they discover
+  an unexpected dependency at runtime
 
 #### 7d. Blocker Coordination
 
@@ -1309,40 +1331,58 @@ When an agent reports a blocker via `ralph_report_blocker`:
 - If so, the blocked worker is paused (not killed) and resumed when the
   blocking story completes
 - This enables finer-grained parallel coordination than the DAG alone
+- If the blocking story is already complete, return immediately with its
+  status so the agent can proceed
 
 ### Acceptance Criteria
 
-- [ ] MCP server starts and stops with ralph lifecycle
-- [ ] Claude instances can query vector memory via MCP tools
-- [ ] Story status and plan retrieval works across parallel workers
+- [ ] MCP server starts and stops cleanly with ralph lifecycle
+- [ ] Claude instances can check live sibling story status via MCP
+- [ ] Blocker coordination pauses/resumes workers dynamically
 - [ ] Pattern reporting from agents flows into vector DB in real-time
-- [ ] Blocker coordination enables dynamic dependency resolution
 - [ ] MCP server handles concurrent requests from parallel workers safely
+- [ ] Agents use MCP tools appropriately (not excessively)
 
 ### Estimated Scope
 
-~800-1000 lines of Go code. MCP protocol implementation (or use an existing
-Go MCP SDK). Modifications to runner and coordinator.
+~500-700 lines of Go code. Use an existing Go MCP SDK for protocol handling.
+Modifications to runner (MCP config injection) and coordinator (blocker
+handling).
 
 ---
 
-## Phase 8: Codebase Knowledge Graph
+## Phase 8: Codebase Knowledge Graph (Revised — Evidence-Gated)
 
-**Impact: Medium | Complexity: Medium-High | Dependencies: Phase 2 (vector DB as storage layer), Phase 4 (architect agent as primary consumer)**
+**Impact: Medium | Complexity: Medium-High | Dependencies: Phase 7 (MCP for exposing graph queries)**
+
+> **Note:** Phase 7.5 (Activate `ralph_codebase`) was added on 2026-03-19
+> but removed the same day after audit confirmed that `ralph_codebase` is
+> **already fully operational** — `ScanCodebase()` in `internal/memory/scanner.go`
+> runs on startup, parses Go AST, and upserts into the collection.
+> `RetrieveContext()` queries all 5 collections including codebase. No work needed.
+
+> **Revision note (2026-03-19):** The `ralph_codebase` collection provides
+> semantic search over codebase entities. The knowledge graph adds
+> **structural relationships** (imports, calls, implements) that vector
+> search can't represent. This is genuinely new capability — but it's also
+> significant complexity. Gate this phase on evidence: if Phase 7.5's
+> semantic codebase context measurably improves architect plans, the
+> knowledge graph may not be needed. Build it only if architect agents are
+> still missing structural dependencies.
 
 ### Goal
 
-Build a lightweight knowledge graph of the codebase that captures structural
-relationships — not just semantic similarity. This enables the architect agent
-to understand ripple effects and plan modifications with awareness of the
-dependency chain.
+Build a lightweight structural graph of the codebase that captures
+relationships vector search can't represent — import chains, call graphs,
+interface implementations, and reverse dependencies. The architect agent
+uses this for impact analysis.
 
 ### Context for Builder
 
-Currently, the architect agent (Phase 4) reads the codebase directly via
-Claude Code's file tools. This works but is expensive (token-wise) and the
-agent may miss non-obvious relationships. A knowledge graph provides a
-pre-computed structural map.
+After Phase 7.5, `ralph_codebase` provides semantic codebase context. But
+it can't answer structural queries like "what depends on this interface?"
+or "if I change this function's signature, what breaks?" The knowledge graph
+fills this gap.
 
 ### What to Build
 
@@ -1351,17 +1391,14 @@ pre-computed structural map.
 Store in SQLite (`.ralph/knowledge.db`):
 
 ```sql
--- Nodes
 CREATE TABLE entities (
     id TEXT PRIMARY KEY,
     kind TEXT,        -- 'package', 'file', 'function', 'type', 'interface'
     name TEXT,
     file_path TEXT,
-    summary TEXT,     -- one-line AI-generated summary
     signature TEXT    -- for functions/types
 );
 
--- Edges
 CREATE TABLE relationships (
     source_id TEXT,
     target_id TEXT,
@@ -1372,164 +1409,193 @@ CREATE TABLE relationships (
 );
 ```
 
+Note: AI-generated summaries are already in `ralph_codebase` collection.
+The graph stores only structural data — no duplication with ChromaDB.
+
 #### 8b. Graph Builder
 
 Create `internal/knowledge/` package:
 
-- **Static analysis pass**: Parse Go AST to extract packages, files, functions,
-  types, imports, and call relationships. This is deterministic and fast.
-- **AI enrichment pass**: Use a fast model to generate one-line summaries for
-  each entity. This is expensive but only needed on first run + incremental
-  updates.
+- **Static analysis pass**: Parse Go AST to extract packages, files,
+  functions, types, imports, and call relationships. Deterministic and fast.
 - **Story tracking**: When a story completes, add `modified_by_story` edges
   from the story to all files it touched.
-
-Run the builder:
-- On first `ralph` launch for a project (full build)
-- Incrementally after each story completion (only re-analyze changed files)
-- Via `ralph knowledge rebuild` for manual refresh
+- Run on first launch (full build), incrementally after story completion,
+  and via `ralph knowledge rebuild` for manual refresh.
 
 #### 8c. Query Interface
 
-Expose via MCP (Phase 7) and use in prompt building:
+Expose via MCP (Phase 7) as an additional tool:
 
 ```
-ralph_get_codebase_map(module: string) →
-  Returns the module's entities, their relationships, and recent story
-  modifications. The architect sees: "This module has 5 functions, imports
-  3 other modules, was last modified by STORY-2, and implements interface X."
-
-ralph_get_impact_analysis(files: []string) →
-  Given a set of files to modify, returns all entities that depend on them
-  (reverse dependency walk). Helps the architect anticipate ripple effects.
+ralph_get_impact_analysis(files: []string)
+  → Given files to modify, returns all entities that depend on them
+    (reverse dependency walk). Helps architect anticipate ripple effects.
 ```
 
-#### 8d. Graph-Enhanced Retrieval
-
-Combine with vector search (Phase 2):
-- When retrieving memories for a story, also pull in knowledge graph context
-  for the relevant modules
-- This gives the agent both semantic context (similar past work) and
-  structural context (what this code connects to)
+Also inject structural context into `BuildPrompt()` for architect role:
+compact summary of the target module's imports, dependents, and interfaces.
 
 ### Acceptance Criteria
 
 - [ ] Knowledge graph is built from Go AST analysis on first run
-- [ ] AI-generated summaries are stored for all entities
 - [ ] Graph updates incrementally after story completions
-- [ ] MCP tools expose graph queries to agents
-- [ ] Architect agent uses graph for impact analysis in plans
-- [ ] Graph + vector retrieval produces richer context than either alone
+- [ ] Impact analysis query returns reverse dependencies correctly
+- [ ] Architect agent receives structural context in prompts
+- [ ] Architect plans show measurably better awareness of ripple effects
 
 ### Estimated Scope
 
-~1000-1200 lines of Go code. Go AST parsing, SQLite schema, MCP tool
-additions. New prompt sections for architect.
+~800-1000 lines of Go code. Go AST parsing, SQLite schema, MCP tool
+addition. Smaller than original estimate because AI summaries are handled
+by `ralph_codebase` collection, not the graph.
 
 ---
 
-## Phase 9: Speculative Parallel Execution
+## Phase 9: Improved DAG Accuracy (Revised — Replaces Speculative Parallel)
 
-**Impact: Medium | Complexity: High | Dependencies: Robust parallel infrastructure (existing), Phase 1 (checkpoint for rollback)**
+**Impact: Medium | Complexity: Low-Medium | Dependencies: Phase 8 (knowledge graph for structural awareness, optional)**
+
+> **Revision note (2026-03-19):** The original Phase 9 (Speculative Parallel
+> Execution) has been dropped. With 1M context enabling bigger stories, PRDs
+> have fewer, larger stories — less parallelism opportunity and less value
+> from speculation. The rebase-on-conflict machinery is complex and
+> error-prone with jj workspaces. Instead, this phase focuses on the root
+> cause: the DAG analysis over-specifies dependencies, leaving parallelism
+> on the table. Better DAG accuracy unlocks more parallelism without
+> speculation.
 
 ### Goal
 
-Increase throughput on large PRDs by executing stories with soft dependencies
-in parallel, speculatively, and handling conflicts on merge.
-
-### Context for Builder
-
-Currently, `internal/dag/dag.go` builds a strict dependency graph — a story
-only executes when ALL its dependencies are complete. The DAG is built by
-asking Claude to analyze story relationships, which tends to be conservative
-(over-specifying dependencies).
-
-`internal/coordinator/coordinator.go` already handles merge conflicts via
-Claude-assisted resolution. This infrastructure can be extended.
+Improve DAG dependency analysis accuracy so fewer false dependencies block
+parallel execution. The current Claude-based analysis tends to be
+conservative — stories that could run in parallel are serialized due to
+over-specified dependencies.
 
 ### What to Build
 
-#### 9a. Dependency Classification
+#### 9a. Smarter DAG Analysis Prompt
 
-Modify DAG analysis to classify dependencies:
+Improve the DAG analysis prompt in `internal/dag/dag.go`:
+- Provide structural codebase context (from Phase 8 knowledge graph or
+  Phase 7.5 codebase collection) so the analysis has actual import/dependency
+  information rather than guessing
+- Explicitly ask the model to distinguish "touches the same module" from
+  "actually depends on the other story's output"
+- Include examples of over-specification and correct classification
 
-```json
-{
-  "id": "STORY-5",
-  "hard_depends_on": ["STORY-1"],
-  "soft_depends_on": ["STORY-3"],
-  "reason": "STORY-3 modifies the same config file but changes are independent"
-}
-```
+#### 9b. DAG Validation with Codebase Awareness
 
-- **Hard dependency**: Must complete first (shared interface, data model change)
-- **Soft dependency**: Likely to touch related code but could work independently
+After DAG generation, validate dependencies against actual file-level
+relationships:
+- If story A and story B are marked as dependent but touch completely
+  different files and packages, flag as likely over-specified
+- Optionally auto-remove clearly false dependencies (with logging)
 
-#### 9b. Speculative Scheduler
+#### 9c. DAG Quality Tracking
 
-Modify `internal/coordinator/coordinator.go`:
-
-- Stories with only soft dependencies on in-progress stories can be scheduled
-  speculatively
-- Track speculative vs confirmed execution status
-- On merge: if speculative story conflicts with its soft dependency, mark
-  it for re-verification (re-run implementer with merged state)
-- Budget: limit speculative slots to `workers / 2` to avoid waste
-
-#### 9c. Conflict Recovery
-
-When a speculatively-executed story conflicts:
-1. Rebase the speculative work onto the now-completed dependency
-2. If conflicts are minor (auto-resolvable), keep the work
-3. If conflicts are major, re-run the implementer phase only (not architect)
-4. Track speculative success rate in run history (Phase 3)
-
-#### 9d. TUI Integration
-
-Show speculative status in the stories panel:
-- `⚡ STORY-5 (speculative)` — running ahead of soft dependency
-- `🔄 STORY-5 (rebasing)` — soft dependency completed, merging
-- Track and display speculative hit rate in analytics
+Track DAG accuracy in run history:
+- How many stories were serialized vs could have been parallel?
+- Did any merge conflicts occur between stories marked as independent?
+- Feed DAG quality metrics into Phase 5 learning loop
 
 ### Acceptance Criteria
 
-- [ ] DAG analysis distinguishes hard vs soft dependencies
-- [ ] Speculative execution launches stories with only soft dependencies pending
-- [ ] Conflict recovery handles rebase/re-verification automatically
-- [ ] Speculative execution improves wall-clock time for 10+ story PRDs
-- [ ] Speculative success rate is tracked and displayed
-- [ ] No correctness regressions — hard dependencies are still strictly enforced
+- [ ] DAG analysis produces fewer false dependencies
+- [ ] Parallel utilization improves (more stories scheduled concurrently)
+- [ ] No increase in merge conflicts from relaxed dependencies
+- [ ] DAG quality metrics tracked in run history
+- [ ] Analysis uses codebase context when available (Phase 7.5/8)
 
 ### Estimated Scope
 
-~600-800 lines of Go code. Modifications to dag, coordinator, worker, and TUI.
+~200-300 lines of Go code. Prompt improvements, validation logic, metrics
+tracking.
 
 ---
 
-## Phase 10: Web Dashboard (Optional / Stretch)
+## Phase 10: Auto-Splitting Stuck Stories (New — Replaces Web Dashboard)
 
-**Impact: Low-Medium | Complexity: Medium | Dependencies: Phase 3 (cost data), Phase 5 (learning data)**
+**Impact: Medium-High | Complexity: Medium | Dependencies: Phase 5 (anti-pattern detection), Phase 4 (architect role)**
+
+> **Added 2026-03-19.** The original Phase 10 (Web Dashboard) has been moved
+> to a stretch goal. This phase addresses a real pain point: stories that
+> are stuck after 3+ iterations waste significant execution time. Rather
+> than continuing to throw iterations at a stuck story, ralph should
+> automatically propose splitting it into smaller sub-stories.
 
 ### Goal
 
-A localhost web UI for historical analytics, run comparison, and team
-visibility. This is a nice-to-have that becomes valuable if ralph is
-shared with the team.
+When a story is repeatedly stuck or failing, automatically generate a split
+proposal — smaller sub-stories that break the stuck story into more tractable
+pieces — and re-queue them.
 
 ### What to Build
 
-- Lightweight Go HTTP server (stdlib `net/http`) serving a single-page app
-- Websocket for real-time updates during active runs
-- Pages: run history, cost trends, story success rates, learning insights,
-  DAG visualization (using D3.js or similar)
-- Launch via `ralph dashboard` subcommand
-- Read from `.ralph/run-history.json`, `.ralph/lessons.json`, cost data
+#### 10a. Stuck Story Analysis
 
-### Note
+When a story hits the stuck threshold (3+ iterations with no progress, or
+2+ judge rejections on different criteria):
+- Analyze the story's state.json, plan.md, errors_encountered, and judge
+  feedback to identify which aspects are causing difficulty
+- Determine if the story is "too big" (multiple unrelated concerns) or
+  "too hard" (single concern but complex)
 
-This is explicitly the lowest priority. The TUI with cost tracking (Phase 3)
-covers 90% of the need. Only pursue this if ralph goes to the team and they
-want a shared view.
+#### 10b. Split Proposal Generation
+
+For "too big" stories:
+- Use the architect role to generate 2-3 sub-stories that decompose the
+  original story by concern
+- Each sub-story inherits relevant acceptance criteria from the parent
+- Dependencies between sub-stories are declared
+- The parent story is marked as "split" (not failed)
+
+For "too hard" stories:
+- Generate a targeted FIX-story that addresses the specific blocker
+- Re-queue the original story to run after the FIX-story completes
+
+#### 10c. Re-Queuing
+
+- Sub-stories are injected into the DAG dynamically
+- In parallel mode, the coordinator adds them to the pending queue
+- In serial mode, they're inserted at the current position
+- The original story's completed subtasks are preserved — sub-stories
+  only cover what remains
+
+#### 10d. TUI Integration
+
+Show split status in stories panel:
+```
+✂ P5-003: Implement auth middleware  → split into 3 sub-stories
+  ├─ P5-003a: Auth middleware core    ⠋ running
+  ├─ P5-003b: Auth error handling     ⏳ queued (depends on P5-003a)
+  └─ P5-003c: Auth test coverage      ⏳ queued (depends on P5-003a)
+```
+
+### Acceptance Criteria
+
+- [ ] Stuck stories are detected after configurable threshold
+- [ ] Split proposals are generated automatically via architect role
+- [ ] Sub-stories are injected into the DAG with correct dependencies
+- [ ] Parent story state (completed subtasks, files touched) is preserved
+- [ ] TUI shows split status and sub-story progress
+- [ ] Split reduces overall failure rate (tracked in run history)
+
+### Estimated Scope
+
+~400-600 lines of Go code. Modifications to coordinator, dag, storystate,
+and TUI.
+
+---
+
+## Stretch: Web Dashboard (Deferred)
+
+**Impact: Low-Medium | Complexity: Medium | Dependencies: Phase 3 (cost data), Phase 5 (learning data)**
+
+A localhost web UI for historical analytics, run comparison, and team
+visibility. The TUI with usage tracking (Phase 3) and the remote status
+page covers 90% of the need. Only pursue this if ralph goes to a team
+and they want a shared view. Not on the critical path.
 
 ---
 
@@ -1538,46 +1604,47 @@ want a shared view.
 ```
 Phase 1 (Story State + Checkpoint) ✅
   │
-  ├──→ Phase 2 (Vector Memory) ✅
+  ├──→ Phase 2 (Vector Memory) ✅  [ralph_codebase collection active]
   │      │
-  │      ├──→ Phase 5 (Learning Loop)
-  │      ├──→ Phase 7 (MCP Server)
+  │      ├──→ Phase 4 (Agent Specialization) ✅
+  │      │
+  │      ├──→ Phase 5 (Learning Loop — revised)
   │      │      │
-  │      │      └──→ Phase 8 (Knowledge Graph)
+  │      │      └──→ Phase 10 (Auto-Split Stuck Stories)
   │      │
-  │      └──→ Phase 4 (Agent Specialization) ✅
-  │
-  ├──→ Phase 9 (Speculative Parallel)
+  │      ├──→ Phase 8 (Knowledge Graph — evidence-gated)
+  │      │      │
+  │      │      └──→ Phase 9 (Improved DAG Accuracy)
+  │      │
+  │      └──→ Phase 7 (MCP Server — scoped)
   │
   Phase 3 (Usage Tracking) ✅
   │
   ├──→ Phase 3.1 (1M Context Recalibration) ✅
   │
-  └──→ Phase 6 (Multi-Model) ← benefits from Phase 3 ✅ + Phase 4 ✅
-                │
-                └──→ Phase 10 (Web Dashboard) ← optional stretch
+  └──→ Phase 6 (Multi-Model — revised) ← benefits from Phase 4 ✅
 ```
 
 ## Recommended Execution Order
 
-| Order | Phase | Est. Effort | Cumulative Value |
-|-------|-------|-------------|------------------|
-| 1st   | Phase 1: Story State + Checkpoint ✅ | ~3-4 days | Foundation for everything |
-| 2nd   | Phase 3: Usage Tracking ✅ | ~2 days | Quick win, high visibility |
-| 3rd   | Phase 2: Vector Memory ✅ | ~4-5 days | Transformative capability |
-| 4th   | Phase 3.1: 1M Context Recalibration ✅ | ~2-3 days | Recalibrate defaults + TUI improvements for bigger stories |
-| 5th   | Phase 4: Agent Specialization ✅ | ~3-4 days | Quality step-change |
-| 6th   | Phase 6: Multi-Model | ~2 days | Cost optimization |
-| 7th   | Phase 5: Learning Loop | ~3-4 days | Compounding returns |
-| 8th   | Phase 7: MCP Server | ~4-5 days | Agent coordination leap |
-| 9th   | Phase 8: Knowledge Graph | ~5-6 days | Structural intelligence |
-| 10th  | Phase 9: Speculative Parallel | ~4-5 days | Throughput optimization |
-| 11th  | Phase 10: Web Dashboard | ~3-4 days | Team visibility (if needed) |
+| Order | Phase | Scope | Cumulative Value |
+|-------|-------|-------|------------------|
+| 1st   | Phase 1: Story State + Checkpoint ✅ | Done | Foundation for everything |
+| 2nd   | Phase 3: Usage Tracking ✅ | Done | Quick win, high visibility |
+| 3rd   | Phase 2: Vector Memory ✅ | Done | Transformative capability |
+| 4th   | Phase 3.1: 1M Context Recalibration ✅ | Done | Recalibrate defaults + TUI improvements |
+| 5th   | Phase 4: Agent Specialization ✅ | Done | Quality step-change |
+| **6th** | **Phase 5: Learning Loop (revised)** | ~8-10 stories | Compounding cross-run improvement (includes confirmation tracking fix) |
+| **7th** | **Phase 6: Multi-Model (simplified)** | ~4-5 stories | Speed + quality allocation per role |
+| **8th** | **Phase 7: MCP Server (scoped)** | ~6-8 stories | Real-time parallel coordination |
+| **9th** | **Phase 8: Knowledge Graph (if needed)** | ~8-10 stories | Structural intelligence — gate on evidence |
+| **10th** | **Phase 9: Improved DAG Accuracy** | ~3-4 stories | Better parallelism without speculation |
+| **11th** | **Phase 10: Auto-Split Stuck Stories** | ~5-7 stories | Reduce wasted iterations on stuck stories |
+| Stretch | Web Dashboard | — | Team visibility (if needed) |
 
-**Total estimated effort: ~34-40 days of focused work (~7-9 days remaining)**
-
-Phase 6 is relatively independent and could be pulled forward if cost is a
-pressing concern.
+Phase 6 is relatively independent and could be reordered. Phase 8 is
+explicitly evidence-gated — only build if `ralph_codebase` semantic context
+isn't sufficient for architect quality.
 
 ---
 
@@ -1586,12 +1653,15 @@ pressing concern.
 After full rollout, ralph should demonstrate:
 
 - **Context efficiency**: Agent prompts contain only relevant context, not
-  everything (measurable via token reduction per iteration)
+  everything (measurable via token reduction per iteration) ✅ (Phases 1-2)
 - **Story success rate**: >90% first-attempt pass rate (up from current baseline)
-- **Cost per story**: 30-50% reduction via multi-model + better context
-- **Crash resilience**: Any interruption recoverable via checkpoint + resume
+- **Speed allocation**: Architect uses Opus, implementer uses Sonnet — right
+  model for each role (replaces cost reduction metric — user is on Claude Max)
+- **Crash resilience**: Any interruption recoverable via checkpoint + resume ✅ (Phase 1)
 - **Cross-run learning**: Measurable improvement in success rate across
-  successive PRD runs on the same codebase
-- **Throughput**: Large PRDs (20+ stories) complete faster via speculative
-  parallel execution
-- **Visibility**: Full cost and performance analytics in TUI
+  successive PRD runs on the same codebase (Phase 5)
+- **Parallel efficiency**: DAG analysis produces fewer false dependencies,
+  enabling more concurrent story execution (Phase 9)
+- **Stuck recovery**: Stuck stories are automatically split rather than
+  wasting iterations (Phase 10)
+- **Visibility**: Full usage and performance analytics in TUI ✅ (Phase 3)

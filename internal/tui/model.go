@@ -1491,6 +1491,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.coord.PreserveWorkerLogs(u.StoryID, u.WorkerID)
 			if u.Passed && u.ChangeID != "" {
 				m.notifyStoryComplete(u.StoryID, m.coord.StoryTitle(u.StoryID))
+				// Confirm retrieved docs that contributed to this successful parallel story
+				if m.confirmTracker != nil && len(u.DocRefs) > 0 {
+					for _, ref := range u.DocRefs {
+						_ = m.confirmTracker.ConfirmDocument(m.ctx, ref.Collection, ref.DocID)
+					}
+					debuglog.Log("memory: confirmed %d doc refs for parallel story %s", len(u.DocRefs), u.StoryID)
+				}
 				cmds = append(cmds, mergeBackCmd(m.ctx, m.coord, u))
 			} else {
 				// Abandon the committed change so it doesn't leave an orphaned

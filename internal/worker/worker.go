@@ -82,6 +82,7 @@ type WorkerUpdate struct {
 	RateLimitInfo *costs.RateLimitInfo // latest rate limit info from Claude CLI
 	StatusText    string               // optional status message for TUI status bar
 	StatusWarn    bool                 // true if status is a warning
+	DocRefs       []memory.DocRef      // retrieved doc refs for confirmation tracking
 }
 
 // shouldRunArchitect determines if the architect agent should run before the implementer.
@@ -287,10 +288,10 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 			return
 		}
 
-		// Validate that the architect produced a plan
+		// Validate that the architect produced a plan (must be >= 50 bytes, consistent with serial mode)
 		plan, _ := storystate.LoadPlan(ws.Dir, w.StoryID)
-		if strings.TrimSpace(plan) == "" {
-			send(WorkerFailed, roles.RoleArchitect, fmt.Errorf("architect produced no plan for %s", w.StoryID), false, "")
+		if len(strings.TrimSpace(plan)) < 50 {
+			send(WorkerFailed, roles.RoleArchitect, fmt.Errorf("architect produced insufficient plan for %s (%d bytes)", w.StoryID, len(plan)), false, "")
 			return
 		}
 	}
@@ -303,7 +304,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	send(WorkerRunning, implRole, nil, false, "")
 
 	implOpts := makeBuildOpts(memoryOpts, implRole)
-	prompt, _, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, implOpts...)
+	prompt, implRetrieval, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, implOpts...)
 	if err != nil {
 		send(WorkerFailed, implRole, fmt.Errorf("build prompt: %w", err), false, "")
 		return
@@ -391,12 +392,23 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 			JudgeResult:   &result,
 			TokenUsage:    claudeUsage,
 			RateLimitInfo: latestRateLimit,
+			DocRefs:       implRetrieval.DocRefs,
 		}
 		return
 	}
 
 	// 7. Send done
-	send(WorkerDone, "", nil, passed, changeID)
+	w.State = WorkerDone
+	updateCh <- WorkerUpdate{
+		WorkerID:      w.ID,
+		StoryID:       w.StoryID,
+		State:         WorkerDone,
+		Passed:        passed,
+		ChangeID:      changeID,
+		TokenUsage:    claudeUsage,
+		RateLimitInfo: latestRateLimit,
+		DocRefs:       implRetrieval.DocRefs,
+	}
 }
 
 // makeBuildOpts creates BuildPromptOpts with the given role, merging with any memory opts.
