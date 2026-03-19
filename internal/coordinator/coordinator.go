@@ -26,6 +26,25 @@ import (
 const maxRetries = 3
 const maxStoryRetries = 1 // retries for stories that ran but didn't pass
 
+// PlanQuality tracks metrics about how well the PRD plan translates to successful builds.
+type PlanQuality struct {
+	FirstPassCount int // stories that passed on first attempt (no retries)
+	RetryCount     int // stories that needed retries before passing
+	FailedCount    int // stories that ultimately failed
+	AutoPassCount  int // stories that were auto-passed after max rejections
+	TotalStories   int // total stories in the run
+}
+
+// Score returns a 0.0-1.0 quality score for the plan.
+// First-pass successes score 1.0, retried successes score 0.5, failures score 0.0.
+func (pq PlanQuality) Score() float64 {
+	if pq.TotalStories == 0 {
+		return 0
+	}
+	points := float64(pq.FirstPassCount) + float64(pq.RetryCount)*0.5
+	return points / float64(pq.TotalStories)
+}
+
 type Coordinator struct {
 	cfg        *config.Config
 	dag        *dag.DAG
@@ -50,6 +69,7 @@ type Coordinator struct {
 	embedder        memory.Embedder           // optional: for semantic memory in workers
 	runCosting      *costs.RunCosting         // optional: for including cost data in checkpoints
 	notifier        *notify.Notifier          // optional: for push notifications
+	firstPass       map[string]bool           // tracks stories that passed on first attempt
 }
 
 func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory) *Coordinator {
@@ -79,6 +99,7 @@ func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory
 		storyRetries: make(map[string]int),
 		stories:      storyMap,
 		prdHash:      prdHash,
+		firstPass:    make(map[string]bool),
 	}
 }
 
@@ -204,6 +225,10 @@ func (c *Coordinator) HandleUpdate(u worker.WorkerUpdate) bool {
 		delete(c.inProgress, u.StoryID)
 		if u.Passed {
 			c.completed[u.StoryID] = true
+			// Track first-pass success: no retries were needed
+			if c.retries[u.StoryID] == 0 && c.storyRetries[u.StoryID] == 0 {
+				c.firstPass[u.StoryID] = true
+			}
 		} else {
 			errMsg := "story did not pass"
 			if u.Err != nil {
@@ -720,6 +745,24 @@ func (c *Coordinator) isBlockedByFailureLocked(storyID string, visited map[strin
 		}
 	}
 	return false, ""
+}
+
+// GetPlanQuality returns plan quality metrics based on the current run state.
+func (c *Coordinator) GetPlanQuality() PlanQuality {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pq := PlanQuality{
+		TotalStories: len(c.stories),
+		FailedCount:  len(c.failed),
+	}
+	for id := range c.completed {
+		if c.firstPass[id] {
+			pq.FirstPassCount++
+		} else {
+			pq.RetryCount++
+		}
+	}
+	return pq
 }
 
 // FormatWorkerStates returns a display string of worker states.

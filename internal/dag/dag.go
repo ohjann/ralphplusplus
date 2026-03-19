@@ -26,6 +26,23 @@ type dagEntry struct {
 	DependsOn []string `json:"dependsOn"`
 }
 
+// FromPRD constructs a DAG directly from story DependsOn fields, skipping Claude analysis.
+func FromPRD(stories []prd.UserStory) *DAG {
+	d := &DAG{Nodes: make(map[string]*StoryNode)}
+	for _, s := range stories {
+		deps := s.DependsOn
+		if deps == nil {
+			deps = []string{}
+		}
+		d.Nodes[s.ID] = &StoryNode{
+			StoryID:   s.ID,
+			DependsOn: deps,
+			Priority:  s.Priority,
+		}
+	}
+	return d
+}
+
 // Analyze uses Claude Code CLI to explore the codebase and determine story dependencies.
 func Analyze(ctx context.Context, projectDir string, stories []prd.UserStory) (*DAG, error) {
 	storiesJSON, err := json.Marshal(stories)

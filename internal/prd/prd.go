@@ -15,6 +15,8 @@ type UserStory struct {
 	Priority           int      `json:"priority"`
 	Passes             bool     `json:"passes"`
 	Notes              string   `json:"notes"`
+	DependsOn          []string `json:"dependsOn,omitempty"`
+	Approach           string   `json:"approach,omitempty"`
 }
 
 type PRD struct {
@@ -22,7 +24,27 @@ type PRD struct {
 	BranchName  string      `json:"branchName"`
 	Description string      `json:"description"`
 	Repos       []string    `json:"repos,omitempty"`
+	Constraints []string    `json:"constraints,omitempty"`
 	UserStories []UserStory `json:"userStories"`
+}
+
+// HasExplicitDependencies returns true if any story in the PRD has a non-empty DependsOn field.
+func (p *PRD) HasExplicitDependencies() bool {
+	for _, s := range p.UserStories {
+		if len(s.DependsOn) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// BuildDAGEdges constructs a dependency map from the stories' DependsOn fields.
+func (p *PRD) BuildDAGEdges() map[string][]string {
+	edges := make(map[string][]string)
+	for _, s := range p.UserStories {
+		edges[s.ID] = s.DependsOn
+	}
+	return edges
 }
 
 func Load(path string) (*PRD, error) {

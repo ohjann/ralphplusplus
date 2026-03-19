@@ -129,6 +129,9 @@ func buildPRDContext(p *prd.PRD, storyID string, story *prd.UserStory) string {
 		for _, ac := range story.AcceptanceCriteria {
 			b.WriteString(fmt.Sprintf("- %s\n", ac))
 		}
+		if story.Approach != "" {
+			b.WriteString(fmt.Sprintf("\n### Implementation Approach\n%s\n", story.Approach))
+		}
 		if story.Notes != "" {
 			b.WriteString(fmt.Sprintf("\n**Notes:** %s\n", story.Notes))
 		}
@@ -139,6 +142,14 @@ func buildPRDContext(p *prd.PRD, storyID string, story *prd.UserStory) string {
 	b.WriteString(fmt.Sprintf("- **Project:** %s\n", p.Project))
 	b.WriteString(fmt.Sprintf("- **Branch:** %s\n", p.BranchName))
 	b.WriteString(fmt.Sprintf("- **Progress:** %d/%d stories complete\n", p.CompletedCount(), p.TotalCount()))
+
+	// Constraints section
+	if len(p.Constraints) > 0 {
+		b.WriteString("\n### Project Constraints\n")
+		for _, c := range p.Constraints {
+			b.WriteString(fmt.Sprintf("- %s\n", c))
+		}
+	}
 
 	// OTHER STORIES section
 	b.WriteString("\n\n---\n## OTHER STORIES\n")

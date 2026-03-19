@@ -22,6 +22,7 @@ Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 - **Push notifications** — ntfy.sh notifications on story complete/fail/stuck and run done; zero accounts needed
 - **Remote status page** — mobile-friendly HTTP status page with SSE live updates; JSON API at `/api/status`
 - **Stuck detection + hint injection** — detects tool-call loops, shows a status bar with notification, lets you inject a hint for the next iteration, then inserts a targeted fix story
+- **Plan quality scoring** — tracks first-pass success rate vs retries vs failures; displayed in the TUI header at run completion
 - **Automatic archiving** — previous runs archived to `.ralph/archive/` when you start a new feature
 
 ## Prerequisites
@@ -95,7 +96,7 @@ When stories are independent, Ralph can run them in parallel:
 ralph --workers 3
 ```
 
-This adds a DAG analysis step where Claude examines the codebase to determine which stories depend on each other, then schedules independent stories across N workers. Each worker runs in an isolated jj workspace.
+If stories have `dependsOn` fields in prd.json, Ralph uses them directly for scheduling. Otherwise, it runs a DAG analysis step where Claude examines the codebase to determine dependencies. Independent stories are scheduled across N workers, each in an isolated jj workspace.
 
 Use `1-9` keys in the TUI to switch between worker output panels.
 
@@ -288,6 +289,9 @@ Then on your phone:
   "project": "MyApp",
   "branchName": "ralph/feature-name",
   "description": "Short description of the work",
+  "constraints": [
+    "Use existing Drizzle ORM patterns for all migrations"
+  ],
   "userStories": [
     {
       "id": "AB-001",
@@ -300,11 +304,35 @@ Then on your phone:
       ],
       "priority": 1,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "dependsOn": [],
+      "approach": "Add column to existing tasks schema in db/schema.ts"
+    },
+    {
+      "id": "AB-002",
+      "title": "Display status badge on task cards",
+      "description": "As a user, I want to see task status at a glance.",
+      "acceptanceCriteria": [
+        "Each task card shows colored status badge",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["AB-001"],
+      "approach": "Create a StatusBadge component, use in existing TaskCard"
     }
   ]
 }
 ```
+
+| Field | Level | Purpose |
+|-------|-------|---------|
+| `constraints` | PRD | Cross-cutting architectural decisions injected into every agent prompt |
+| `dependsOn` | Story | Explicit dependency graph — skips the Claude DAG analysis call when present |
+| `approach` | Story | Implementation strategy hint — guides the architect/implementer agents |
+
+All three fields are optional. When `dependsOn` is provided on any story, Ralph uses it directly for parallel scheduling instead of running a Claude analysis pass.
 
 ### Story Sizing
 

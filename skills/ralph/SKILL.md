@@ -44,6 +44,10 @@ Before writing, confirm the project root by checking for markers like `package.j
   "branchName": "ralph/[feature-name-kebab-case]",
   "description": "[Feature description from plan title/intro]",
   "repos": ["../other-repo"],
+  "constraints": [
+    "Cross-cutting constraint or architectural decision that applies to all stories",
+    "e.g. 'Use the existing EventBus pattern for all new event handling'"
+  ],
   "userStories": [
     {
       "id": "AB-001",
@@ -56,7 +60,9 @@ Before writing, confirm the project root by checking for markers like `package.j
       ],
       "priority": 1,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "dependsOn": [],
+      "approach": "Brief implementation strategy hint for the builder agent"
     }
   ]
 }
@@ -90,9 +96,15 @@ If a story's acceptance criteria require **unrelated types of work**, split it. 
 
 ---
 
-## Story Ordering: Dependencies First
+## Story Ordering & Dependencies
 
 Stories execute in priority order. Earlier stories must not depend on later ones.
+
+**Use the `dependsOn` field** to explicitly declare dependencies between stories. This lets Ralph skip an expensive Claude analysis step and run stories in parallel when they have no shared dependencies.
+
+- `dependsOn` is an array of story IDs that must complete before this story can start
+- Stories with no dependencies use an empty array: `"dependsOn": []`
+- Every story referenced in `dependsOn` must exist in the PRD
 
 **Correct order:**
 1. Schema/database changes (migrations)
@@ -151,6 +163,9 @@ Frontend stories are NOT complete until visually verified. Ralph will use rodney
 5. **branchName**: Derive from feature name, kebab-case, prefixed with `ralph/`
 6. **Always add**: "Typecheck passes" to every story's acceptance criteria
 7. **Cross-repo work**: If the plan mentions changes in multiple repositories, add a `repos` array with relative paths to the additional repos (the primary project dir is always included implicitly)
+8. **dependsOn**: Set explicitly for every story. Stories with no dependencies get `"dependsOn": []`. This enables parallel execution and skips an expensive analysis step.
+9. **approach**: If the plan specifies how to implement a story (e.g., "extend the middleware chain" or "use the existing EventBus"), capture it in the `approach` field. This guides the architect and implementer agents, reducing wasted exploration.
+10. **constraints**: Extract cross-cutting architectural decisions or constraints from the plan intro/notes into the top-level `constraints` array. These are injected into every agent prompt.
 
 ---
 
@@ -162,6 +177,9 @@ Claude Code plans (from `/plan`) often use a different structure than traditiona
 - **Numbered task lists** within a step usually map to acceptance criteria for that story.
 - **"Consider" or "open question" notes** in the plan are informational -- incorporate the decisions into acceptance criteria, do not leave them ambiguous.
 - **File paths mentioned in the plan** are valuable context -- include them in the story description or notes so Ralph knows where to work.
+- **Implementation strategy notes** (e.g., "use pattern X", "extend module Y") become the `approach` field for the relevant story.
+- **Cross-cutting decisions** (e.g., "all new endpoints use middleware Z", "prefer approach A over B because of constraint C") go into the top-level `constraints` array.
+- **Step dependencies** (e.g., "step 3 requires step 1") become `dependsOn` references between story IDs.
 
 ---
 
@@ -203,6 +221,10 @@ Each is one focused change that can be completed and verified independently.
   "project": "TaskApp",
   "branchName": "ralph/task-status",
   "description": "Task Status Feature - Track task progress with status indicators",
+  "constraints": [
+    "Use existing Drizzle ORM patterns for migrations",
+    "Status values must be a union type, not an enum, for type safety"
+  ],
   "userStories": [
     {
       "id": "AB-001",
@@ -215,7 +237,9 @@ Each is one focused change that can be completed and verified independently.
       ],
       "priority": 1,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "dependsOn": [],
+      "approach": "Add column to existing tasks schema in db/schema.ts, generate migration with drizzle-kit"
     },
     {
       "id": "AB-002",
@@ -229,7 +253,9 @@ Each is one focused change that can be completed and verified independently.
       ],
       "priority": 2,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "dependsOn": ["AB-001"],
+      "approach": "Create a StatusBadge component, use it in the existing TaskCard component"
     },
     {
       "id": "AB-003",
@@ -244,7 +270,9 @@ Each is one focused change that can be completed and verified independently.
       ],
       "priority": 3,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "dependsOn": ["AB-001"],
+      "approach": "Add a server action for status updates, use optimistic updates in the UI"
     },
     {
       "id": "AB-004",
@@ -258,7 +286,9 @@ Each is one focused change that can be completed and verified independently.
       ],
       "priority": 4,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "dependsOn": ["AB-002", "AB-003"],
+      "approach": "Use URL search params for filter state, add WHERE clause to existing task query"
     }
   ]
 }
@@ -293,3 +323,6 @@ Before writing prd.json, verify:
 - [ ] UI stories have "Verify in browser using rodney" as criterion
 - [ ] Acceptance criteria are verifiable (not vague)
 - [ ] No story depends on a later story
+- [ ] Every story has `dependsOn` set (empty array `[]` if no dependencies)
+- [ ] Cross-cutting decisions are captured in top-level `constraints`
+- [ ] Implementation strategies from the plan are captured in `approach` fields

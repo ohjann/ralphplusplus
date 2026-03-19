@@ -113,13 +113,31 @@ func renderCurrentTask(m *Model) string {
 	case phasePaused:
 		return styleDanger.Render("⏸ Usage limit — press Enter to resume")
 	case phaseDone:
+		doneStr := ""
 		if m.allComplete {
-			return styleSuccess.Render("✓ All stories complete!")
+			doneStr = styleSuccess.Render("✓ All stories complete!")
+		} else if m.completionReason != "" {
+			doneStr = styleDanger.Render("✗ " + m.completionReason)
+		} else {
+			doneStr = styleDanger.Render("✗ Some failed stories")
 		}
-		if m.completionReason != "" {
-			return styleDanger.Render("✗ " + m.completionReason)
+		// Append plan quality score if available
+		if m.coord != nil {
+			pq := m.coord.GetPlanQuality()
+			if pq.TotalStories > 0 {
+				score := pq.Score()
+				scoreStyle := styleSuccess
+				if score < 0.5 {
+					scoreStyle = styleDanger
+				} else if score < 0.8 {
+					scoreStyle = lipgloss.NewStyle().Foreground(colorPeach)
+				}
+				doneStr += "  │  " + scoreStyle.Render(fmt.Sprintf("Plan: %.0f%%", score*100))
+				doneStr += styleMuted.Render(fmt.Sprintf(" (%d first-pass, %d retried, %d failed)",
+					pq.FirstPassCount, pq.RetryCount, pq.FailedCount))
+			}
 		}
-		return styleDanger.Render("✗ Some failed stories")
+		return doneStr
 	case phaseParallel:
 		if m.coord != nil {
 			active := m.coord.ActiveStoryIDs()

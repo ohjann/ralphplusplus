@@ -123,6 +123,9 @@ The file must be valid JSON with this exact structure:
   "project": "<short project name>",
   "branchName": "<kebab-case branch name for this work>",
   "description": "<one-line description of the work>",
+  "constraints": [
+    "Cross-cutting architectural decisions or constraints from the plan"
+  ],
   "userStories": [
     {
       "id": "<PREFIX-001>",
@@ -135,7 +138,9 @@ The file must be valid JSON with this exact structure:
       ],
       "priority": 1,
       "passes": false,
-      "notes": ""
+      "notes": "",
+      "dependsOn": ["<ID of story this depends on>"],
+      "approach": "Brief implementation strategy or approach hint"
     }
   ]
 }
@@ -143,6 +148,9 @@ The file must be valid JSON with this exact structure:
 Story IDs should use a short prefix derived from the project name (e.g., "TP-001" for "Task Priority").
 Priority numbers determine execution order: 1 runs first, 2 runs second, etc.
 All stories must have "passes": false and "notes": "".
+The "dependsOn" field must list IDs of stories that must complete first. Use [] for stories with no dependencies.
+The "approach" field should capture the implementation strategy from the plan (e.g., "extend the middleware chain", "use the existing EventBus pattern").
+The "constraints" array at the top level captures cross-cutting decisions that apply to all stories.
 
 ## Story Sizing Rules
 - Each story must be completable in ONE Claude Code context window (one focused session)
@@ -450,6 +458,22 @@ func dagAnalyzeCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
 
 		if len(incomplete) == 0 {
 			return coordinator.DAGAnalyzedMsg{Err: fmt.Errorf("no incomplete stories")}
+		}
+
+		// Use PRD-provided dependencies if available, skipping the Claude analysis call
+		if p.HasExplicitDependencies() {
+			debuglog.Log("dagAnalyze: using PRD-provided dependsOn fields (skipping Claude analysis)")
+			d := dag.FromPRD(incomplete)
+
+			ids := make([]string, len(incomplete))
+			for i, s := range incomplete {
+				ids[i] = s.ID
+			}
+			if err := d.Validate(ids); err != nil {
+				debuglog.Log("dagAnalyze: PRD dependencies invalid (%v), falling back to Claude analysis", err)
+			} else {
+				return coordinator.DAGAnalyzedMsg{DAG: d}
+			}
 		}
 
 		d, err := dag.Analyze(ctx, cfg.ProjectDir, incomplete)
