@@ -323,6 +323,62 @@ func (c *ChromaClient) GetDocument(ctx context.Context, collection string, docID
 	return doc, nil
 }
 
+// GetAllDocuments retrieves all documents from a collection.
+func (c *ChromaClient) GetAllDocuments(ctx context.Context, collection string) ([]Document, error) {
+	collectionID, err := c.getCollectionID(ctx, collection)
+	if err != nil {
+		return nil, fmt.Errorf("get all documents from %q: %w", collection, err)
+	}
+
+	body := map[string]interface{}{
+		"include": []string{"documents", "metadatas"},
+	}
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal get all documents request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v2/tenants/default_tenant/databases/default_database/collections/%s/get", c.baseURL, collectionID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("get all documents request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("get all documents from %q: %w", collection, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, c.readError(resp, "get all documents from %q", collection)
+	}
+
+	var result struct {
+		IDs       []string                 `json:"ids"`
+		Documents []string                 `json:"documents"`
+		Metadatas []map[string]interface{} `json:"metadatas"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode get all documents response: %w", err)
+	}
+
+	docs := make([]Document, len(result.IDs))
+	for i := range result.IDs {
+		docs[i] = Document{
+			ID:       result.IDs[i],
+			Metadata: result.Metadatas[i],
+		}
+		if i < len(result.Documents) {
+			docs[i].Content = result.Documents[i]
+		}
+	}
+
+	return docs, nil
+}
+
 // UpdateDocument updates an existing document in a collection.
 func (c *ChromaClient) UpdateDocument(ctx context.Context, collection string, doc Document) error {
 	collectionID, err := c.getCollectionID(ctx, collection)
