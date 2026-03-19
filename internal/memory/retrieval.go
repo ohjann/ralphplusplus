@@ -14,10 +14,11 @@ import (
 
 // RetrievalOptions controls how semantic retrieval behaves.
 type RetrievalOptions struct {
-	TopK      int     // Number of results per collection (default 5)
-	MinScore  float64 // Minimum similarity score threshold (default 0.7)
-	MaxTokens int     // Token budget for formatted output (default 2000)
-	Disabled  bool    // If true, return empty string immediately
+	TopK       int     // Number of results per collection (default 5)
+	MinScore   float64 // Minimum similarity score threshold (default 0.7)
+	MaxTokens  int     // Token budget for formatted output (default 2000)
+	Disabled   bool    // If true, return empty string immediately
+	ProjectDir string  // Project directory for scoping lesson queries (optional)
 }
 
 // DocRef identifies a document in a specific collection, with optional
@@ -130,11 +131,23 @@ func RetrieveContext(
 	allResults := make([]colResults, 0, len(collections))
 	var queryErrors []error
 
+	// Build project filter for lesson collections.
+	var projectFilter map[string]interface{}
+	if opts.ProjectDir != "" {
+		projectFilter = map[string]interface{}{"project_id": GenerateProjectID(opts.ProjectDir)}
+	}
+
 	for _, col := range collections {
 		wg.Add(1)
 		go func(colName string) {
 			defer wg.Done()
-			results, err := client.QueryCollection(ctx, colName, embedding, opts.TopK)
+			var results []QueryResult
+			var err error
+			if isLessonCollection(colName) && projectFilter != nil {
+				results, err = client.QueryCollectionFiltered(ctx, colName, embedding, opts.TopK, projectFilter)
+			} else {
+				results, err = client.QueryCollection(ctx, colName, embedding, opts.TopK)
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {

@@ -344,9 +344,10 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 				implOpts = append(implOpts, runner.BuildPromptOpts{
 					Memory: retriever,
 					MemoryOpts: memory.RetrievalOptions{
-						TopK:      cfg.Memory.TopK,
-						MinScore:  cfg.Memory.MinScore,
-						MaxTokens: cfg.Memory.MaxTokens,
+						TopK:       cfg.Memory.TopK,
+						MinScore:   cfg.Memory.MinScore,
+						MaxTokens:  cfg.Memory.MaxTokens,
+						ProjectDir: cfg.ProjectDir,
 					},
 					Role: implRole,
 				})

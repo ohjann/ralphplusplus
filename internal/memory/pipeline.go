@@ -311,6 +311,9 @@ func EmbedLessons(ctx context.Context, client *ChromaClient, embedder Embedder, 
 		return nil
 	}
 
+	projectID := GenerateProjectID(projectDir)
+	projectFilter := map[string]interface{}{"project_id": projectID}
+
 	for _, lesson := range lessons {
 		content := lesson.Pattern + "\n" + lesson.Recommendation
 		embedding, err := embedder.EmbedOne(ctx, content)
@@ -327,11 +330,12 @@ func EmbedLessons(ctx context.Context, client *ChromaClient, embedder Embedder, 
 				"confidence":      lesson.Confidence,
 				"times_confirmed": float64(lesson.TimesConfirmed),
 				"relevance_score": lesson.Confidence,
+				"project_id":      projectID,
 			},
 		}
 
-		// Check for near-duplicate
-		results, err := client.QueryCollection(ctx, CollectionLessons.Name, embedding, 1)
+		// Check for near-duplicate within the same project
+		results, err := client.QueryCollectionFiltered(ctx, CollectionLessons.Name, embedding, 1, projectFilter)
 		if err == nil && len(results) > 0 && results[0].Distance < 0.1 {
 			// Near-duplicate found — increment times_confirmed and bump confidence
 			existing := results[0].Document

@@ -261,6 +261,87 @@ func (c *ChromaClient) QueryCollection(ctx context.Context, collection string, q
 	return queryResults, nil
 }
 
+// QueryCollectionFiltered queries a collection with a pre-computed embedding,
+// metadata filter, and returns the top K results. The where clause uses
+// ChromaDB's where filter syntax (e.g. {"project_id": "proj-abc123"}).
+func (c *ChromaClient) QueryCollectionFiltered(ctx context.Context, collection string, queryEmbedding []float64, topK int, where map[string]interface{}) ([]QueryResult, error) {
+	if len(where) == 0 {
+		return c.QueryCollection(ctx, collection, queryEmbedding, topK)
+	}
+
+	collectionID, err := c.getCollectionID(ctx, collection)
+	if err != nil {
+		return nil, fmt.Errorf("query collection %q: %w", collection, err)
+	}
+
+	body := map[string]interface{}{
+		"query_embeddings": [][]float64{queryEmbedding},
+		"n_results":        topK,
+		"include":          []string{"documents", "metadatas", "distances", "embeddings"},
+		"where":            where,
+	}
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal query request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/v2/tenants/default_tenant/databases/default_database/collections/%s/query", c.baseURL, collectionID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("query collection request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("query collection %q: %w", collection, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, c.readError(resp, "query collection %q", collection)
+	}
+
+	var result struct {
+		IDs        [][]string                   `json:"ids"`
+		Documents  [][]string                   `json:"documents"`
+		Metadatas  [][]map[string]interface{}    `json:"metadatas"`
+		Distances  [][]float64                  `json:"distances"`
+		Embeddings [][][]float64                `json:"embeddings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode query response: %w", err)
+	}
+
+	if len(result.IDs) == 0 || len(result.IDs[0]) == 0 {
+		return nil, nil
+	}
+
+	queryResults := make([]QueryResult, len(result.IDs[0]))
+	for i := range result.IDs[0] {
+		doc := Document{
+			ID:       result.IDs[0][i],
+			Metadata: result.Metadatas[0][i],
+		}
+		if len(result.Documents) > 0 && len(result.Documents[0]) > i {
+			doc.Content = result.Documents[0][i]
+		}
+		if len(result.Embeddings) > 0 && len(result.Embeddings[0]) > i {
+			doc.Embedding = result.Embeddings[0][i]
+		}
+
+		distance := result.Distances[0][i]
+		queryResults[i] = QueryResult{
+			Document: doc,
+			Distance: distance,
+			Score:    1 - distance,
+		}
+	}
+
+	return queryResults, nil
+}
+
 // GetDocument retrieves a single document by ID from a collection.
 func (c *ChromaClient) GetDocument(ctx context.Context, collection string, docID string) (Document, error) {
 	collectionID, err := c.getCollectionID(ctx, collection)

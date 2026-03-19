@@ -1,7 +1,9 @@
 package memory
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -72,6 +74,15 @@ func (d Document) Confidence() float64 {
 		return 1.0
 	}
 	return f
+}
+
+// ProjectID returns the project_id from metadata, or empty string if not set.
+func (d Document) ProjectID() string {
+	if d.Metadata == nil {
+		return ""
+	}
+	v, _ := d.Metadata["project_id"].(string)
+	return v
 }
 
 // StoryID returns the story_id from metadata, or empty string if not set.
@@ -167,4 +178,16 @@ func LoadLessons(projectDir string) (LessonsFile, error) {
 		return LessonsFile{}, err
 	}
 	return lf, nil
+}
+
+// GenerateProjectID produces a stable, short identifier for a project directory
+// by hashing its absolute path. This scopes ChromaDB lesson documents to the
+// project they were synthesized from, preventing cross-repo leakage.
+func GenerateProjectID(projectDir string) string {
+	abs, err := filepath.Abs(projectDir)
+	if err != nil {
+		abs = projectDir
+	}
+	h := sha256.Sum256([]byte(abs))
+	return fmt.Sprintf("proj-%x", h[:8])
 }
