@@ -135,7 +135,8 @@ type Lesson struct {
 
 // LessonsFile is the top-level structure for .ralph/lessons.json.
 type LessonsFile struct {
-	Lessons []Lesson `json:"lessons"`
+	Lessons    []Lesson `json:"lessons"`
+	PRDLessons []Lesson `json:"prd_lessons,omitempty"`
 }
 
 // SaveLessons writes lessons to .ralph/lessons.json with indented JSON.
