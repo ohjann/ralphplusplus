@@ -31,9 +31,10 @@ type MemoryRetriever interface {
 
 // BuildPromptOpts holds optional parameters for BuildPrompt.
 type BuildPromptOpts struct {
-	Memory     MemoryRetriever
-	MemoryOpts memory.RetrievalOptions
-	Role       roles.Role
+	Memory       MemoryRetriever
+	MemoryOpts   memory.RetrievalOptions
+	Role         roles.Role
+	AntiPatterns []memory.AntiPattern
 }
 
 // BuildPrompt reads ralph-prompt.md, appends PRD context, story state, iteration constraint,
@@ -63,6 +64,14 @@ func BuildPrompt(ralphHome, projectDir, storyID string, p *prd.PRD, opts ...Buil
 		story = p.FindStory(storyID)
 		prompt += buildPRDContext(p, storyID, story)
 		prompt += buildStoryStateContext(projectDir, storyID)
+	}
+
+	// Inject anti-pattern warnings if any match the current story's files
+	if len(opts) > 0 && len(opts[0].AntiPatterns) > 0 {
+		storyFiles := collectStoryFiles(projectDir, storyID, story)
+		if warning := buildAntiPatternWarnings(opts[0].AntiPatterns, storyFiles); warning != "" {
+			prompt += warning
+		}
 	}
 
 	// Architect role plans freely — skip the iteration constraint
@@ -409,6 +418,87 @@ func RunClaude(ctx context.Context, projectDir, prompt, logFilePath string, opts
 		return result, err
 	}
 	return result, nil
+}
+
+// collectStoryFiles gathers files associated with a story from state.json
+// FilesTouched and the story description/acceptance criteria.
+func collectStoryFiles(projectDir, storyID string, story *prd.UserStory) map[string]bool {
+	files := make(map[string]bool)
+
+	// From state.json FilesTouched
+	if state, err := storystate.Load(projectDir, storyID); err == nil {
+		for _, f := range state.FilesTouched {
+			files[f] = true
+		}
+	}
+
+	// From plan.md
+	if plan, err := storystate.LoadPlan(projectDir, storyID); err == nil && plan != "" {
+		for _, f := range extractFilePaths(plan) {
+			files[f] = true
+		}
+	}
+
+	// From story description and acceptance criteria
+	if story != nil {
+		for _, f := range extractFilePaths(story.Description) {
+			files[f] = true
+		}
+		for _, ac := range story.AcceptanceCriteria {
+			for _, f := range extractFilePaths(ac) {
+				files[f] = true
+			}
+		}
+	}
+
+	return files
+}
+
+// filePathPattern matches file paths like internal/foo/bar.go or path/to/file.ts
+var filePathPattern = regexp.MustCompile(`\b[\w./+-]+\.(?:go|ts|js|py|rs|java|yaml|yml|json|toml|md|sql|sh)\b`)
+
+// extractFilePaths pulls file-like paths from text.
+func extractFilePaths(text string) []string {
+	return filePathPattern.FindAllString(text, -1)
+}
+
+// buildAntiPatternWarnings checks anti-patterns against story files and returns
+// a formatted warning section. Returns empty string if no matches. Max 3 warnings.
+func buildAntiPatternWarnings(patterns []memory.AntiPattern, storyFiles map[string]bool) string {
+	if len(storyFiles) == 0 {
+		return ""
+	}
+
+	type warning struct {
+		file    string
+		pattern memory.AntiPattern
+	}
+
+	var warnings []warning
+	for _, ap := range patterns {
+		for _, f := range ap.FilesAffected {
+			if storyFiles[f] {
+				warnings = append(warnings, warning{file: f, pattern: ap})
+				break // one warning per anti-pattern
+			}
+		}
+		if len(warnings) >= 3 {
+			break
+		}
+	}
+
+	if len(warnings) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n\n---\n## KNOWN ISSUES\n")
+	for _, w := range warnings {
+		b.WriteString(fmt.Sprintf("KNOWN ISSUE: %s has caused %s in %d stories. %s\n",
+			w.file, w.pattern.Category, len(w.pattern.AffectedStories), w.pattern.Description))
+	}
+
+	return b.String()
 }
 
 // LogFilePath returns the log file path for a given iteration.

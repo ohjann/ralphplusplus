@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/roles"
 	"github.com/eoghanhynes/ralph/internal/storystate"
@@ -409,5 +410,174 @@ func TestBuildDebuggerStuckContextIncludesErrors(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "nil pointer in handler") {
 		t.Error("should contain second error")
+	}
+}
+
+func TestBuildAntiPatternWarnings(t *testing.T) {
+	patterns := []memory.AntiPattern{
+		{
+			Category:        "fragile_area",
+			Description:     "File appears in 5 error documents",
+			FilesAffected:   []string{"internal/runner/runner.go"},
+			OccurrenceCount: 5,
+			AffectedStories: []string{"P1-001", "P1-002", "P1-003"},
+		},
+		{
+			Category:        "high_friction",
+			Description:     "File involved in 3 high-iteration stories",
+			FilesAffected:   []string{"internal/tui/model.go"},
+			OccurrenceCount: 3,
+			AffectedStories: []string{"P2-001", "P2-002"},
+		},
+	}
+
+	t.Run("matching files produce warnings", func(t *testing.T) {
+		storyFiles := map[string]bool{"internal/runner/runner.go": true}
+		result := buildAntiPatternWarnings(patterns, storyFiles)
+		if !strings.Contains(result, "KNOWN ISSUE: internal/runner/runner.go has caused fragile_area in 3 stories") {
+			t.Errorf("expected warning for runner.go, got:\n%s", result)
+		}
+	})
+
+	t.Run("no matching files produce empty string", func(t *testing.T) {
+		storyFiles := map[string]bool{"internal/other/file.go": true}
+		result := buildAntiPatternWarnings(patterns, storyFiles)
+		if result != "" {
+			t.Errorf("expected empty string for non-matching files, got:\n%s", result)
+		}
+	})
+
+	t.Run("empty story files produce empty string", func(t *testing.T) {
+		result := buildAntiPatternWarnings(patterns, map[string]bool{})
+		if result != "" {
+			t.Errorf("expected empty string for empty story files, got:\n%s", result)
+		}
+	})
+
+	t.Run("max 3 warnings", func(t *testing.T) {
+		manyPatterns := []memory.AntiPattern{
+			{Category: "a", Description: "desc1", FilesAffected: []string{"f1.go"}, AffectedStories: []string{"s1"}},
+			{Category: "b", Description: "desc2", FilesAffected: []string{"f2.go"}, AffectedStories: []string{"s2"}},
+			{Category: "c", Description: "desc3", FilesAffected: []string{"f3.go"}, AffectedStories: []string{"s3"}},
+			{Category: "d", Description: "desc4", FilesAffected: []string{"f4.go"}, AffectedStories: []string{"s4"}},
+		}
+		storyFiles := map[string]bool{"f1.go": true, "f2.go": true, "f3.go": true, "f4.go": true}
+		result := buildAntiPatternWarnings(manyPatterns, storyFiles)
+		count := strings.Count(result, "KNOWN ISSUE:")
+		if count != 3 {
+			t.Errorf("expected max 3 warnings, got %d:\n%s", count, result)
+		}
+	})
+}
+
+func TestBuildPromptWithAntiPatterns(t *testing.T) {
+	ralphHome := t.TempDir()
+	dir := t.TempDir()
+	storyID := "TEST-AP1"
+
+	if err := os.WriteFile(filepath.Join(ralphHome, "ralph-prompt.md"), []byte("base prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create story state with files_touched
+	state := storystate.StoryState{
+		StoryID:        storyID,
+		Status:         storystate.StatusInProgress,
+		IterationCount: 1,
+		FilesTouched:   []string{"internal/runner/runner.go"},
+		LastUpdated:    time.Now(),
+	}
+	if err := storystate.Save(dir, state); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &prd.PRD{
+		Project:    "test",
+		BranchName: "test-branch",
+		UserStories: []prd.UserStory{
+			{ID: storyID, Title: "Test story", Priority: 1},
+		},
+	}
+
+	antiPatterns := []memory.AntiPattern{
+		{
+			Category:        "fragile_area",
+			Description:     "File appears in 5 error documents",
+			FilesAffected:   []string{"internal/runner/runner.go"},
+			OccurrenceCount: 5,
+			AffectedStories: []string{"P1-001", "P1-002"},
+		},
+	}
+
+	prompt, _, err := BuildPrompt(ralphHome, dir, storyID, p, BuildPromptOpts{
+		AntiPatterns: antiPatterns,
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if !strings.Contains(prompt, "KNOWN ISSUE") {
+		t.Error("prompt should contain KNOWN ISSUE warning")
+	}
+	if !strings.Contains(prompt, "internal/runner/runner.go has caused fragile_area") {
+		t.Error("prompt should contain specific warning about runner.go")
+	}
+
+	// Warnings should appear before memory retrieval (which is at the end)
+	knownIdx := strings.Index(prompt, "KNOWN ISSUE")
+	iterIdx := strings.Index(prompt, "THIS ITERATION")
+	if knownIdx > iterIdx {
+		t.Error("anti-pattern warnings should appear before THIS ITERATION section")
+	}
+}
+
+func TestBuildPromptNoAntiPatternMatchNoSection(t *testing.T) {
+	ralphHome := t.TempDir()
+	dir := t.TempDir()
+	storyID := "TEST-AP2"
+
+	if err := os.WriteFile(filepath.Join(ralphHome, "ralph-prompt.md"), []byte("base prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &prd.PRD{
+		Project:    "test",
+		BranchName: "test-branch",
+		UserStories: []prd.UserStory{
+			{ID: storyID, Title: "Test story", Priority: 1},
+		},
+	}
+
+	antiPatterns := []memory.AntiPattern{
+		{
+			Category:      "fragile_area",
+			Description:   "unrelated file",
+			FilesAffected: []string{"internal/other/other.go"},
+		},
+	}
+
+	prompt, _, err := BuildPrompt(ralphHome, dir, storyID, p, BuildPromptOpts{
+		AntiPatterns: antiPatterns,
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if strings.Contains(prompt, "KNOWN ISSUE") {
+		t.Error("prompt should NOT contain KNOWN ISSUE when no anti-patterns match")
+	}
+}
+
+func TestExtractFilePaths(t *testing.T) {
+	text := "Modify internal/runner/runner.go BuildPrompt() to accept anti-patterns parameter"
+	paths := extractFilePaths(text)
+	found := false
+	for _, p := range paths {
+		if p == "internal/runner/runner.go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected to extract internal/runner/runner.go from text, got %v", paths)
 	}
 }
