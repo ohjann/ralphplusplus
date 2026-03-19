@@ -1774,6 +1774,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prevClaudeLen = len(m.claudeContent)
 		cmds = append(cmds, qualityReviewCmd(m.ctx, m.cfg, m.qualityIteration))
 
+	case synthesisCompleteMsg:
+		if msg.Err != nil {
+			debuglog.Log("post-run synthesis failed (non-fatal): %v", msg.Err)
+			m.claudeContent += fmt.Sprintf("── Synthesis error (non-fatal): %v ──\n", msg.Err)
+		} else if len(msg.Lessons) > 0 {
+			debuglog.Log("post-run synthesis extracted %d lessons", len(msg.Lessons))
+			m.claudeContent += fmt.Sprintf("── Synthesis complete: %d lessons extracted ──\n", len(msg.Lessons))
+		} else {
+			debuglog.Log("post-run synthesis complete: no lessons found")
+			m.claudeContent += "── Synthesis complete: no new lessons ──\n"
+		}
+		m.claudeVP.SetContent(m.claudeContent)
+		m.claudeVP.GotoBottom()
+		m.prevClaudeLen = len(m.claudeContent)
+		// Re-detect anti-patterns after synthesis (lessons may have changed)
+		if m.chromaClient != nil {
+			cmds = append(cmds, detectAntiPatternsCmd(m.ctx, m.chromaClient))
+		}
+		// Now proceed to summary generation
+		_, cmd := m.finishSummary()
+		cmds = append(cmds, cmd)
+
 	case summaryDoneMsg:
 		if msg.Err != nil {
 			m.claudeContent += fmt.Sprintf("\n── Summary generation error: %v ──\n", msg.Err)
@@ -1818,7 +1840,8 @@ func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 	return m.transitionToSummary()
 }
 
-// transitionToSummary starts generating a final summary of all changes.
+// transitionToSummary starts post-run synthesis (if memory is available),
+// then generates a final summary of all changes.
 func (m *Model) transitionToSummary() (tea.Model, tea.Cmd) {
 	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, m.totalCost())
 	// Run confidence decay cycle before stopping sidecar (needs ChromaDB running)
@@ -1831,13 +1854,29 @@ func (m *Model) transitionToSummary() (tea.Model, tea.Cmd) {
 				summary.Confirmed, summary.Decayed, summary.Evicted)
 		}
 	}
+
+	// Run post-run synthesis asynchronously if memory is available
+	if m.chromaClient != nil && m.memoryEmbedder != nil {
+		m.phase = phaseSummary
+		m.claudeContent = "── Running post-run synthesis... ──\n"
+		m.claudeVP.SetContent(m.claudeContent)
+		m.prevClaudeLen = len(m.claudeContent)
+		return m, synthesisCmd(m.ctx, m.cfg, m.chromaClient, m.memoryEmbedder, m.buildRunSummary())
+	}
+
+	// No memory available — skip synthesis and go straight to summary
+	return m.finishSummary()
+}
+
+// finishSummary stops the sidecar and starts summary generation.
+func (m *Model) finishSummary() (tea.Model, tea.Cmd) {
 	// Stop status page and ChromaDB sidecar — no more updates needed
 	m.stopStatusServer()
 	m.stopSidecar()
 	// Best-effort checkpoint cleanup on clean completion
 	_ = checkpoint.Delete(m.cfg.ProjectDir)
 	m.phase = phaseSummary
-	m.claudeContent = "── Generating summary of all changes... ──\n"
+	m.claudeContent += "── Generating summary of all changes... ──\n"
 	m.claudeVP.SetContent(m.claudeContent)
 	m.prevClaudeLen = len(m.claudeContent)
 	return m, generateSummaryCmd(m.ctx, m.cfg)
@@ -2511,6 +2550,69 @@ func (m *Model) persistRunHistory() {
 		debuglog.Log("persistRunHistory: failed to append run: %v", err)
 	} else {
 		debuglog.Log("persistRunHistory: appended run summary for %s", p.Project)
+	}
+}
+
+// buildRunSummary computes a RunSummary from the current model state for use by synthesis.
+func (m *Model) buildRunSummary() costs.RunSummary {
+	p, err := prd.Load(m.cfg.PRDFile)
+	if err != nil {
+		return costs.RunSummary{}
+	}
+
+	var completed, failed int
+	for _, s := range p.UserStories {
+		if s.Passes {
+			completed++
+		}
+	}
+
+	totalIterations := m.iteration
+	if m.coord != nil {
+		totalIterations = m.coord.IterationCount()
+		failed = m.coord.FailedCount()
+	} else {
+		failed = len(p.UserStories) - completed
+	}
+
+	var avgIter float64
+	if completed > 0 {
+		avgIter = float64(totalIterations) / float64(completed)
+	}
+
+	var judgeTotal, judgeRejections, stuckCount int
+	evts, err := events.Load(m.cfg.ProjectDir)
+	if err == nil {
+		for _, e := range evts {
+			switch e.Type {
+			case events.EventJudgeResult:
+				judgeTotal++
+				if e.Meta["verdict"] == "fail" {
+					judgeRejections++
+				}
+			case events.EventStuck:
+				stuckCount++
+			}
+		}
+	}
+
+	var rejectionRate float64
+	if judgeTotal > 0 {
+		rejectionRate = float64(judgeRejections) / float64(judgeTotal)
+	}
+
+	return costs.RunSummary{
+		PRD:                   p.Project,
+		Date:                  time.Now().Format(time.RFC3339),
+		StoriesTotal:          len(p.UserStories),
+		StoriesCompleted:      completed,
+		StoriesFailed:         failed,
+		TotalCost:             m.totalCost(),
+		DurationMinutes:       time.Since(m.startTime).Minutes(),
+		TotalIterations:       totalIterations,
+		AvgIterationsPerStory: avgIter,
+		StuckCount:            stuckCount,
+		JudgeRejectionRate:    rejectionRate,
 	}
 }
 

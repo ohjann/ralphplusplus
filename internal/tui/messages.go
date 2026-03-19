@@ -122,6 +122,12 @@ type antiPatternsMsg struct {
 	Patterns []memory.AntiPattern
 }
 
+// Post-run synthesis
+type synthesisCompleteMsg struct {
+	Lessons []memory.Lesson
+	Err     error
+}
+
 // Cost tracking
 type costUpdateMsg struct {
 	Usage   costs.TokenUsage

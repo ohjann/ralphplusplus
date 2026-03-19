@@ -16,6 +16,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/dag"
 	"github.com/eoghanhynes/ralph/internal/debuglog"
+	"github.com/eoghanhynes/ralph/internal/events"
 	rexec "github.com/eoghanhynes/ralph/internal/exec"
 	"github.com/eoghanhynes/ralph/internal/judge"
 	"github.com/eoghanhynes/ralph/internal/memory"
@@ -750,6 +751,43 @@ func renderCapBar(count, max, width int) string {
 		}
 	}
 	return "[" + string(bar) + "]"
+}
+
+// synthesisCmd runs post-run synthesis: extracts lessons from the completed run
+// and embeds them into ChromaDB. Runs asynchronously so it does not block the TUI.
+func synthesisCmd(ctx context.Context, cfg *config.Config, client *memory.ChromaClient, embedder memory.Embedder, runSummary costs.RunSummary) tea.Cmd {
+	return safeCmd(func() tea.Msg {
+		// Load all story states
+		p, err := prd.Load(cfg.PRDFile)
+		if err != nil {
+			return synthesisCompleteMsg{Err: fmt.Errorf("load PRD for synthesis: %w", err)}
+		}
+		var states []storystate.StoryState
+		for _, s := range p.UserStories {
+			st, _ := storystate.Load(cfg.ProjectDir, s.ID)
+			if st.StoryID != "" {
+				states = append(states, st)
+			}
+		}
+
+		// Load events
+		evts, _ := events.Load(cfg.ProjectDir)
+
+		// Run synthesis
+		lessons, err := memory.SynthesizeRunLessons(ctx, cfg.ProjectDir, runSummary, states, evts)
+		if err != nil {
+			return synthesisCompleteMsg{Err: fmt.Errorf("synthesis: %w", err)}
+		}
+
+		// Embed lessons if we have a client and embedder
+		if len(lessons) > 0 && client != nil && embedder != nil {
+			if err := memory.EmbedLessons(ctx, client, embedder, lessons, cfg.ProjectDir); err != nil {
+				return synthesisCompleteMsg{Lessons: lessons, Err: fmt.Errorf("embed lessons: %w", err)}
+			}
+		}
+
+		return synthesisCompleteMsg{Lessons: lessons}
+	})
 }
 
 // detectAntiPatternsCmd runs anti-pattern detection against ChromaDB and returns results.
