@@ -301,6 +301,86 @@ func splitDecisions(content string) []string {
 	return blocks
 }
 
+// EmbedLessons embeds synthesized lessons into the ralph_lessons collection with
+// deduplication. When a near-duplicate exists (>0.9 cosine similarity), the
+// existing document's times_confirmed is incremented and confidence bumped by 0.1
+// (capped at 1.0). After insertion, the collection cap of 100 is enforced.
+// Also persists lessons to .ralph/lessons.json via SaveLessons.
+func EmbedLessons(ctx context.Context, client *ChromaClient, embedder Embedder, lessons []Lesson, projectDir string) error {
+	if len(lessons) == 0 {
+		return nil
+	}
+
+	for _, lesson := range lessons {
+		content := lesson.Pattern + "\n" + lesson.Recommendation
+		embedding, err := embedder.EmbedOne(ctx, content)
+		if err != nil {
+			return fmt.Errorf("embed lesson %q: %w", lesson.ID, err)
+		}
+
+		doc := Document{
+			ID:        contentHash("lesson", lesson.ID, content),
+			Content:   content,
+			Embedding: embedding,
+			Metadata: map[string]interface{}{
+				"category":        lesson.Category,
+				"confidence":      lesson.Confidence,
+				"times_confirmed": float64(lesson.TimesConfirmed),
+				"relevance_score": lesson.Confidence,
+			},
+		}
+
+		// Check for near-duplicate
+		results, err := client.QueryCollection(ctx, CollectionLessons.Name, embedding, 1)
+		if err == nil && len(results) > 0 && results[0].Distance < 0.1 {
+			// Near-duplicate found — increment times_confirmed and bump confidence
+			existing := results[0].Document
+			timesConfirmed := 1.0
+			if tc, ok := existing.Metadata["times_confirmed"].(float64); ok {
+				timesConfirmed = tc
+			}
+			timesConfirmed++
+
+			confidence := lesson.Confidence
+			if ec, ok := existing.Metadata["confidence"].(float64); ok {
+				confidence = ec + 0.1
+			}
+			if confidence > 1.0 {
+				confidence = 1.0
+			}
+
+			existing.Metadata["times_confirmed"] = timesConfirmed
+			existing.Metadata["confidence"] = confidence
+			existing.Metadata["relevance_score"] = confidence
+			existing.Content = content
+			existing.Embedding = embedding
+
+			if err := client.UpdateDocument(ctx, CollectionLessons.Name, existing); err != nil {
+				return fmt.Errorf("update duplicate lesson: %w", err)
+			}
+		} else {
+			// No duplicate — insert new
+			if err := client.AddDocuments(ctx, CollectionLessons.Name, []Document{doc}); err != nil {
+				return fmt.Errorf("add lesson document: %w", err)
+			}
+		}
+	}
+
+	// Enforce collection cap
+	if err := EnforceCollectionCap(ctx, client, CollectionLessons.Name, CollectionLessons.MaxDocuments); err != nil {
+		return fmt.Errorf("enforce lessons cap: %w", err)
+	}
+
+	// Persist to .ralph/lessons.json
+	existing, _ := LoadLessons(projectDir)
+	existing.Lessons = append(existing.Lessons, lessons...)
+	if err := SaveLessons(projectDir, existing); err != nil {
+		return fmt.Errorf("save lessons: %w", err)
+	}
+
+	return nil
+}
+
 // contentHash generates a deterministic document ID based on content hash.
 // This supports idempotent upserts — the same content always produces the same ID.
 func contentHash(docType, storyID, content string) string {
