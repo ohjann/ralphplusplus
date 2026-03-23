@@ -149,6 +149,10 @@ type Model struct {
 	hintInput     textarea.Model
 	hintActive    bool // true when user is typing a hint
 
+	// Task input bar (interactive mode)
+	taskInput       textarea.Model
+	taskInputActive bool // true when user is typing a task
+
 	// Status bar (vim-like, bottom of screen)
 	statusText  string
 	statusLevel statusLevel
@@ -192,6 +196,12 @@ func NewModel(cfg *config.Config, version string) *Model {
 	hi.SetHeight(1)
 	hi.ShowLineNumbers = false
 
+	ti := textarea.New()
+	ti.Placeholder = "Type a task and press Enter..."
+	ti.CharLimit = 500
+	ti.SetHeight(1)
+	ti.ShowLineNumbers = false
+
 	var m *sprite.Mascot
 	if cfg.SpriteEnabled {
 		m = sprite.NewMascot(cfg.Workers)
@@ -216,6 +226,7 @@ func NewModel(cfg *config.Config, version string) *Model {
 		notifier:       n,
 		statusServer:   ss,
 		hintInput:      hi,
+		taskInput:      ti,
 		mascot:         m,
 	}
 }
@@ -621,9 +632,57 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.hintInput.Reset()
 				m.stuckAlert = nil
 				return m, nil
+			case tea.KeyTab:
+				if m.phase == phaseInteractive || m.phase == phaseParallel {
+					m.hintActive = false
+					m.hintInput.Blur()
+					m.taskInputActive = true
+					m.taskInput.SetWidth(m.width - 4)
+					m.taskInput.Focus()
+					return m, m.taskInput.Focus()
+				}
+				return m, nil
 			default:
 				var cmd tea.Cmd
 				m.hintInput, cmd = m.hintInput.Update(msg)
+				return m, cmd
+			}
+		}
+
+		// Task input mode: capture all keys
+		if m.taskInputActive {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.taskInputActive = false
+				m.taskInput.Blur()
+				m.taskInput.Reset()
+				return m, nil
+			case tea.KeyEnter:
+				task := strings.TrimSpace(m.taskInput.Value())
+				if task != "" {
+					m.claudeContent += fmt.Sprintf("\n── Task submitted: %s ──\n", task)
+					m.claudeVP.SetContent(m.claudeContent)
+					m.claudeVP.GotoBottom()
+					m.prevClaudeLen = len(m.claudeContent)
+				}
+				m.taskInputActive = false
+				m.taskInput.Blur()
+				m.taskInput.Reset()
+				return m, nil
+			case tea.KeyTab:
+				if m.stuckAlert != nil {
+					// Toggle to hint input
+					m.taskInputActive = false
+					m.taskInput.Blur()
+					m.hintActive = true
+					m.hintInput.SetWidth(m.width - 4)
+					m.hintInput.Focus()
+					return m, m.hintInput.Focus()
+				}
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.taskInput, cmd = m.taskInput.Update(msg)
 				return m, cmd
 			}
 		}
@@ -634,6 +693,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.hintInput.SetWidth(m.width - 4)
 			m.hintInput.Focus()
 			return m, m.hintInput.Focus()
+		}
+
+		// 't' to enter task input mode when in interactive/parallel phase
+		if msg.String() == "t" && (m.phase == phaseInteractive || m.phase == phaseParallel) {
+			m.taskInputActive = true
+			m.taskInput.SetWidth(m.width - 4)
+			m.taskInput.Focus()
+			return m, m.taskInput.Focus()
 		}
 
 		// Interactive sprite mode: capture ALL input except q/ctrl+c
@@ -2126,7 +2193,11 @@ func (m *Model) View() string {
 	if m.hintActive {
 		hintHeight = 3
 	}
-	available := m.height - headerHeight - footerHeight - statusBarHeight - statusLineHeight - hintHeight
+	taskInputHeight := 0
+	if m.taskInputActive || m.phase == phaseInteractive || m.phase == phaseParallel {
+		taskInputHeight = 3
+	}
+	available := m.height - headerHeight - footerHeight - statusBarHeight - statusLineHeight - hintHeight - taskInputHeight
 	if available < 10 {
 		available = 10
 	}
@@ -2227,6 +2298,9 @@ func (m *Model) View() string {
 	)
 
 	parts := []string{header, topRow, claudePanel}
+	if m.phase == phaseInteractive || m.phase == phaseParallel {
+		parts = append(parts, renderTaskInput(m.taskInput, m.width, m.taskInputActive))
+	}
 	if m.stuckAlert != nil {
 		parts = append(parts, renderStuckBar(m.stuckAlert, m.width, m.hintActive))
 	}
@@ -2385,6 +2459,16 @@ func renderHintInput(ti textarea.Model, width int) string {
 	return label + " " + ti.View() + esc
 }
 
+func renderTaskInput(ti textarea.Model, width int, active bool) string {
+	label := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212")).Render("⚡ Task:")
+	if active {
+		help := styleFooter.Render(" esc: cancel  enter: submit  tab: switch")
+		return label + " " + ti.View() + help
+	}
+	placeholder := styleFooter.Render(" press t to add a task")
+	return label + placeholder
+}
+
 func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bool, review bool, qualityPrompt bool, resumePrompt bool, paused bool, interactive bool) string {
 	if interactive {
 		return "  " + styleKey.Render("arrows") + styleFooter.Render(": move  ") +
@@ -2410,7 +2494,8 @@ func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bo
 		styleKey.Render("j/k") + styleFooter.Render(": scroll  ") +
 		styleKey.Render("m") + styleFooter.Render(": monitor")
 	if parallel {
-		baseHelp += "  " + styleKey.Render("</>") + styleFooter.Render(": worker")
+		baseHelp += "  " + styleKey.Render("</>") + styleFooter.Render(": worker") +
+			"  " + styleKey.Render("t") + styleFooter.Render(": task")
 	}
 	if qualityPrompt {
 		return "  " + styleKey.Render("enter") + styleFooter.Render(": continue fixing  ") +
