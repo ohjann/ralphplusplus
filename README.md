@@ -22,6 +22,7 @@ Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 - **Push notifications** — ntfy.sh notifications on story complete/fail/stuck and run done; zero accounts needed
 - **Remote status page** — mobile-friendly HTTP status page with SSE live updates; JSON API at `/api/status`
 - **Stuck detection + hint injection** — detects tool-call loops, shows a status bar with notification, lets you inject a hint for the next iteration, then inserts a targeted fix story
+- **Interactive task mode** — submit ad-hoc tasks through a TUI input bar without needing a prd.json; tasks go through a lightweight clarification step before dispatch
 - **Plan quality scoring** — tracks first-pass success rate vs retries vs failures; displayed in the TUI header at run completion
 - **Automatic archiving** — previous runs archived to `.ralph/archive/` when you start a new feature
 
@@ -54,6 +55,10 @@ alias ralph='/path/to/ralph/build/ralph'
 ralph --plan .claude/plans/my-plan.md
 
 # Or if you already have a prd.json:
+ralph
+
+# Or start in interactive mode (no prd.json needed):
+# Just run ralph without a prd.json — it auto-detects and presents an input bar
 ralph
 ```
 
@@ -115,6 +120,17 @@ ralph --judge-max-rejections 3      # allow up to 3 rejections
 4. After N rejections (default: 2), the story is auto-passed with `[HUMAN REVIEW NEEDED]`
 
 The judge is advisory -- if Gemini crashes or times out, Ralph treats it as a pass and continues.
+
+### Interactive Mode
+
+When no `prd.json` is present, Ralph starts in interactive mode with a task input bar. You can also submit tasks alongside a running PRD.
+
+1. Type a task description and press `Enter`
+2. A lightweight Claude call (Sonnet) assesses clarity — if ambiguous, up to 3 clarifying questions are shown
+3. Answer any questions inline, then the task is dispatched as a `T-001`, `T-002`, etc. story
+4. Tasks execute through the full worker pipeline (workspace isolation, memory, judge, merge)
+
+Interactive tasks are included in checkpoints for crash recovery. On clean exit, sessions are saved to `.ralph/session-{timestamp}.json`.
 
 ### Quality Review (enabled by default)
 
@@ -198,7 +214,8 @@ Examples:
 | `PgUp/PgDn` | Page scroll |
 | `[/]` | Cycle context panel tabs |
 | `1-9` | Switch worker view (parallel mode) |
-| `Enter` | Start execution (review phase only) |
+| `Enter` | Start execution (review phase) / Submit task (interactive mode) |
+| `Esc` | Clear task input |
 | `i` | Inject hint (when stuck bar is showing) |
 
 ## Configuration
@@ -401,6 +418,7 @@ internal/
   exec/             Shell command helpers (jj wrappers)
   storystate/       Per-story state persistence (state.json, plan.md, decisions.md)
   checkpoint/       Orchestration checkpoint for crash recovery and resume
+  interactive/      Dynamic story creation and session persistence for interactive tasks
   memory/           ChromaDB sidecar, embedding pipeline, semantic retrieval
   costs/            Token usage tracking, pricing, run history
   notify/           Push notifications via ntfy.sh
@@ -467,6 +485,7 @@ Ralph creates and manages these files in the project directory:
 | `.ralph/quality/` | Quality review assessments per iteration |
 | `.ralph/stories/` | Per-story state (state.json, plan.md, decisions.md) |
 | `.ralph/checkpoint.json` | Orchestration checkpoint for resume |
+| `.ralph/session-*.json` | Saved interactive task sessions |
 | `.ralph/memory/` | ChromaDB vector database storage |
 | `.ralph/run-history.json` | Accumulated run summaries with cost data |
 | `.ralph/workspace-setup.sh` | (Optional) Custom worker workspace initialization |

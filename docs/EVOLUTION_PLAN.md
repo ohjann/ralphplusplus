@@ -1175,10 +1175,26 @@ existing memory pipeline. Modifications to runner (prompt injection), TUI
 
 ---
 
-## Phase 5.5: Interactive Task Mode
+## Phase 5.5: Interactive Task Mode ✅ COMPLETE
 
 **Impact: High | Complexity: Medium | Dependencies: Phase 4 (agent roles — already complete), Phase 1 (story state — already complete), Phase 5 (learning loop — already complete, memory system used for interactive tasks)**
 
+> **Status: Complete** (completed 2026-03-23).
+> All 11 stories passed (P55-001 through P55-011). Key deliverables:
+> - `internal/interactive/` package — `StoryCreator` with atomic ID counter, `CreateStory`, `CreateAndAppend`, `SaveSession()`
+> - `internal/tui/clarify.go` — lightweight Claude (Sonnet) clarification step: returns "READY" or up to 3 questions
+> - Task input bar (textarea) visible in `phaseInteractive` and `phaseParallel`; Enter submits, Esc clears, Tab toggles focus
+> - `phaseInteractive` phase constant added to TUI phase system; coexists with running workers
+> - Clarification Q&A display and inline answer collection in TUI
+> - `Coordinator.AddStory()` and `DAG.AddNode()` for dynamic story injection into the scheduling pipeline
+> - Stories panel renders interactive tasks with lightning bolt marker and status labels (clarifying/queued/running/done/failed)
+> - Interactive tasks included in checkpoint writes automatically; session files saved to `.ralph/session-{timestamp}.json` on exit
+> - Config validation no longer fatals on missing `prd.json`; sets `NoPRD=true` and enters `phaseInteractive` directly
+> - Task input works during `phaseParallel` with full clarification flow
+>
+> **P55-010 initially failed judge review** because `phaseParallel` task submission
+> skipped clarification — fixed by wiring the same clarification flow for both phases.
+>
 > **Added 2026-03-23.** Ralph currently requires a pre-defined prd.json to
 > operate. This phase makes prd.json optional and adds a persistent input
 > bar to the TUI so users can inject tasks on the fly. Each task is
@@ -1313,17 +1329,17 @@ sequential step but a persistent capability.
 
 ### Acceptance Criteria
 
-- [ ] Ralph starts successfully without a prd.json, presenting an empty TUI with input bar
-- [ ] Tasks can be typed and submitted via the input bar at any time
-- [ ] Clarification step fires before dispatch, asking questions if the task is ambiguous
-- [ ] User can answer clarification questions inline in the TUI
-- [ ] Submitted tasks are created as `UserStory` structs and scheduled immediately
-- [ ] Tasks execute through the full worker pipeline (workspace, Claude, merge)
-- [ ] Stories panel updates dynamically as tasks are added and progress
-- [ ] Interactive tasks work alongside PRD stories when prd.json is provided
-- [ ] Interactive tasks are included in the checkpoint for crash recovery
-- [ ] Multiple tasks can run in parallel when `--workers N > 1`
-- [ ] Memory system works with interactive tasks (patterns embedded, context retrieved)
+- [x] Ralph starts successfully without a prd.json, presenting an empty TUI with input bar
+- [x] Tasks can be typed and submitted via the input bar at any time
+- [x] Clarification step fires before dispatch, asking questions if the task is ambiguous
+- [x] User can answer clarification questions inline in the TUI
+- [x] Submitted tasks are created as `UserStory` structs and scheduled immediately
+- [x] Tasks execute through the full worker pipeline (workspace, Claude, merge)
+- [x] Stories panel updates dynamically as tasks are added and progress
+- [x] Interactive tasks work alongside PRD stories when prd.json is provided
+- [x] Interactive tasks are included in the checkpoint for crash recovery
+- [x] Multiple tasks can run in parallel when `--workers N > 1`
+- [x] Memory system works with interactive tasks (patterns embedded, context retrieved)
 
 ### Estimated Scope
 
@@ -1781,7 +1797,7 @@ Phase 1 (Story State + Checkpoint) ✅
   │      │
   │      ├──→ Phase 5 (Learning Loop) ✅
   │      │      │
-  │      │      ├──→ Phase 5.5 (Interactive Task Mode)
+  │      │      ├──→ Phase 5.5 (Interactive Task Mode) ✅
   │      │      │
   │      │      └──→ Phase 10 (Auto-Split Stuck Stories)
   │      │
@@ -1808,7 +1824,7 @@ Phase 1 (Story State + Checkpoint) ✅
 | 4th   | Phase 3.1: 1M Context Recalibration ✅ | Done | Recalibrate defaults + TUI improvements |
 | 5th   | Phase 4: Agent Specialization ✅ | Done | Quality step-change |
 | 6th   | Phase 5: Learning Loop (revised) ✅ | Done | Compounding cross-run improvement, anti-patterns, skill feedback |
-| **7th** | **Phase 5.5: Interactive Task Mode** | ~5-7 stories | On-the-fly task dispatch, no PRD required |
+| 7th   | Phase 5.5: Interactive Task Mode ✅ | Done | On-the-fly task dispatch, no PRD required |
 | **8th** | **Phase 6: Multi-Model (simplified)** | ~4-5 stories | Speed + quality allocation per role |
 | **9th** | **Phase 7: MCP Server (scoped)** | ~6-8 stories | Real-time parallel coordination |
 | **10th** | **Phase 8: Knowledge Graph (if needed)** | ~8-10 stories | Structural intelligence — gate on evidence |
@@ -1816,9 +1832,8 @@ Phase 1 (Story State + Checkpoint) ✅
 | **12th** | **Phase 10: Auto-Split Stuck Stories** | ~5-7 stories | Reduce wasted iterations on stuck stories |
 | Stretch | Web Dashboard | — | Team visibility (if needed) |
 
-Phase 5.5 is the recommended next phase — it has no incomplete
-dependencies and unlocks a new usage mode. Phase 6 is relatively
-independent and could be reordered. Phase 8 is explicitly evidence-gated
+Phase 6 is the recommended next phase — it has no incomplete
+dependencies and is relatively independent. Phase 8 is explicitly evidence-gated
 — only build if `ralph_codebase` semantic context isn't sufficient for
 architect quality.
 
@@ -1841,5 +1856,5 @@ After full rollout, ralph should demonstrate:
 - **Stuck recovery**: Stuck stories are automatically split rather than
   wasting iterations (Phase 10)
 - **Interactive mode**: Tasks can be dispatched on the fly without a PRD,
-  with clarification step ensuring quality input (Phase 5.5)
+  with clarification step ensuring quality input ✅ (Phase 5.5)
 - **Visibility**: Full usage and performance analytics in TUI ✅ (Phase 3)
