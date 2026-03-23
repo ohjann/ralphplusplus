@@ -515,6 +515,26 @@ func (m *Model) Init() tea.Cmd {
 			spriteInit,
 		)
 	}
+	if m.cfg.NoPRD {
+		// Skip archive and DAG analysis — go straight to interactive mode.
+		m.phase = phaseInteractive
+		m.claudeContent += "── Interactive mode — add tasks with the input bar ──\n"
+		m.claudeVP.SetContent(m.claudeContent)
+		m.prevClaudeLen = len(m.claudeContent)
+		initCmds := []tea.Cmd{
+			setTitle,
+			m.spinner.Tick,
+			fastTickCmd(),
+			tickCmd(),
+		}
+		if spriteInit != nil {
+			initCmds = append(initCmds, spriteInit)
+		}
+		if !m.cfg.Memory.Disabled {
+			initCmds = append(initCmds, chromaSetupCmd(m.ctx, m.cfg))
+		}
+		return tea.Batch(initCmds...)
+	}
 	return tea.Batch(
 		setTitle,
 		archiveCmd(m.cfg),

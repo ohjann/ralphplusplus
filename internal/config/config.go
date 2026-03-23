@@ -52,6 +52,7 @@ type Config struct {
 	HistoryAll         bool   // --all flag for history subcommand
 	NoArchitect        bool   // --no-architect: globally skip architect phase for all stories
 	SpriteEnabled      bool   // sprite mascot overlay (default true)
+	NoPRD              bool   // true when no prd.json exists (interactive-only mode)
 
 	// Derived paths
 	PRDFile        string
@@ -548,7 +549,7 @@ func (c *Config) Validate() error {
 		}
 		// Don't require prd.json when --plan is used (it will be generated)
 	} else if _, err := os.Stat(c.PRDFile); os.IsNotExist(err) {
-		return fmt.Errorf("no prd.json found in %s\nUse the /ralph skill in Claude Code to create one from a PRD", c.ProjectDir)
+		c.NoPRD = true
 	}
 
 	if c.JudgeEnabled {

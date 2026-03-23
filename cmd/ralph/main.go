@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"github.com/eoghanhynes/ralph/internal/memory"
+	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/tui"
 )
 
@@ -62,6 +64,21 @@ func main() {
 	if err := cfg.EnsureDirs(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating directories: %v\n", err)
 		os.Exit(1)
+	}
+
+	// When no prd.json exists, create an empty one for interactive mode.
+	if cfg.NoPRD {
+		projectName := filepath.Base(cfg.ProjectDir)
+		branchName := fmt.Sprintf("ralph/interactive-%s", randomWords())
+		emptyPRD := &prd.PRD{
+			Project:     projectName,
+			BranchName:  branchName,
+			UserStories: []prd.UserStory{},
+		}
+		if err := prd.Save(cfg.PRDFile, emptyPRD); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating empty prd.json: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Initialize debug log
@@ -131,4 +148,17 @@ func printHistory(projectDir string, showAll bool) error {
 		fmt.Printf("\nShowing last 10 of %d runs. Use --all to see everything.\n", len(h.Runs))
 	}
 	return nil
+}
+
+// randomWords generates a short random identifier like "swift-oak-river".
+func randomWords() string {
+	words := []string{
+		"swift", "calm", "bold", "warm", "deep",
+		"oak", "elm", "fox", "owl", "bee",
+		"river", "stone", "cloud", "leaf", "dawn",
+	}
+	a := words[rand.Intn(5)]
+	b := words[5+rand.Intn(5)]
+	c := words[10+rand.Intn(5)]
+	return fmt.Sprintf("%s-%s-%s", a, b, c)
 }
