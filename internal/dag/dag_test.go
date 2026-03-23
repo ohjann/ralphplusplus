@@ -48,6 +48,37 @@ func TestFromCheckpoint(t *testing.T) {
 	}
 }
 
+func TestAddNode(t *testing.T) {
+	d := FromPRD([]prd.UserStory{
+		{ID: "S-001", Priority: 1},
+	})
+
+	d.AddNode("T-001", nil, 0)
+
+	if _, ok := d.Nodes["T-001"]; !ok {
+		t.Fatal("T-001 should exist in DAG after AddNode")
+	}
+	if d.Nodes["T-001"].Priority != 0 {
+		t.Errorf("expected priority 0, got %d", d.Nodes["T-001"].Priority)
+	}
+	if len(d.Nodes["T-001"].DependsOn) != 0 {
+		t.Errorf("expected empty DependsOn, got %v", d.Nodes["T-001"].DependsOn)
+	}
+
+	// Should be immediately ready
+	ready := d.Ready(map[string]bool{})
+	found := false
+	for _, id := range ready {
+		if id == "T-001" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("T-001 should be ready, got %v", ready)
+	}
+}
+
 func TestFromCheckpoint_MissingPriority(t *testing.T) {
 	edges := map[string][]string{
 		"S-001": {},

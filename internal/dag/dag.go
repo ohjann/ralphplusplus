@@ -161,6 +161,19 @@ func FromCheckpoint(edges map[string][]string, stories []prd.UserStory) *DAG {
 	return d
 }
 
+// AddNode adds a new story node to the DAG. If the node already exists, it is
+// overwritten. This is used to dynamically inject interactive tasks.
+func (d *DAG) AddNode(storyID string, dependsOn []string, priority int) {
+	if dependsOn == nil {
+		dependsOn = []string{}
+	}
+	d.Nodes[storyID] = &StoryNode{
+		StoryID:   storyID,
+		DependsOn: dependsOn,
+		Priority:  priority,
+	}
+}
+
 // Validate checks for cycles and dangling references.
 func (d *DAG) Validate(storyIDs []string) error {
 	idSet := make(map[string]bool)
