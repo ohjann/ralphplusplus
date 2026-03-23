@@ -27,6 +27,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/dag"
 	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"github.com/eoghanhynes/ralph/internal/events"
+	"github.com/eoghanhynes/ralph/internal/interactive"
 	"github.com/eoghanhynes/ralph/internal/judge"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/quality"
@@ -2613,6 +2614,7 @@ func (m *Model) inferStorySkipReason(storyID string) string {
 // showCompletionReport generates and displays the completion report in the Claude panel.
 func (m *Model) showCompletionReport() {
 	m.persistRunHistory()
+	m.saveInteractiveSession()
 	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, m.totalCost())
 	report := m.generateCompletionReport()
 	debuglog.Log("completion report:\n%s", report)
@@ -2620,6 +2622,23 @@ func (m *Model) showCompletionReport() {
 	m.claudeVP.SetContent(m.claudeContent)
 	m.claudeVP.GotoBottom()
 	m.prevClaudeLen = len(m.claudeContent)
+}
+
+// saveInteractiveSession saves interactive tasks to a session file on clean exit.
+func (m *Model) saveInteractiveSession() {
+	p, err := prd.Load(m.cfg.PRDFile)
+	if err != nil {
+		debuglog.Log("saveInteractiveSession: failed to load PRD: %v", err)
+		return
+	}
+	path, err := interactive.SaveSession(m.cfg.ProjectDir, p.UserStories)
+	if err != nil {
+		debuglog.Log("saveInteractiveSession: failed to save session: %v", err)
+		return
+	}
+	if path != "" {
+		debuglog.Log("saveInteractiveSession: saved to %s", path)
+	}
 }
 
 // persistRunHistory computes a RunSummary from the current state and appends it to run-history.json.
