@@ -2314,6 +2314,7 @@ func (m *Model) rebuildStoryDisplayInfos() {
 	if len(m.cachedPRDStories) == 0 {
 		return
 	}
+	prevCount := len(m.storyDisplayInfos)
 	var coordIface interface {
 		Workers() map[worker.WorkerID]*worker.Worker
 	}
@@ -2321,6 +2322,10 @@ func (m *Model) rebuildStoryDisplayInfos() {
 		coordIface = m.coord
 	}
 	m.storyDisplayInfos = BuildStoryDisplayInfos(m.cachedPRDStories, m.currentStoryID, coordIface, m.phase, m.iteration, string(m.currentRole))
+	// Auto-scroll to show newly added tasks
+	if len(m.storyDisplayInfos) > prevCount {
+		m.storiesVP.GotoBottom()
+	}
 }
 
 // clampLines truncates or pads a string to exactly n lines.

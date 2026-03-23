@@ -24,6 +24,8 @@ type StoryDisplayInfo struct {
 	StartTime      time.Time
 	IterationCount int
 	Role           string // current agent role (architect/implementer/debugger)
+	Status         string // task status for interactive tasks (clarifying, queued, running, done, failed)
+	IsInteractive  bool   // true for T-prefix interactive tasks
 }
 
 func newStoriesViewport(width, height int) viewport.Model {
@@ -89,25 +91,54 @@ func renderStoryList(stories []StoryDisplayInfo, width int, animFrame int, panel
 		var statusIcon string
 		var idStyle, titleStyle func(string) string
 
-		switch {
-		case s.Passed:
-			statusIcon = styleStoryPassed.Render("✓")
-			idStyle = func(s string) string { return styleStoryPassed.Render(s) }
-			titleStyle = func(s string) string {
-				return lipgloss.NewStyle().Foreground(colorMuted).Strikethrough(true).Render(s)
+		if s.IsInteractive {
+			// Interactive tasks use ⚡ marker and status-based rendering
+			switch {
+			case s.Passed || s.Status == "done":
+				statusIcon = styleStoryPassed.Render("⚡")
+				idStyle = func(s string) string { return styleStoryPassed.Render(s) }
+				titleStyle = func(s string) string {
+					return lipgloss.NewStyle().Foreground(colorMuted).Strikethrough(true).Render(s)
+				}
+			case s.Running || s.Status == "running":
+				statusIcon = styleStoryRunning.Render("⚡")
+				idStyle = func(s string) string { return styleStoryRunning.Render(s) }
+				titleStyle = func(s string) string { return styleStoryTitle.Render(s) }
+			case s.Failed || s.Status == "failed":
+				statusIcon = styleStoryFailed.Render("⚡")
+				idStyle = func(s string) string { return styleStoryFailed.Render(s) }
+				titleStyle = func(s string) string { return styleStoryFailed.Render(s) }
+			case s.Status == "clarifying":
+				statusIcon = styleMuted.Render("⚡")
+				idStyle = func(s string) string { return styleMuted.Render(s) }
+				titleStyle = func(s string) string { return styleMuted.Render(s) }
+			default: // queued or unknown
+				statusIcon = styleStoryPending.Render("⚡")
+				idStyle = func(s string) string { return styleStoryPending.Render(s) }
+				titleStyle = func(s string) string { return styleStoryPending.Render(s) }
 			}
-		case s.Running:
-			statusIcon = styleStoryRunning.Render(spinFrame)
-			idStyle = func(s string) string { return styleStoryRunning.Render(s) }
-			titleStyle = func(s string) string { return styleStoryTitle.Render(s) }
-		case s.Failed:
-			statusIcon = styleStoryFailed.Render("✗")
-			idStyle = func(s string) string { return styleStoryFailed.Render(s) }
-			titleStyle = func(s string) string { return styleStoryFailed.Render(s) }
-		default:
-			statusIcon = styleStoryPending.Render("○")
-			idStyle = func(s string) string { return styleStoryPending.Render(s) }
-			titleStyle = func(s string) string { return styleStoryPending.Render(s) }
+		} else {
+			// Standard PRD story markers
+			switch {
+			case s.Passed:
+				statusIcon = styleStoryPassed.Render("✓")
+				idStyle = func(s string) string { return styleStoryPassed.Render(s) }
+				titleStyle = func(s string) string {
+					return lipgloss.NewStyle().Foreground(colorMuted).Strikethrough(true).Render(s)
+				}
+			case s.Running:
+				statusIcon = styleStoryRunning.Render(spinFrame)
+				idStyle = func(s string) string { return styleStoryRunning.Render(s) }
+				titleStyle = func(s string) string { return styleStoryTitle.Render(s) }
+			case s.Failed:
+				statusIcon = styleStoryFailed.Render("✗")
+				idStyle = func(s string) string { return styleStoryFailed.Render(s) }
+				titleStyle = func(s string) string { return styleStoryFailed.Render(s) }
+			default:
+				statusIcon = styleStoryPending.Render("○")
+				idStyle = func(s string) string { return styleStoryPending.Render(s) }
+				titleStyle = func(s string) string { return styleStoryPending.Render(s) }
+			}
 		}
 
 		// Build the line: icon ID title [worker badge] [elapsed]
@@ -123,6 +154,11 @@ func renderStoryList(stories []StoryDisplayInfo, width int, animFrame int, panel
 		}
 		if s.Running && s.IterationCount > 0 {
 			line += " " + styleMuted.Render(fmt.Sprintf("(iter %d)", s.IterationCount))
+		}
+
+		// Status label for interactive tasks
+		if s.IsInteractive && s.Status != "" && !s.Running {
+			line += " " + styleMuted.Render(fmt.Sprintf("[%s]", s.Status))
 		}
 
 		// Worker badge for parallel mode
@@ -286,12 +322,36 @@ func BuildStoryDisplayInfos(stories []prd.UserStory, currentStoryID string, coor
 	}
 	_ = workerStartTimes // future use
 
-	var infos []StoryDisplayInfo
+	// Separate PRD stories and interactive tasks for ordering
+	var prdStories, interactiveStories []prd.UserStory
 	for _, s := range stories {
+		if strings.HasPrefix(s.ID, "T-") {
+			interactiveStories = append(interactiveStories, s)
+		} else {
+			prdStories = append(prdStories, s)
+		}
+	}
+	// PRD stories first, then interactive tasks
+	ordered := append(prdStories, interactiveStories...)
+
+	var infos []StoryDisplayInfo
+	for _, s := range ordered {
+		interactive := strings.HasPrefix(s.ID, "T-")
 		info := StoryDisplayInfo{
-			ID:     s.ID,
-			Title:  s.Title,
-			Passed: s.Passes,
+			ID:            s.ID,
+			Title:         s.Title,
+			Passed:        s.Passes,
+			IsInteractive: interactive,
+		}
+
+		// Set status for interactive tasks
+		if interactive {
+			switch {
+			case s.Passes:
+				info.Status = "done"
+			default:
+				info.Status = "queued"
+			}
 		}
 
 		// Check if running
@@ -300,10 +360,16 @@ func BuildStoryDisplayInfos(stories []prd.UserStory, currentStoryID string, coor
 			info.WorkerID = wID
 			info.IterationCount = workerIterations[s.ID]
 			info.Role = workerRoles[s.ID]
+			if interactive {
+				info.Status = "running"
+			}
 		} else if s.ID == currentStoryID && (phase == phaseClaudeRun || phase == phaseJudgeRun) {
 			info.Running = true
 			info.IterationCount = sequentialIteration
 			info.Role = currentRole
+			if interactive {
+				info.Status = "running"
+			}
 		}
 
 		infos = append(infos, info)
