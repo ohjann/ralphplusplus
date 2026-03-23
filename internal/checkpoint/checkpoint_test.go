@@ -203,6 +203,62 @@ func TestComputePRDHashConsistent(t *testing.T) {
 	}
 }
 
+func TestCheckpointWithInteractiveTasks(t *testing.T) {
+	dir := t.TempDir()
+	cp := Checkpoint{
+		PRDHash:          "abc",
+		Phase:            "parallel",
+		CompletedStories: []string{"P1-001", "T-001", "T-002"},
+		FailedStories:    map[string]FailedStory{},
+		InProgress:       []string{"T-003"},
+		DAG: map[string][]string{
+			"P1-001": {},
+			"T-001":  {},
+			"T-002":  {},
+			"T-003":  {},
+		},
+		IterationCount: 3,
+		Timestamp:      time.Date(2026, 3, 23, 12, 0, 0, 0, time.UTC),
+	}
+
+	if err := Save(dir, cp); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	loaded, exists, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !exists {
+		t.Fatal("checkpoint should exist")
+	}
+
+	// Verify interactive task IDs survive round-trip
+	completedSet := make(map[string]bool)
+	for _, id := range loaded.CompletedStories {
+		completedSet[id] = true
+	}
+	if !completedSet["T-001"] || !completedSet["T-002"] {
+		t.Error("interactive tasks T-001 and T-002 should be in completed stories")
+	}
+	if !completedSet["P1-001"] {
+		t.Error("PRD story P1-001 should also be in completed stories")
+	}
+
+	// Verify interactive tasks in DAG
+	if _, ok := loaded.DAG["T-001"]; !ok {
+		t.Error("T-001 should be in DAG")
+	}
+	if _, ok := loaded.DAG["T-003"]; !ok {
+		t.Error("T-003 should be in DAG")
+	}
+
+	// Verify in-progress interactive task
+	if len(loaded.InProgress) != 1 || loaded.InProgress[0] != "T-003" {
+		t.Errorf("in-progress should be [T-003], got %v", loaded.InProgress)
+	}
+}
+
 func TestComputePRDHashDifferentContents(t *testing.T) {
 	dir := t.TempDir()
 	file1 := filepath.Join(dir, "prd1.json")
@@ -284,3 +340,4 @@ func TestCheckpointWithPopulatedMaps(t *testing.T) {
 		t.Errorf("DAG[P1-006]: got %d deps, want 2", len(loaded.DAG["P1-006"]))
 	}
 }
+
