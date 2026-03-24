@@ -1350,9 +1350,76 @@ One new prompt template for the clarification step. No new packages needed.
 
 ---
 
+## Phase 5.7: Run History Observability
+
+**Impact: Medium | Complexity: Low | Dependencies: Phase 3 (usage tracking — already complete), Phase 5 (learning loop — already complete)**
+
+> **Added 2026-03-25.** Run history (`run-history.json`) was missing critical
+> metrics needed to compare model performance across runs. TotalCost was
+> hardcoded to zero, first-pass rate was computed at runtime but never
+> persisted, model names were tracked in TokenUsage but not surfaced, and
+> per-story iteration counts were lost (only the average survived). This
+> phase fixes all of these gaps as a **prerequisite for Phase 6** — we need
+> baseline metrics on Opus before switching roles to Sonnet/Haiku.
+
+### Goal
+
+Persist runtime metrics that are already computed but not saved to
+`run-history.json`, and surface them in the `ralph history` CLI. This
+establishes a baseline for comparing model performance before and after
+Phase 6 (Multi-Model Orchestration).
+
+### Context for Builder
+
+The `RunCosting` struct (`internal/costs/costs.go`) already tracks per-story
+token usage, model names, and costs at runtime. The `PlanQuality` struct
+in the coordinator already computes first-pass rate. None of this data
+was making it into `RunSummary` in `internal/costs/history.go` — the
+`persistRunHistory()` function in `model.go` was constructing summaries
+with `TotalCost: 0` and missing fields.
+
+### What to Build
+
+#### 5.7a. Extend RunSummary
+
+Add to `internal/costs/history.go`:
+- `StorySummary` struct: StoryID, Title, Iterations, Passed, JudgeRejects, Model
+- New fields on `RunSummary`: FirstPassRate, ModelsUsed, TotalInputTokens,
+  TotalOutputTokens, CacheHitRate, StoryDetails
+
+#### 5.7b. Wire persistRunHistory()
+
+Fix `internal/tui/model.go` `persistRunHistory()` to populate:
+- TotalCost from `m.runCosting.GetTotalCost()`
+- Token counts and cache hit rate from RunCosting snapshot
+- ModelsUsed from distinct models across all iterations
+- FirstPassRate from coordinator's PlanQuality (parallel) or events (serial)
+- Per-story details from PRD + RunCosting + event judge data
+
+#### 5.7c. Enhance CLI Display
+
+Update `cmd/ralph/main.go` `printHistory()` to show two new columns:
+- **1ST PASS**: FirstPassRate as percentage
+- **MODEL**: Primary model name (short form) or "mixed" if multiple
+
+### Acceptance Criteria
+
+- [x] RunSummary includes FirstPassRate, ModelsUsed, token counts, CacheHitRate, StoryDetails
+- [x] persistRunHistory() populates all new fields from runtime data
+- [x] `ralph history` shows 1ST PASS and MODEL columns
+- [x] Old run-history.json files (without new fields) load without error
+- [x] Unit tests cover new fields round-trip and backward compatibility
+
+### Estimated Scope
+
+~100 lines of Go code. Modifications to history.go (struct), model.go
+(persistence), main.go (display). One new test file update.
+
+---
+
 ## Phase 6: Multi-Model Orchestration (Revised)
 
-**Impact: Medium | Complexity: Low | Dependencies: Phase 4 (agent roles — already complete)**
+**Impact: Medium | Complexity: Low | Dependencies: Phase 4 (agent roles — already complete), Phase 5.7 (run history observability — baseline metrics)**
 
 > **Revision note (2026-03-19):** Original framing was cost optimization
 > ("target: 30-50% reduction"). The user is on Claude Max subscription, so
@@ -1639,6 +1706,176 @@ by `ralph_codebase` collection, not the graph.
 
 ---
 
+## Phase 8.5: Deep Code Review Mode
+
+**Impact: Medium-High | Complexity: Medium | Dependencies: Phase 8 (knowledge graph for structural context), Phase 4 (agent roles — already complete)**
+
+> **Added 2026-03-24.** Ralph currently only operates in "implementation mode"
+> — stories describe what to build, and the pipeline is architect → implementer
+> → judge → quality review. This phase adds a read-only **deep code review**
+> mode that reuses the same loop infrastructure to perform meticulous,
+> file-by-file and architectural reviews of existing code without making
+> any changes.
+>
+> This is distinct from the existing quality review gate (which runs
+> post-implementation with narrow lens-focused checks). Deep review is a
+> first-class operating mode where each PRD story defines a **review focus
+> area** and the output is a structured review document.
+>
+> **Why after Phase 8:** The knowledge graph provides structural codebase
+> awareness (dependency graphs, import chains, module boundaries) that makes
+> architectural reviews significantly more useful. Without it, the reviewer
+> is limited to what it can discover via Read/Grep/Glob in a single Claude
+> session. Phase 8's impact analysis queries enable the reviewer to trace
+> ripple effects and coupling that would otherwise be invisible.
+
+### Goal
+
+Add a `--deep-review` CLI mode that transforms the Ralph pipeline into a
+read-only code review system. Stories define areas to review instead of
+features to build. The agent explores code deeply, analyses architecture,
+and produces structured review documents with severity-tagged findings.
+
+### Context for Builder
+
+The existing role system (`internal/roles/roles.go`) already supports
+multiple agent specialisations. The architect role demonstrates the pattern
+for a read-only agent — it explores the codebase and produces a plan without
+writing code. Deep review follows the same pattern but produces review
+findings instead of implementation plans.
+
+The quality review system (`internal/quality/quality.go`) demonstrates
+structured findings output — JSON findings with severity, file, line,
+description, and suggestion fields parsed from `<findings>` tags. Deep
+review follows a similar output pattern but uses `<review>` tags with
+richer markdown content.
+
+### What to Build
+
+#### 8.5a. Config Flag and Role
+
+Add `DeepReview bool` to `internal/config/config.go`. When set:
+- Auto-disable: `JudgeEnabled = false`, `QualityReview = false`, `NoArchitect = true`
+- Require prd.json to exist (no plan-file mode)
+- Mutually exclusive with `--idle`
+
+Add `RoleDeepReviewer Role = "deep-reviewer"` to `internal/roles/roles.go`:
+```go
+case RoleDeepReviewer:
+    return AgentConfig{
+        Role:       RoleDeepReviewer,
+        PromptFile: "prompts/deep-reviewer.md",
+        MaxTokens:  32000,
+    }
+```
+
+#### 8.5b. Deep Reviewer Prompt (`prompts/deep-reviewer.md`)
+
+Read-only reviewer agent instructions:
+- **Tools allowed:** Read, Grep, Glob only. MUST NOT use Write, Edit, or Bash.
+- **Process:** Read story to understand review scope → explore all relevant
+  files broadly → analyse architecture, code quality, potential bugs, tech
+  debt, security, performance, testing gaps, coupling → produce structured
+  review in `<review>` tags.
+- **Knowledge graph integration:** When Phase 8's knowledge graph is
+  available, query it for dependency/import context, reverse dependencies,
+  and interface implementations to inform architectural analysis.
+- **Output format (inside `<review>` tags):**
+  ```markdown
+  # Deep Review: [Story ID] - [Title]
+
+  ## Executive Summary
+  One paragraph overview of the area reviewed and key findings.
+
+  ## File-by-File Analysis
+  ### `path/to/file.go`
+  - [critical] Description of critical issue (line X)
+  - [warning] Description of warning (line Y)
+  - [info] Observation (line Z)
+
+  ## Architectural Observations
+  - Pattern analysis, coupling, cohesion, dependency concerns.
+
+  ## Recommendations
+  1. [critical] Highest priority items
+  2. [warning] Medium priority items
+  3. [info] Nice-to-haves
+  ```
+- **Story state:** Write state.json with status "complete", update
+  progress.md with review summary.
+
+#### 8.5c. Review Worker (`internal/worker/review.go`)
+
+Simplified worker function `RunReview(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate)`:
+
+1. Send `WorkerSetup` state
+2. **No workspace creation** — run directly in `cfg.ProjectDir` (reviews
+   are read-only, no merge conflicts possible)
+3. Load PRD, build prompt with `RoleDeepReviewer` via `runner.BuildPrompt()`
+4. Append parallel-mode stop instruction via `appendParallelMode()`
+5. Call `runner.RunClaude()` against the project directory
+6. Parse `<review>` tags from activity log
+7. Write parsed content to `.ralph/stories/{id}/review.md`
+8. Mark story passed in PRD (reviews always pass)
+9. Send `WorkerDone` with `Passed: true`, empty `ChangeID` (no commit)
+10. No judge, no workspace cleanup
+
+#### 8.5d. Coordinator Routing
+
+In `coordinator.ScheduleReady()`, dispatch `worker.RunReview` instead
+of `worker.Run` when `cfg.DeepReview` is true.
+
+#### 8.5e. TUI Integration
+
+- **Serial mode:** `nextStoryMsg` dispatches `runDeepReviewCmd` instead of
+  `runClaudeCmd`. Skip judge check in `claudeDoneMsg` handler.
+- **Parallel mode:** Workers run `RunReview`. `WorkerDone` handler skips
+  `mergeBackCmd` (no ChangeID, no workspace to merge).
+- **Completion:** `transitionToComplete()` skips quality review. Instead,
+  runs consolidation — reads all `.ralph/stories/*/review.md` files and
+  writes a consolidated `REVIEW.md` at the project root with a table
+  of contents.
+- **Display:** Show "Deep Review" instead of "Running" in phase labels.
+
+#### 8.5f. PRD Format for Reviews
+
+Stories define review targets rather than features:
+```json
+{
+  "project": "MyProject",
+  "description": "Deep code review of the authentication system",
+  "userStories": [
+    {
+      "id": "R-001",
+      "title": "Review auth middleware",
+      "description": "Deep review of internal/auth/ — security, error handling, edge cases, architectural patterns",
+      "acceptanceCriteria": ["Identify security vulnerabilities", "Check error handling completeness", "Assess test coverage"],
+      "priority": 1
+    }
+  ]
+}
+```
+
+### Acceptance Criteria
+
+- [ ] `--deep-review` flag activates review mode, auto-disables judge/quality/architect
+- [ ] New `RoleDeepReviewer` role with dedicated prompt
+- [ ] `RunReview` worker runs Claude in read-only mode (no workspace, no commit)
+- [ ] Per-story review written to `.ralph/stories/{id}/review.md`
+- [ ] Consolidated `REVIEW.md` generated at project root after all stories
+- [ ] Works in both serial and parallel (`--workers N`) modes
+- [ ] After a deep-review run, `jj diff` shows no code changes (only .ralph/ state and REVIEW.md)
+- [ ] Knowledge graph context injected into reviewer prompt when available (Phase 8)
+
+### Estimated Scope
+
+~400-500 lines of Go code + ~100 lines of prompt. New files: `internal/worker/review.go`,
+`prompts/deep-reviewer.md`. Modifications to: config, roles, coordinator, TUI model,
+TUI commands, TUI messages. The infrastructure is largely reused from the existing
+worker/coordinator pipeline.
+
+---
+
 ## Phase 9: Improved DAG Accuracy (Revised — Replaces Speculative Parallel)
 
 **Impact: Medium | Complexity: Low-Medium | Dependencies: Phase 8 (knowledge graph for structural awareness, optional)**
@@ -1803,6 +2040,8 @@ Phase 1 (Story State + Checkpoint) ✅
   │      │
   │      ├──→ Phase 8 (Knowledge Graph — evidence-gated)
   │      │      │
+  │      │      ├──→ Phase 8.5 (Deep Code Review Mode)
+  │      │      │
   │      │      └──→ Phase 9 (Improved DAG Accuracy)
   │      │
   │      └──→ Phase 7 (MCP Server — scoped)
@@ -1811,7 +2050,9 @@ Phase 1 (Story State + Checkpoint) ✅
   │
   ├──→ Phase 3.1 (1M Context Recalibration) ✅
   │
-  └──→ Phase 6 (Multi-Model — revised) ← benefits from Phase 4 ✅
+  ├──→ Phase 5.7 (Run History Observability) ✅
+  │      │
+  └──→ Phase 6 (Multi-Model — revised) ← benefits from Phase 4 ✅, depends on Phase 5.7 ✅
 ```
 
 ## Recommended Execution Order
@@ -1825,11 +2066,13 @@ Phase 1 (Story State + Checkpoint) ✅
 | 5th   | Phase 4: Agent Specialization ✅ | Done | Quality step-change |
 | 6th   | Phase 5: Learning Loop (revised) ✅ | Done | Compounding cross-run improvement, anti-patterns, skill feedback |
 | 7th   | Phase 5.5: Interactive Task Mode ✅ | Done | On-the-fly task dispatch, no PRD required |
-| **8th** | **Phase 6: Multi-Model (simplified)** | ~4-5 stories | Speed + quality allocation per role |
-| **9th** | **Phase 7: MCP Server (scoped)** | ~6-8 stories | Real-time parallel coordination |
-| **10th** | **Phase 8: Knowledge Graph (if needed)** | ~8-10 stories | Structural intelligence — gate on evidence |
-| **11th** | **Phase 9: Improved DAG Accuracy** | ~3-4 stories | Better parallelism without speculation |
-| **12th** | **Phase 10: Auto-Split Stuck Stories** | ~5-7 stories | Reduce wasted iterations on stuck stories |
+| 8th   | Phase 5.7: Run History Observability ✅ | Done | Baseline metrics for model comparison |
+| **9th** | **Phase 6: Multi-Model (simplified)** | ~4-5 stories | Speed + quality allocation per role |
+| **10th** | **Phase 7: MCP Server (scoped)** | ~6-8 stories | Real-time parallel coordination |
+| **11th** | **Phase 8: Knowledge Graph (if needed)** | ~8-10 stories | Structural intelligence — gate on evidence |
+| **12th** | **Phase 8.5: Deep Code Review Mode** | ~4-5 stories | Read-only code review via Ralph loop |
+| **13th** | **Phase 9: Improved DAG Accuracy** | ~3-4 stories | Better parallelism without speculation |
+| **14th** | **Phase 10: Auto-Split Stuck Stories** | ~5-7 stories | Reduce wasted iterations on stuck stories |
 | Stretch | Web Dashboard | — | Team visibility (if needed) |
 
 Phase 6 is the recommended next phase — it has no incomplete
@@ -1855,6 +2098,9 @@ After full rollout, ralph should demonstrate:
   enabling more concurrent story execution (Phase 9)
 - **Stuck recovery**: Stuck stories are automatically split rather than
   wasting iterations (Phase 10)
+- **Deep review**: Ralph can perform meticulous read-only code reviews
+  using the same loop infrastructure, producing structured findings with
+  file-by-file analysis and architectural observations (Phase 8.5)
 - **Interactive mode**: Tasks can be dispatched on the fly without a PRD,
   with clarification step ensuring quality input ✅ (Phase 5.5)
 - **Visibility**: Full usage and performance analytics in TUI ✅ (Phase 3)

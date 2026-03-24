@@ -50,6 +50,8 @@ type Config struct {
 	EnableMonitoring   bool   // --enable-monitoring: activate ntfy + status page from .env
 	HistoryCommand     bool   // true when "history" subcommand is used
 	HistoryAll         bool   // --all flag for history subcommand
+	HistoryStats       bool   // --stats flag for history subcommand
+	HistoryCompare     bool   // --compare flag for history subcommand
 	NoArchitect        bool   // --no-architect: globally skip architect phase for all stories
 	SpriteEnabled      bool   // sprite mascot overlay (default true)
 	NoPRD              bool   // true when no prd.json exists (interactive-only mode)
@@ -78,11 +80,15 @@ func Parse(args []string) (*Config, error) {
 	// Check for "history" subcommand as first argument.
 	if len(args) > 0 && args[0] == "history" {
 		cfg.HistoryCommand = true
-		// Parse optional --all flag and --dir
+		// Parse optional flags
 		for j := 1; j < len(args); j++ {
 			switch args[j] {
 			case "--all":
 				cfg.HistoryAll = true
+			case "--stats":
+				cfg.HistoryStats = true
+			case "--compare":
+				cfg.HistoryCompare = true
 			case "--dir":
 				if j+1 < len(args) {
 					cfg.ProjectDir = args[j+1]

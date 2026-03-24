@@ -18,7 +18,7 @@ Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 - **Confidence decay** — unconfirmed memories decay by 0.85x per run; confirmed memories get boosted
 - **Real-time cost tracking** — token usage parsed from Claude and Gemini streaming output, aggregated per-story and per-run
 - **TUI costs tab** — per-story cost breakdown, total run cost, token counts, cache hit rate
-- **Run history** — `ralph history` shows recent runs with date, stories, cost, and duration
+- **Run history** — `ralph history` shows recent runs with date, stories, cost, duration, first-pass rate, and model; `--stats` for aggregates; `--compare` for model-vs-model comparison
 - **Push notifications** — ntfy.sh notifications on story complete/fail/stuck and run done; zero accounts needed
 - **Remote status page** — mobile-friendly HTTP status page with SSE live updates; JSON API at `/api/status`
 - **Stuck detection + hint injection** — detects tool-call loops, shows a status bar with notification, lets you inject a hint for the next iteration, then inserts a targeted fix story
@@ -184,6 +184,8 @@ Options:
 Subcommands:
   ralph history                   Show recent run summaries (last 10)
   ralph history --all             Show all run history
+  ralph history --stats           Show aggregate statistics across all runs
+  ralph history --compare         Compare runs grouped by model
   ralph memory stats              Show memory collection statistics
   ralph memory search <query>     Test semantic retrieval
   ralph memory prune              Force memory confidence decay

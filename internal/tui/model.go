@@ -2827,8 +2827,9 @@ func (m *Model) persistRunHistory() {
 		avgIter = float64(totalIterations) / float64(completed)
 	}
 
-	// Compute judge rejection rate from events
+	// Compute judge rejection rate and per-story judge rejects from events
 	var judgeTotal, judgeRejections, stuckCount int
+	judgeRejectsPerStory := make(map[string]int)
 	evts, err := events.Load(m.cfg.ProjectDir)
 	if err == nil {
 		for _, e := range evts {
@@ -2837,6 +2838,7 @@ func (m *Model) persistRunHistory() {
 				judgeTotal++
 				if e.Meta["verdict"] == "fail" {
 					judgeRejections++
+					judgeRejectsPerStory[e.StoryID]++
 				}
 			case events.EventStuck:
 				stuckCount++
@@ -2849,20 +2851,88 @@ func (m *Model) persistRunHistory() {
 		rejectionRate = float64(judgeRejections) / float64(judgeTotal)
 	}
 
+	// Collect cost and model data from RunCosting
+	var totalCost float64
+	var totalInputTokens, totalOutputTokens int
+	var cacheHitRate float64
+	modelsSet := make(map[string]bool)
+	storyIterCounts := make(map[string]int)
+	storyModels := make(map[string]string)
+
+	if m.runCosting != nil {
+		snap := m.runCosting.Snapshot()
+		totalCost = snap.TotalCost
+		totalInputTokens = snap.TotalInputTokens
+		totalOutputTokens = snap.TotalOutputTokens
+		cacheHitRate = m.runCosting.CacheHitRate()
+
+		for storyID, sc := range snap.Stories {
+			storyIterCounts[storyID] = len(sc.Iterations)
+			for _, ic := range sc.Iterations {
+				if ic.TokenUsage.Model != "" {
+					modelsSet[ic.TokenUsage.Model] = true
+					storyModels[storyID] = ic.TokenUsage.Model // last model wins
+				}
+			}
+		}
+	}
+
+	var modelsUsed []string
+	for model := range modelsSet {
+		modelsUsed = append(modelsUsed, model)
+	}
+
+	// Compute first-pass rate
+	var firstPassRate float64
+	if m.coord != nil {
+		pq := m.coord.GetPlanQuality()
+		if pq.TotalStories > 0 {
+			firstPassRate = float64(pq.FirstPassCount) / float64(pq.TotalStories)
+		}
+	} else if completed > 0 {
+		// Serial mode: stories with zero judge rejections are first-pass
+		firstPass := 0
+		for _, s := range p.UserStories {
+			if s.Passes && judgeRejectsPerStory[s.ID] == 0 {
+				firstPass++
+			}
+		}
+		firstPassRate = float64(firstPass) / float64(len(p.UserStories))
+	}
+
+	// Build per-story details
+	var storyDetails []costs.StorySummary
+	for _, s := range p.UserStories {
+		storyDetails = append(storyDetails, costs.StorySummary{
+			StoryID:      s.ID,
+			Title:        s.Title,
+			Iterations:   storyIterCounts[s.ID],
+			Passed:       s.Passes,
+			JudgeRejects: judgeRejectsPerStory[s.ID],
+			Model:        storyModels[s.ID],
+		})
+	}
+
 	durationMinutes := time.Since(m.startTime).Minutes()
 
 	summary := costs.RunSummary{
-		PRD:                  p.Project,
-		Date:                 time.Now().Format(time.RFC3339),
-		StoriesTotal:         len(p.UserStories),
-		StoriesCompleted:     completed,
-		StoriesFailed:        failed,
-		TotalCost:            0, // populated when RunCosting is wired in
-		DurationMinutes:      durationMinutes,
-		TotalIterations:      totalIterations,
+		PRD:                   p.Project,
+		Date:                  time.Now().Format(time.RFC3339),
+		StoriesTotal:          len(p.UserStories),
+		StoriesCompleted:      completed,
+		StoriesFailed:         failed,
+		TotalCost:             totalCost,
+		DurationMinutes:       durationMinutes,
+		TotalIterations:       totalIterations,
 		AvgIterationsPerStory: avgIter,
-		StuckCount:           stuckCount,
-		JudgeRejectionRate:   rejectionRate,
+		StuckCount:            stuckCount,
+		JudgeRejectionRate:    rejectionRate,
+		FirstPassRate:         firstPassRate,
+		ModelsUsed:            modelsUsed,
+		TotalInputTokens:      totalInputTokens,
+		TotalOutputTokens:     totalOutputTokens,
+		CacheHitRate:          cacheHitRate,
+		StoryDetails:          storyDetails,
 	}
 
 	if err := costs.AppendRun(m.cfg.ProjectDir, summary); err != nil {
