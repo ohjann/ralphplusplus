@@ -56,6 +56,16 @@ func LoadLessons(projectDir string) (LessonsFile, error) {
 	return lf, nil
 }
 
+// LearningEntry represents a single learning entry for markdown memory files.
+type LearningEntry struct {
+	ID        string
+	Run       string
+	Stories   []string
+	Confirmed int
+	Category  string
+	Content   string
+}
+
 // AntiPattern represents a recurring failure pattern. Retained as a type
 // for BuildPromptOpts but detection via ChromaDB is removed.
 type AntiPattern struct {
