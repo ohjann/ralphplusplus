@@ -50,9 +50,6 @@ func newSettingsState(cfg *config.Config) settingsState {
 			{Label: "Quality Review", Type: settingBool, BoolVal: cfg.QualityReview, DefaultB: true},
 			{Label: "Quality Workers", Type: settingInt, IntVal: cfg.QualityWorkers, DefaultI: 3, Min: 1},
 			{Label: "Quality Max Iterations", Type: settingInt, IntVal: cfg.QualityMaxIters, DefaultI: 2, Min: 1},
-			{Label: "Memory Top-K", Type: settingInt, IntVal: cfg.Memory.TopK, DefaultI: 15, Min: 1},
-			{Label: "Memory Min Score", Type: settingFloat, FloatVal: cfg.Memory.MinScore, DefaultF: 0.6, FloatMin: 0.0, FloatMax: 1.0, FloatStep: 0.05},
-			{Label: "Memory Max Tokens", Type: settingInt, IntVal: cfg.Memory.MaxTokens, DefaultI: 8000, Min: 100},
 			{Label: "Memory Disable", Type: settingBool, BoolVal: cfg.Memory.Disabled, DefaultB: false},
 			{Label: "Skip Architect", Type: settingBool, BoolVal: cfg.NoArchitect, DefaultB: false},
 			{Label: "Sprite Enabled", Type: settingBool, BoolVal: cfg.SpriteEnabled, DefaultB: true},
@@ -142,16 +139,10 @@ func (s *settingsState) applyTo(cfg *config.Config) {
 		case 5:
 			cfg.QualityMaxIters = e.IntVal
 		case 6:
-			cfg.Memory.TopK = e.IntVal
-		case 7:
-			cfg.Memory.MinScore = e.FloatVal
-		case 8:
-			cfg.Memory.MaxTokens = e.IntVal
-		case 9:
 			cfg.Memory.Disabled = e.BoolVal
-		case 10:
+		case 7:
 			cfg.NoArchitect = e.BoolVal
-		case 11:
+		case 8:
 			cfg.SpriteEnabled = e.BoolVal
 		}
 	}

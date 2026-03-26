@@ -20,7 +20,6 @@ import (
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/tui/sprite"
 	"github.com/eoghanhynes/ralph/internal/costs"
-	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/notify"
 	"github.com/eoghanhynes/ralph/internal/statuspage"
 	"github.com/eoghanhynes/ralph/internal/coordinator"
@@ -136,13 +135,7 @@ type Model struct {
 	runCosting    *costs.RunCosting
 	rateLimitInfo *costs.RateLimitInfo // latest rate limit info from Claude CLI
 
-	// Memory / ChromaDB sidecar
-	memorySidecar  *memory.Sidecar
-	chromaClient   *memory.ChromaClient
-	memoryEmbedder memory.Embedder
 	memoryContent    string // rendered content for the memory context panel tab
-	memoryRetrieval  *MemoryRetrievalMsg // last retrieval results for display
-	confirmTracker   *memory.ConfirmationTracker
 
 	// Stuck alert (shown as status bar) + hint input
 	stuckAlert    *runner.StuckInfo
@@ -236,7 +229,6 @@ func NewModel(cfg *config.Config, version string) *Model {
 		progressSpring: harmonica.NewSpring(harmonica.FPS(30), 6.0, 0.5),
 		runCosting:     costs.NewRunCosting(),
 		workerLogCache: make(map[worker.WorkerID]string),
-		confirmTracker: memory.NewConfirmationTracker(),
 		notifier:       n,
 		statusServer:   ss,
 		hintInput:      hi,
@@ -249,15 +241,6 @@ func NewModel(cfg *config.Config, version string) *Model {
 
 func (m *Model) ExitCode() int {
 	return m.exitCode
-}
-
-// stopSidecar cleanly shuts down the ChromaDB sidecar if running.
-func (m *Model) stopSidecar() {
-	if m.memorySidecar != nil {
-		if err := m.memorySidecar.Stop(); err != nil {
-			debuglog.Log("chromadb sidecar stop error: %v", err)
-		}
-	}
 }
 
 // stopStatusServer gracefully shuts down the status page server if running.
@@ -562,9 +545,6 @@ func (m *Model) Init() tea.Cmd {
 		if spriteInit != nil {
 			initCmds = append(initCmds, spriteInit)
 		}
-		if !m.cfg.Memory.Disabled {
-			initCmds = append(initCmds, chromaSetupCmd(m.ctx, m.cfg))
-		}
 		return tea.Batch(initCmds...)
 	}
 	return tea.Batch(
@@ -776,15 +756,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.cleanupWorkerLogs()
 				m.stopStatusServer()
-				m.stopSidecar()
-				m.cancel()
+					m.cancel()
 				return m, tea.Quit
 			case "q":
 				if m.confirmQuit || m.phase == phaseDone || m.phase == phaseIdle {
 					m.cleanupWorkerLogs()
 					m.stopStatusServer()
-					m.stopSidecar()
-					m.cancel()
+							m.cancel()
 					return m, tea.Quit
 				}
 				m.confirmQuit = true
@@ -813,7 +791,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.cleanupWorkerLogs()
 			m.stopStatusServer()
-			m.stopSidecar()
 			m.cancel()
 			return m, tea.Quit
 		case msg.String() == "y":
@@ -851,8 +828,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.cfg, m.storyDAG, m.cfg.Workers, incomplete,
 						cp.CompletedStories, cp.FailedStories, cp.IterationCount,
 					)
-					m.coord.SetMemory(m.chromaClient, m.memoryEmbedder)
-					m.coord.SetRunCosting(m.runCosting)
+						m.coord.SetRunCosting(m.runCosting)
 					m.phase = phaseParallel
 					m.coord.ScheduleReady(m.ctx)
 					cmds = append(cmds, m.coord.ListenCmd())
@@ -880,15 +856,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.phase == phaseResumePrompt {
 				m.cleanupWorkerLogs()
 				m.stopStatusServer()
-				m.stopSidecar()
-				m.cancel()
+					m.cancel()
 				return m, tea.Quit
 			}
 			if m.phase == phaseReview {
 				m.cleanupWorkerLogs()
 				m.stopStatusServer()
-				m.stopSidecar()
-				m.cancel()
+					m.cancel()
 				return m, tea.Quit
 			}
 			if m.phase == phaseQualityPrompt {
@@ -898,8 +872,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.confirmQuit || m.phase == phaseDone || m.phase == phaseIdle {
 				m.cleanupWorkerLogs()
 				m.stopStatusServer()
-				m.stopSidecar()
-				m.cancel()
+					m.cancel()
 				return m, tea.Quit
 			}
 			if m.phase == phaseInteractive {
@@ -1200,10 +1173,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tickCmd())
 		cmds = append(cmds, pollWorktreeCmd(m.ctx, m.cfg.ProjectDir))
 		cmds = append(cmds, reloadPRDCmd(m.cfg.PRDFile))
-		// Refresh memory stats periodically (picks up embedding pipeline changes)
-		if m.chromaClient != nil {
-			cmds = append(cmds, memoryStatsCmd(m.ctx, m.chromaClient, m.cfg.Memory.Disabled, withEmbedder(m.memoryEmbedder != nil)))
-		}
 		// Auto-dismiss stuck alert after 30s
 		if m.stuckAlert != nil && time.Since(m.stuckAlertAt) > 30*time.Second {
 			m.stuckAlert = nil
@@ -1292,13 +1261,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prevClaudeLen = len(m.claudeContent)
 		}
 
-		// Start ChromaDB sidecar setup in background (unless disabled)
-		if !m.cfg.Memory.Disabled {
-			cmds = append(cmds, chromaSetupCmd(m.ctx, m.cfg))
-		} else {
-			m.memoryContent = "  Memory disabled"
-		}
-
 		// Check for existing checkpoint to offer resume
 		cp, exists, err := checkpoint.Load(m.cfg.ProjectDir)
 		if err == nil && exists {
@@ -1333,42 +1295,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, findNextStoryCmd(m.cfg.PRDFile))
 		}
 
-	case chromaSetupDoneMsg:
-		if msg.Err != nil {
-			debuglog.Log("chromadb setup failed (degrading gracefully): %v", msg.Err)
-			m.memoryContent = "  Memory unavailable (ChromaDB not running)"
-		} else {
-			m.memorySidecar = msg.Sidecar
-			m.chromaClient = msg.Client
-			m.confirmTracker = memory.NewConfirmationTracker()
-			// Create embedder for semantic memory retrieval in BuildPrompt
-			if embedder, err := memory.NewAnthropicEmbedder(); err != nil {
-				debuglog.Log("memory embedder init failed (retrieval degraded): %v", err)
-			} else {
-				m.memoryEmbedder = embedder
-			}
-			// Trigger codebase scan in background now that sidecar is healthy
-			if m.memoryEmbedder != nil {
-				cmds = append(cmds, codebaseScanCmd(m.ctx, m.cfg, m.chromaClient, m.memoryEmbedder))
-			}
-			cmds = append(cmds, memoryStatsCmd(m.ctx, m.chromaClient, m.cfg.Memory.Disabled, withEmbedder(m.memoryEmbedder != nil)))
-			cmds = append(cmds, detectAntiPatternsCmd(m.ctx, m.chromaClient))
-		}
-
-	case codebaseScanDoneMsg:
-		if msg.Err != nil {
-			debuglog.Log("codebase scan failed (non-fatal): %v", msg.Err)
-		}
-		// Refresh memory stats after scan completes (collection counts changed)
-		if m.chromaClient != nil {
-			cmds = append(cmds, memoryStatsCmd(m.ctx, m.chromaClient, m.cfg.Memory.Disabled, withEmbedder(m.memoryEmbedder != nil)))
-		}
-
 	case memoryStatsMsg:
-		m.memoryContent = renderMemoryWithRetrieval(msg.Content, m.memoryRetrieval)
-
-	case antiPatternsMsg:
-		m.antiPatternsContent = renderAntiPatternsContent(msg.Patterns)
+		m.memoryContent = renderMemoryContent(msg.Content)
 
 	case costUpdateMsg:
 		if m.runCosting != nil {
@@ -1437,7 +1365,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Bootstrap coordinator if none exists (pure interactive / post-PRD mode)
 			if m.coord == nil {
 				m.coord = coordinator.New(m.cfg, m.storyDAG, m.cfg.Workers, nil)
-				m.coord.SetMemory(m.chromaClient, m.memoryEmbedder)
 				m.coord.SetRunCosting(m.runCosting)
 				m.coord.SetNotifier(m.notifier)
 				debuglog.Log("bootstrapped coordinator for interactive task dispatch")
@@ -1460,18 +1387,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.phase = phaseParallel
 				debuglog.Log("switching from phaseInteractive to phaseParallel for interactive task dispatch")
 			}
-		}
-
-	case pipelineEmbedDoneMsg:
-		if msg.Err != nil {
-			debuglog.Log("pipeline embed failed for %s (non-fatal): %v", msg.StoryID, msg.Err)
-		} else {
-			debuglog.Log("pipeline embed complete for %s", msg.StoryID)
-		}
-		// Refresh memory stats immediately after embed so counts update
-		if m.chromaClient != nil {
-			cmds = append(cmds, memoryStatsCmd(m.ctx, m.chromaClient, m.cfg.Memory.Disabled, withEmbedder(m.memoryEmbedder != nil)))
-			cmds = append(cmds, detectAntiPatternsCmd(m.ctx, m.chromaClient))
 		}
 
 	case nextStoryMsg:
@@ -1512,7 +1427,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.preRevs = captureRevsCmd(m.ctx, dirs)
 		}
 
-		cmds = append(cmds, runClaudeCmd(m.ctx, m.cfg, msg.StoryID, m.iteration, m.chromaClient, m.memoryEmbedder))
+		cmds = append(cmds, runClaudeCmd(m.ctx, m.cfg, msg.StoryID, m.iteration))
 
 	case claudeDoneMsg:
 		m.currentRole = msg.Role
@@ -1523,8 +1438,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				debuglog.Log("claudeDone: context cancelled, quitting")
 				m.cleanupWorkerLogs()
 				m.stopStatusServer()
-				m.stopSidecar()
-				return m, tea.Quit
+					return m, tea.Quit
 			}
 			// Usage limit — pause and wait for user
 			var usageErr *runner.UsageLimitError
@@ -1556,16 +1470,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.RateLimitInfo != nil {
 			m.rateLimitInfo = msg.RateLimitInfo
 		}
-		// Capture retrieval data for memory panel display
-		if len(msg.DocRefs) > 0 && m.currentStoryID != "" {
-			m.memoryRetrieval = &MemoryRetrievalMsg{
-				StoryID:    m.currentStoryID,
-				DocRefs:    msg.DocRefs,
-				TotalFound: msg.TotalFound,
-				MaxTokens:  msg.MaxTokens,
-			}
-			m.memoryContent = renderMemoryWithRetrieval(m.memoryContent, m.memoryRetrieval)
-		}
 		m.updateStatusPage()
 
 		// Mark current story as passed in prd.json if agent reported it complete.
@@ -1577,22 +1481,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if p, err := prd.Load(m.cfg.PRDFile); err == nil {
 					p.SetPasses(m.currentStoryID, true)
 					_ = prd.Save(m.cfg.PRDFile, p)
-				}
-				// Confirm retrieved docs that contributed to this successful story
-				if m.confirmTracker != nil && len(msg.DocRefs) > 0 {
-					for _, ref := range msg.DocRefs {
-						_ = m.confirmTracker.ConfirmDocument(m.ctx, ref.Collection, ref.DocID)
-					}
-					debuglog.Log("memory: confirmed %d doc refs for story %s", len(msg.DocRefs), m.currentStoryID)
-				}
-				// Trigger embedding pipeline for completed story
-				if m.chromaClient != nil && m.memoryEmbedder != nil {
-					cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.memoryEmbedder, m.cfg.ProjectDir, m.currentStoryID, false))
-				}
-			} else if ss.Status == storystate.StatusContextExhausted {
-				// Trigger embedding pipeline for context-exhausted story
-				if m.chromaClient != nil && m.memoryEmbedder != nil {
-					cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.memoryEmbedder, m.cfg.ProjectDir, m.currentStoryID, true))
 				}
 			}
 		}
@@ -1720,7 +1608,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.coord = coordinator.New(m.cfg, m.storyDAG, m.cfg.Workers, incomplete)
-			m.coord.SetMemory(m.chromaClient, m.memoryEmbedder)
 			m.coord.SetRunCosting(m.runCosting)
 			m.coord.SetNotifier(m.notifier)
 			m.phase = phaseParallel
@@ -1788,13 +1675,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.coord.PreserveWorkerLogs(u.StoryID, u.WorkerID)
 			if u.Passed && u.ChangeID != "" {
 				m.notifyStoryComplete(u.StoryID, m.coord.StoryTitle(u.StoryID))
-				// Confirm retrieved docs that contributed to this successful parallel story
-				if m.confirmTracker != nil && len(u.DocRefs) > 0 {
-					for _, ref := range u.DocRefs {
-						_ = m.confirmTracker.ConfirmDocument(m.ctx, ref.Collection, ref.DocID)
-					}
-					debuglog.Log("memory: confirmed %d doc refs for parallel story %s", len(u.DocRefs), u.StoryID)
-				}
 				cmds = append(cmds, mergeBackCmd(m.ctx, m.coord, u))
 			} else {
 				// Abandon the committed change so it doesn't leave an orphaned
@@ -1905,12 +1785,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.cacheWorkerLog(msg.WorkerID)
 		go m.coord.CleanupWorker(m.ctx, msg.WorkerID)
-		// Trigger embedding pipeline after successful merge
-		if msg.Err == nil && m.chromaClient != nil && m.memoryEmbedder != nil {
-			ss, _ := storystate.Load(m.cfg.ProjectDir, msg.StoryID)
-			contextExhausted := ss.Status == storystate.StatusContextExhausted
-			cmds = append(cmds, runPipelineCmd(m.ctx, m.chromaClient, m.memoryEmbedder, m.cfg.ProjectDir, msg.StoryID, contextExhausted))
-		}
 		// Schedule more work
 		m.coord.ScheduleReady(m.ctx)
 		// Re-register listener if new workers were launched — without this,
@@ -2065,28 +1939,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.prevClaudeLen = len(m.claudeContent)
 		cmds = append(cmds, qualityReviewCmd(m.ctx, m.cfg, m.qualityIteration))
 
-	case synthesisCompleteMsg:
-		if msg.Err != nil {
-			debuglog.Log("post-run synthesis failed (non-fatal): %v", msg.Err)
-			m.claudeContent += fmt.Sprintf("── Synthesis error (non-fatal): %v ──\n", msg.Err)
-		} else if len(msg.Lessons) > 0 {
-			debuglog.Log("post-run synthesis extracted %d lessons", len(msg.Lessons))
-			m.claudeContent += fmt.Sprintf("── Synthesis complete: %d lessons extracted ──\n", len(msg.Lessons))
-		} else {
-			debuglog.Log("post-run synthesis complete: no lessons found")
-			m.claudeContent += "── Synthesis complete: no new lessons ──\n"
-		}
-		m.claudeVP.SetContent(m.claudeContent)
-		m.claudeVP.GotoBottom()
-		m.prevClaudeLen = len(m.claudeContent)
-		// Re-detect anti-patterns after synthesis (lessons may have changed)
-		if m.chromaClient != nil {
-			cmds = append(cmds, detectAntiPatternsCmd(m.ctx, m.chromaClient))
-		}
-		// Now proceed to summary generation
-		_, cmd := m.finishSummary()
-		cmds = append(cmds, cmd)
-
 	case summaryDoneMsg:
 		if msg.Err != nil {
 			m.claudeContent += fmt.Sprintf("\n── Summary generation error: %v ──\n", msg.Err)
@@ -2137,35 +1989,13 @@ func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 // then generates a final summary of all changes.
 func (m *Model) transitionToSummary() (tea.Model, tea.Cmd) {
 	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, m.totalCost())
-	// Run confidence decay cycle before stopping sidecar (needs ChromaDB running)
-	if m.chromaClient != nil && m.confirmTracker != nil {
-		summary, err := memory.RunDecayCycle(m.ctx, m.chromaClient, m.confirmTracker)
-		if err != nil {
-			debuglog.Log("warning: memory decay cycle failed: %v", err)
-		} else {
-			debuglog.Log("Memory maintenance: %d confirmed, %d decayed, %d evicted",
-				summary.Confirmed, summary.Decayed, summary.Evicted)
-		}
-	}
-
-	// Run post-run synthesis asynchronously if memory is available
-	if m.chromaClient != nil && m.memoryEmbedder != nil {
-		m.phase = phaseSummary
-		m.claudeContent = "── Running post-run synthesis... ──\n"
-		m.claudeVP.SetContent(m.claudeContent)
-		m.prevClaudeLen = len(m.claudeContent)
-		return m, synthesisCmd(m.ctx, m.cfg, m.chromaClient, m.memoryEmbedder, m.buildRunSummary())
-	}
-
-	// No memory available — skip synthesis and go straight to summary
 	return m.finishSummary()
 }
 
 // finishSummary stops the sidecar and starts summary generation.
 func (m *Model) finishSummary() (tea.Model, tea.Cmd) {
-	// Stop status page and ChromaDB sidecar — no more updates needed
+	// Stop status page — no more updates needed
 	m.stopStatusServer()
-	m.stopSidecar()
 	// Best-effort checkpoint cleanup on clean completion
 	_ = checkpoint.Delete(m.cfg.ProjectDir)
 	m.phase = phaseSummary

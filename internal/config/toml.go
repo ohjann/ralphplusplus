@@ -18,9 +18,6 @@ type tomlConfig struct {
 	QualityReview      *bool   `toml:"quality_review"`
 	QualityWorkers     *int    `toml:"quality_workers"`
 	QualityMaxIters    *int    `toml:"quality_max_iterations"`
-	MemoryTopK         *int    `toml:"memory_top_k"`
-	MemoryMinScore     *float64 `toml:"memory_min_score"`
-	MemoryMaxTokens    *int    `toml:"memory_max_tokens"`
 	MemoryDisable      *bool   `toml:"memory_disable"`
 	NoArchitect        *bool   `toml:"no_architect"`
 	SpriteEnabled      *bool   `toml:"sprite_enabled"`
@@ -71,15 +68,6 @@ func (tc *tomlConfig) applyTo(cfg *Config) {
 	if tc.QualityMaxIters != nil {
 		cfg.QualityMaxIters = *tc.QualityMaxIters
 	}
-	if tc.MemoryTopK != nil {
-		cfg.Memory.TopK = *tc.MemoryTopK
-	}
-	if tc.MemoryMinScore != nil {
-		cfg.Memory.MinScore = *tc.MemoryMinScore
-	}
-	if tc.MemoryMaxTokens != nil {
-		cfg.Memory.MaxTokens = *tc.MemoryMaxTokens
-	}
 	if tc.MemoryDisable != nil {
 		cfg.Memory.Disabled = *tc.MemoryDisable
 	}
@@ -103,9 +91,6 @@ func (cfg *Config) SaveConfig() error {
 		QualityReview:      boolPtr(cfg.QualityReview),
 		QualityWorkers:     intPtr(cfg.QualityWorkers),
 		QualityMaxIters:    intPtr(cfg.QualityMaxIters),
-		MemoryTopK:         intPtr(cfg.Memory.TopK),
-		MemoryMinScore:     float64Ptr(cfg.Memory.MinScore),
-		MemoryMaxTokens:    intPtr(cfg.Memory.MaxTokens),
 		MemoryDisable:      boolPtr(cfg.Memory.Disabled),
 		NoArchitect:        boolPtr(cfg.NoArchitect),
 		SpriteEnabled:      boolPtr(cfg.SpriteEnabled),
@@ -129,5 +114,4 @@ func (cfg *Config) SaveConfig() error {
 
 func boolPtr(v bool) *bool       { return &v }
 func intPtr(v int) *int           { return &v }
-func float64Ptr(v float64) *float64 { return &v }
 func stringPtr(v string) *string  { return &v }

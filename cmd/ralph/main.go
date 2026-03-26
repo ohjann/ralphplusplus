@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -12,7 +11,6 @@ import (
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/debuglog"
-	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/tui"
 )
@@ -46,24 +44,8 @@ func main() {
 
 	// Handle memory subcommand before validation (no prd.json needed).
 	if cfg.MemoryCommand != "" {
-		dataDir := filepath.Join(cfg.RalphHome, "memory")
-		ctx := context.Background()
-		var err error
-		switch cfg.MemoryCommand {
-		case "stats":
-			err = memory.RunStats(ctx, dataDir, cfg.Memory.Port)
-		case "search":
-			err = memory.RunSearch(ctx, dataDir, cfg.Memory.Port, cfg.MemoryQuery)
-		case "prune":
-			err = memory.RunPrune(ctx, dataDir, cfg.Memory.Port)
-		case "reset":
-			err = memory.RunReset(ctx, dataDir, cfg.Memory.Port)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		os.Exit(0)
+		fmt.Fprintf(os.Stderr, "Vector DB memory has been removed. Memory subcommands are no longer available.\n")
+		os.Exit(1)
 	}
 
 	if err := cfg.Validate(); err != nil {

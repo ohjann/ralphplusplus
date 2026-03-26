@@ -10,7 +10,6 @@ import (
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/judge"
-	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/roles"
 	"github.com/eoghanhynes/ralph/internal/runner"
@@ -63,8 +62,6 @@ type Worker struct {
 	Iteration      int
 	Ctx            context.Context
 	Cancel         context.CancelFunc
-	ChromaClient   *memory.ChromaClient // optional: for semantic memory retrieval
-	Embedder       memory.Embedder      // optional: for semantic memory retrieval
 }
 
 type WorkerUpdate struct {
@@ -82,7 +79,6 @@ type WorkerUpdate struct {
 	RateLimitInfo *costs.RateLimitInfo // latest rate limit info from Claude CLI
 	StatusText    string               // optional status message for TUI status bar
 	StatusWarn    bool                 // true if status is a warning
-	DocRefs       []memory.DocRef      // retrieved doc refs for confirmation tracking
 }
 
 // shouldRunArchitect determines if the architect agent should run before the implementer.
@@ -224,28 +220,11 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	// Load PRD for prompt building
 	wsPRD, _ := prd.Load(filepath.Join(ws.Dir, "prd.json"))
 
-	// Build memory opts (shared between architect and implementer)
-	var memoryOpts []runner.BuildPromptOpts
-	if w.ChromaClient != nil && w.Embedder != nil && !cfg.Memory.Disabled {
-		retriever := memory.NewRetriever(w.ChromaClient, w.Embedder)
-		if retriever != nil {
-			memoryOpts = append(memoryOpts, runner.BuildPromptOpts{
-				Memory: retriever,
-				MemoryOpts: memory.RetrievalOptions{
-					TopK:      cfg.Memory.TopK,
-					MinScore:  cfg.Memory.MinScore,
-					MaxTokens: cfg.Memory.MaxTokens,
-				},
-			})
-		}
-	}
-
 	// 2. Architect phase: run architect agent if applicable
 	if !cfg.NoArchitect && shouldRunArchitect(w.StoryID, w.Iteration, ws.Dir, wsPRD) {
 		send(WorkerRunning, roles.RoleArchitect, nil, false, "")
 
-		archOpts := makeBuildOpts(memoryOpts, roles.RoleArchitect)
-		archPrompt, _, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, archOpts...)
+		archPrompt, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleArchitect})
 		if err != nil {
 			send(WorkerFailed, roles.RoleArchitect, fmt.Errorf("build architect prompt: %w", err), false, "")
 			return
@@ -303,8 +282,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	}
 	send(WorkerRunning, implRole, nil, false, "")
 
-	implOpts := makeBuildOpts(memoryOpts, implRole)
-	prompt, implRetrieval, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, implOpts...)
+	prompt, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: implRole})
 	if err != nil {
 		send(WorkerFailed, implRole, fmt.Errorf("build prompt: %w", err), false, "")
 		return
@@ -392,7 +370,6 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 			JudgeResult:   &result,
 			TokenUsage:    claudeUsage,
 			RateLimitInfo: latestRateLimit,
-			DocRefs:       implRetrieval.DocRefs,
 		}
 		return
 	}
@@ -407,17 +384,5 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 		ChangeID:      changeID,
 		TokenUsage:    claudeUsage,
 		RateLimitInfo: latestRateLimit,
-		DocRefs:       implRetrieval.DocRefs,
 	}
-}
-
-// makeBuildOpts creates BuildPromptOpts with the given role, merging with any memory opts.
-func makeBuildOpts(memoryOpts []runner.BuildPromptOpts, role roles.Role) []runner.BuildPromptOpts {
-	if len(memoryOpts) > 0 {
-		opts := make([]runner.BuildPromptOpts, len(memoryOpts))
-		copy(opts, memoryOpts)
-		opts[0].Role = role
-		return opts
-	}
-	return []runner.BuildPromptOpts{{Role: role}}
 }

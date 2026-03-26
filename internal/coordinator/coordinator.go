@@ -15,7 +15,6 @@ import (
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/dag"
-	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/notify"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/runner"
@@ -65,8 +64,6 @@ type Coordinator struct {
 	stories         map[string]*prd.UserStory // story lookup
 	prdHash         string                    // SHA-256 of prd.json, computed at init
 	iterationCount  int                       // total iterations dispatched
-	chromaClient    *memory.ChromaClient      // optional: for semantic memory in workers
-	embedder        memory.Embedder           // optional: for semantic memory in workers
 	runCosting      *costs.RunCosting         // optional: for including cost data in checkpoints
 	notifier        *notify.Notifier          // optional: for push notifications
 	firstPass       map[string]bool           // tracks stories that passed on first attempt
@@ -118,13 +115,6 @@ func NewFromCheckpoint(
 	}
 	c.iterationCount = iterationCount
 	return c
-}
-
-// SetMemory configures optional semantic memory dependencies for workers.
-// When set, parallel workers will include memory context in their prompts.
-func (c *Coordinator) SetMemory(client *memory.ChromaClient, embedder memory.Embedder) {
-	c.chromaClient = client
-	c.embedder = embedder
 }
 
 // SetRunCosting sets the RunCosting reference so checkpoints include cost data.
@@ -195,15 +185,13 @@ func (c *Coordinator) ScheduleReady(ctx context.Context) int {
 		wCtx, wCancel := context.WithCancel(ctx)
 		c.nextID++
 		w := &worker.Worker{
-			ID:           c.nextID,
-			StoryID:      storyID,
-			StoryTitle:   story.Title,
-			State:        worker.WorkerIdle,
-			Iteration:    int(c.nextID), // use worker ID as iteration for unique log paths
-			Ctx:          wCtx,
-			Cancel:       wCancel,
-			ChromaClient: c.chromaClient,
-			Embedder:     c.embedder,
+			ID:         c.nextID,
+			StoryID:    storyID,
+			StoryTitle: story.Title,
+			State:      worker.WorkerIdle,
+			Iteration:  int(c.nextID), // use worker ID as iteration for unique log paths
+			Ctx:        wCtx,
+			Cancel:     wCancel,
 		}
 		c.workers[w.ID] = w
 		c.inProgress[storyID] = w.ID

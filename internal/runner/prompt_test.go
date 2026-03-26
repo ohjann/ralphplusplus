@@ -121,7 +121,7 @@ func TestBuildPromptWithPRDIncludesHint(t *testing.T) {
 		},
 	}
 
-	prompt, _, err := BuildPrompt(ralphHome, dir, storyID, p)
+	prompt, err := BuildPrompt(ralphHome, dir, storyID, p)
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestBuildPromptNilPRDNoCrash(t *testing.T) {
 	}
 
 	// Should not crash with nil PRD
-	prompt, _, err := BuildPrompt(ralphHome, dir, "ANY-001", nil)
+	prompt, err := BuildPrompt(ralphHome, dir, "ANY-001", nil)
 	if err != nil {
 		t.Fatalf("BuildPrompt with nil PRD: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestBuildPromptWithArchitectRoleLoadsRolePrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prompt, _, err := BuildPrompt(ralphHome, dir, "TEST-010", nil, BuildPromptOpts{
+	prompt, err := BuildPrompt(ralphHome, dir, "TEST-010", nil, BuildPromptOpts{
 		Role: roles.RoleArchitect,
 	})
 	if err != nil {
@@ -201,7 +201,7 @@ func TestBuildPromptArchitectSkipsIterationConstraint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prompt, _, err := BuildPrompt(ralphHome, dir, "TEST-011", nil, BuildPromptOpts{
+	prompt, err := BuildPrompt(ralphHome, dir, "TEST-011", nil, BuildPromptOpts{
 		Role: roles.RoleArchitect,
 	})
 	if err != nil {
@@ -221,7 +221,7 @@ func TestBuildPromptEmptyRoleUsesDefault(t *testing.T) {
 	}
 
 	// Empty role — should behave exactly as before
-	prompt, _, err := BuildPrompt(ralphHome, dir, "TEST-012", nil, BuildPromptOpts{})
+	prompt, err := BuildPrompt(ralphHome, dir, "TEST-012", nil, BuildPromptOpts{})
 	if err != nil {
 		t.Fatalf("BuildPrompt: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestBuildPromptDebuggerInjectsStuckInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	prompt, _, err := BuildPrompt(ralphHome, dir, "TEST-013", nil, BuildPromptOpts{
+	prompt, err := BuildPrompt(ralphHome, dir, "TEST-013", nil, BuildPromptOpts{
 		Role: roles.RoleDebugger,
 	})
 	if err != nil {
@@ -299,7 +299,7 @@ func TestBuildPromptImplementerHasIterationConstraint(t *testing.T) {
 		},
 	}
 
-	prompt, _, err := BuildPrompt(ralphHome, dir, "TEST-014", p, BuildPromptOpts{
+	prompt, err := BuildPrompt(ralphHome, dir, "TEST-014", p, BuildPromptOpts{
 		Role: roles.RoleImplementer,
 	})
 	if err != nil {
@@ -386,7 +386,7 @@ func TestBuildDebuggerStuckContextIncludesErrors(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(storyDir, "state.json"), stateData, 0o644)
 
 	// Build prompt with debugger role
-	prompt, _, err := BuildPrompt(ralphHome, dir, "TEST-020", nil, BuildPromptOpts{
+	prompt, err := BuildPrompt(ralphHome, dir, "TEST-020", nil, BuildPromptOpts{
 		Role: roles.RoleDebugger,
 	})
 	if err != nil {
@@ -509,7 +509,7 @@ func TestBuildPromptWithAntiPatterns(t *testing.T) {
 		},
 	}
 
-	prompt, _, err := BuildPrompt(ralphHome, dir, storyID, p, BuildPromptOpts{
+	prompt, err := BuildPrompt(ralphHome, dir, storyID, p, BuildPromptOpts{
 		AntiPatterns: antiPatterns,
 	})
 	if err != nil {
@@ -556,7 +556,7 @@ func TestBuildPromptNoAntiPatternMatchNoSection(t *testing.T) {
 		},
 	}
 
-	prompt, _, err := BuildPrompt(ralphHome, dir, storyID, p, BuildPromptOpts{
+	prompt, err := BuildPrompt(ralphHome, dir, storyID, p, BuildPromptOpts{
 		AntiPatterns: antiPatterns,
 	})
 	if err != nil {

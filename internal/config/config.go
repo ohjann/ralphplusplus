@@ -10,22 +10,20 @@ import (
 	"github.com/eoghanhynes/ralph/internal/debuglog"
 )
 
-// MemoryConfig holds configuration for the semantic memory system.
+// MemoryConfig holds configuration for the markdown-based memory system.
 type MemoryConfig struct {
-	TopK      int     // --memory-top-k: number of results to retrieve (default 15)
-	MinScore  float64 // --memory-min-score: minimum similarity score (default 0.6)
-	MaxTokens int     // --memory-max-tokens: max tokens for memory context (default 8000)
-	Disabled  bool    // --memory-disable: skip ChromaDB sidecar startup entirely
-	Port      int     // --memory-port: ChromaDB sidecar port (default 9876)
+	Disabled           bool // --memory-disable: skip memory injection entirely
+	DreamEveryNRuns    int  // how often to run dream consolidation (default: 5)
+	MaxEntries         int  // max entries per memory file (default: 50)
+	WarnTokenThreshold int  // warn when memory files exceed this token count (default: 50000)
 }
 
 // DefaultMemoryConfig returns the default memory configuration values.
 func DefaultMemoryConfig() MemoryConfig {
 	return MemoryConfig{
-		TopK:      15,
-		MinScore:  0.6,
-		MaxTokens: 8000,
-		Port:      9876,
+		DreamEveryNRuns:    5,
+		MaxEntries:         50,
+		WarnTokenThreshold: 50000,
 	}
 }
 
@@ -280,49 +278,9 @@ func Parse(args []string) (*Config, error) {
 			}
 			cfg.JudgeMaxRejections = n
 			i += 2
-		case "--memory-top-k":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--memory-top-k requires a number")
-			}
-			n, err := strconv.Atoi(args[i+1])
-			if err != nil {
-				return nil, fmt.Errorf("--memory-top-k: invalid number %q", args[i+1])
-			}
-			cfg.Memory.TopK = n
-			i += 2
-		case "--memory-min-score":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--memory-min-score requires a number")
-			}
-			f, err := strconv.ParseFloat(args[i+1], 64)
-			if err != nil {
-				return nil, fmt.Errorf("--memory-min-score: invalid number %q", args[i+1])
-			}
-			cfg.Memory.MinScore = f
-			i += 2
-		case "--memory-max-tokens":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--memory-max-tokens requires a number")
-			}
-			n, err := strconv.Atoi(args[i+1])
-			if err != nil {
-				return nil, fmt.Errorf("--memory-max-tokens: invalid number %q", args[i+1])
-			}
-			cfg.Memory.MaxTokens = n
-			i += 2
 		case "--memory-disable":
 			cfg.Memory.Disabled = true
 			i++
-		case "--memory-port":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--memory-port requires a number")
-			}
-			n, err := strconv.Atoi(args[i+1])
-			if err != nil {
-				return nil, fmt.Errorf("--memory-port: invalid number %q", args[i+1])
-			}
-			cfg.Memory.Port = n
-			i += 2
 		case "--status-port":
 			if i+1 >= len(args) {
 				return nil, fmt.Errorf("--status-port requires a port number")
@@ -410,42 +368,6 @@ func Parse(args []string) (*Config, error) {
 					return nil, fmt.Errorf("--judge-max-rejections: invalid number %q", args[i][25:])
 				}
 				cfg.JudgeMaxRejections = n
-				i++
-				continue
-			}
-			if strings.HasPrefix(args[i], "--memory-top-k=") {
-				n, err := strconv.Atoi(args[i][len("--memory-top-k="):])
-				if err != nil {
-					return nil, fmt.Errorf("--memory-top-k: invalid number %q", args[i][len("--memory-top-k="):])
-				}
-				cfg.Memory.TopK = n
-				i++
-				continue
-			}
-			if strings.HasPrefix(args[i], "--memory-min-score=") {
-				f, err := strconv.ParseFloat(args[i][len("--memory-min-score="):], 64)
-				if err != nil {
-					return nil, fmt.Errorf("--memory-min-score: invalid number %q", args[i][len("--memory-min-score="):])
-				}
-				cfg.Memory.MinScore = f
-				i++
-				continue
-			}
-			if strings.HasPrefix(args[i], "--memory-max-tokens=") {
-				n, err := strconv.Atoi(args[i][len("--memory-max-tokens="):])
-				if err != nil {
-					return nil, fmt.Errorf("--memory-max-tokens: invalid number %q", args[i][len("--memory-max-tokens="):])
-				}
-				cfg.Memory.MaxTokens = n
-				i++
-				continue
-			}
-			if strings.HasPrefix(args[i], "--memory-port=") {
-				n, err := strconv.Atoi(args[i][len("--memory-port="):])
-				if err != nil {
-					return nil, fmt.Errorf("--memory-port: invalid number %q", args[i][len("--memory-port="):])
-				}
-				cfg.Memory.Port = n
 				i++
 				continue
 			}
@@ -673,11 +595,7 @@ Quality:
   --quality-max-iterations <n>    Max review-fix cycles (default: 2)
 
 Memory:
-  --memory-top-k <n>             Number of memory results to retrieve (default: 15)
-  --memory-min-score <f>         Minimum similarity score for memory retrieval (default: 0.6)
-  --memory-max-tokens <n>        Max tokens for memory context (default: 8000)
-  --memory-disable               Disable semantic memory (skip ChromaDB sidecar)
-  --memory-port <n>              ChromaDB sidecar port (default: 9876)
+  --memory-disable               Disable memory injection
 
 Monitoring:
   --status-port <port>           Start remote status page on given port (disabled by default)
@@ -703,9 +621,6 @@ History Subcommand:
   ralph history --all                    Show all runs
 
 Memory Subcommands:
-  ralph memory stats                     Show collection sizes, document counts, and average scores
-  ralph memory search <query>            Search all collections for the given query text
-  ralph memory prune                     Decay all scores by 0.85 and evict documents below 0.3
-  ralph memory reset                     Delete all collections and recreate them empty
+  ralph memory stats                     Show memory file sizes and entry counts
 `)
 }

@@ -23,23 +23,15 @@ import (
 	"github.com/eoghanhynes/ralph/internal/storystate"
 )
 
-// MemoryRetriever abstracts semantic memory retrieval so callers can pass
-// a real ChromaDB+embedder pair or nil to skip retrieval entirely.
-type MemoryRetriever interface {
-	RetrieveContext(ctx context.Context, storyTitle, storyDescription string, acceptanceCriteria []string, opts memory.RetrievalOptions) (memory.RetrievalResult, error)
-}
-
 // BuildPromptOpts holds optional parameters for BuildPrompt.
 type BuildPromptOpts struct {
-	Memory       MemoryRetriever
-	MemoryOpts   memory.RetrievalOptions
 	Role         roles.Role
 	AntiPatterns []memory.AntiPattern
 }
 
 // BuildPrompt reads ralph-prompt.md, appends PRD context, story state, iteration constraint,
-// judge feedback, event context, and semantic memory into the prompt.
-func BuildPrompt(ralphHome, projectDir, storyID string, p *prd.PRD, opts ...BuildPromptOpts) (string, memory.RetrievalResult, error) {
+// judge feedback, and event context into the prompt.
+func BuildPrompt(ralphHome, projectDir, storyID string, p *prd.PRD, opts ...BuildPromptOpts) (string, error) {
 	// Determine which prompt template to load based on role
 	var role roles.Role
 	if len(opts) > 0 {
@@ -53,7 +45,7 @@ func BuildPrompt(ralphHome, projectDir, storyID string, p *prd.PRD, opts ...Buil
 
 	base, err := os.ReadFile(filepath.Join(ralphHome, promptFile))
 	if err != nil {
-		return "", memory.RetrievalResult{}, fmt.Errorf("reading %s: %w", promptFile, err)
+		return "", fmt.Errorf("reading %s: %w", promptFile, err)
 	}
 
 	prompt := string(base)
@@ -102,27 +94,7 @@ If progress.md contains a [CONTEXT EXHAUSTED] entry for %s, continue from where 
 		}
 	}
 
-	// Inject semantic memory context (additive, after event context)
-	var retrieval memory.RetrievalResult
-	if len(opts) > 0 && opts[0].Memory != nil && story != nil {
-		memCtx, err := opts[0].Memory.RetrieveContext(
-			context.Background(),
-			story.Title,
-			story.Description,
-			story.AcceptanceCriteria,
-			opts[0].MemoryOpts,
-		)
-		if err != nil {
-			debuglog.Log("warning: semantic memory retrieval failed: %v", err)
-		} else {
-			retrieval = memCtx
-			if memCtx.Text != "" {
-				prompt += "\n\n---\n" + memCtx.Text
-			}
-		}
-	}
-
-	return prompt, retrieval, nil
+	return prompt, nil
 }
 
 // buildPRDContext generates the YOUR STORY, PROJECT CONTEXT, and OTHER STORIES sections.

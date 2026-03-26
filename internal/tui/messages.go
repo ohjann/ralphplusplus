@@ -3,7 +3,6 @@ package tui
 import (
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/judge"
-	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/quality"
 	"github.com/eoghanhynes/ralph/internal/roles"
@@ -60,11 +59,8 @@ type nextStoryMsg struct {
 type claudeDoneMsg struct {
 	Err            error
 	CompleteSignal bool                // <promise>COMPLETE</promise> found
-	DocRefs        []memory.DocRef     // retrieved doc refs for confirmation tracking
 	TokenUsage     *costs.TokenUsage   // accumulated token usage from streaming
 	RateLimitInfo  *costs.RateLimitInfo // latest rate limit info from Claude CLI
-	TotalFound     int                 // total retrieval results before token budget trim
-	MaxTokens      int                 // token budget used for retrieval
 	Role           roles.Role          // which role just completed (architect/implementer)
 }
 type judgeDoneMsg struct {
@@ -93,40 +89,9 @@ type summaryDoneMsg struct {
 	Err     error
 }
 
-// Memory / ChromaDB lifecycle messages
-type chromaSetupDoneMsg struct {
-	Err      error
-	Sidecar  *memory.Sidecar
-	Client   *memory.ChromaClient
-}
-type codebaseScanDoneMsg struct {
-	Err error
-}
-type pipelineEmbedDoneMsg struct {
-	StoryID string
-	Err     error
-}
+// Memory stats message (placeholder - memory tab empty until P58-003)
 type memoryStatsMsg struct {
 	Content string
-}
-
-// MemoryRetrievalMsg carries retrieved memory DocRefs from BuildPrompt to the TUI.
-type MemoryRetrievalMsg struct {
-	StoryID    string
-	DocRefs    []memory.DocRef
-	TotalFound int // total results before token budget trim
-	MaxTokens  int // token budget used
-}
-
-// Anti-pattern detection
-type antiPatternsMsg struct {
-	Patterns []memory.AntiPattern
-}
-
-// Post-run synthesis
-type synthesisCompleteMsg struct {
-	Lessons []memory.Lesson
-	Err     error
 }
 
 // Cost tracking

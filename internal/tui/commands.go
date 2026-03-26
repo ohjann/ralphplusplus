@@ -16,10 +16,8 @@ import (
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/dag"
 	"github.com/eoghanhynes/ralph/internal/debuglog"
-	"github.com/eoghanhynes/ralph/internal/events"
 	rexec "github.com/eoghanhynes/ralph/internal/exec"
 	"github.com/eoghanhynes/ralph/internal/judge"
-	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/quality"
 	"github.com/eoghanhynes/ralph/internal/roles"
@@ -273,7 +271,7 @@ func combineTokenUsage(a, b *costs.TokenUsage) *costs.TokenUsage {
 	}
 }
 
-func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, iteration int, chromaClient *memory.ChromaClient, embedder memory.Embedder) tea.Cmd {
+func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, iteration int) tea.Cmd {
 	return safeCmd(func() tea.Msg {
 		p, err := prd.Load(cfg.PRDFile)
 		if err != nil {
@@ -292,8 +290,7 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 		if runArchitect {
 			debuglog.Log("runClaudeCmd: running architect phase for story=%s", storyID)
 
-			architectOpts := []runner.BuildPromptOpts{{Role: roles.RoleArchitect}}
-			prompt, _, err := runner.BuildPrompt(cfg.RalphHome, cfg.ProjectDir, storyID, p, architectOpts...)
+			prompt, err := runner.BuildPrompt(cfg.RalphHome, cfg.ProjectDir, storyID, p, runner.BuildPromptOpts{Role: roles.RoleArchitect})
 			if err != nil {
 				return claudeDoneMsg{Err: fmt.Errorf("architect prompt: %w", err), Role: roles.RoleArchitect}
 			}
@@ -329,7 +326,6 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 		}
 
 		// --- Implementer / Debugger phase ---
-		// If stuck info exists for this story, use the debugger role instead
 		implRole := roles.RoleImplementer
 		if runner.HasStuckInfo(cfg.ProjectDir, storyID) {
 			implRole = roles.RoleDebugger
@@ -337,27 +333,7 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 		}
 		debuglog.Log("runClaudeCmd: running %s phase for story=%s", implRole, storyID)
 
-		var implOpts []runner.BuildPromptOpts
-		if chromaClient != nil && embedder != nil && !cfg.Memory.Disabled {
-			retriever := memory.NewRetriever(chromaClient, embedder)
-			if retriever != nil {
-				retriever.RepoID = memory.RepoID(cfg.ProjectDir)
-				implOpts = append(implOpts, runner.BuildPromptOpts{
-					Memory: retriever,
-					MemoryOpts: memory.RetrievalOptions{
-						TopK:      cfg.Memory.TopK,
-						MinScore:  cfg.Memory.MinScore,
-						MaxTokens: cfg.Memory.MaxTokens,
-					},
-					Role: implRole,
-				})
-			}
-		}
-		if len(implOpts) == 0 {
-			implOpts = append(implOpts, runner.BuildPromptOpts{Role: implRole})
-		}
-
-		prompt, retrieval, err := runner.BuildPrompt(cfg.RalphHome, cfg.ProjectDir, storyID, p, implOpts...)
+		prompt, err := runner.BuildPrompt(cfg.RalphHome, cfg.ProjectDir, storyID, p, runner.BuildPromptOpts{Role: implRole})
 		if err != nil {
 			return claudeDoneMsg{Err: err, TokenUsage: totalUsage, Role: implRole}
 		}
@@ -380,10 +356,7 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 		return claudeDoneMsg{
 			Err:            err,
 			CompleteSignal: completeSignal,
-			DocRefs:        retrieval.DocRefs,
 			TokenUsage:     totalUsage,
-			TotalFound:     retrieval.TotalFound,
-			MaxTokens:      retrieval.MaxTokens,
 			Role:           implRole,
 			RateLimitInfo:  latestRateLimit,
 		}
@@ -586,223 +559,3 @@ Be concise but thorough. Focus on actionable information the developer needs to 
 	})
 }
 
-// chromaSetupCmd sets up the Python environment, starts the ChromaDB sidecar,
-// creates all collections, and returns the sidecar + client for storage.
-func chromaSetupCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
-	return safeCmd(func() tea.Msg {
-		dataDir := filepath.Join(cfg.RalphHome, "memory")
-		port := cfg.Memory.Port
-		if port == 0 {
-			port = 9876
-		}
-
-		// Ensure Python environment with chromadb installed
-		pythonPath, err := memory.EnsureChromaDB(dataDir, func(msg string) {
-			debuglog.Log("chromadb setup: %s", msg)
-		})
-		if err != nil {
-			return chromaSetupDoneMsg{Err: fmt.Errorf("chromadb setup: %w", err)}
-		}
-
-		// Start the sidecar
-		sc := &memory.Sidecar{}
-		if err := sc.Start(ctx, pythonPath, dataDir, port); err != nil {
-			return chromaSetupDoneMsg{Err: fmt.Errorf("chromadb start: %w", err)}
-		}
-
-		// Create a client and initialise all collections
-		client := memory.NewClient(fmt.Sprintf("http://localhost:%d", sc.Port()))
-		for _, coll := range memory.AllCollections() {
-			if err := client.CreateCollection(ctx, coll.Name); err != nil {
-				// Stop sidecar on collection creation failure
-				_ = sc.Stop()
-				return chromaSetupDoneMsg{Err: fmt.Errorf("create collection %s: %w", coll.Name, err)}
-			}
-		}
-
-		debuglog.Log("chromadb sidecar healthy on port %d, all collections ready", sc.Port())
-		return chromaSetupDoneMsg{Sidecar: sc, Client: client}
-	})
-}
-
-// codebaseScanCmd runs the codebase scanner in the background.
-func codebaseScanCmd(ctx context.Context, cfg *config.Config, client *memory.ChromaClient, embedder memory.Embedder) tea.Cmd {
-	return safeCmd(func() tea.Msg {
-		if err := memory.ScanCodebase(ctx, cfg.ProjectDir, client, embedder, memory.RepoID(cfg.ProjectDir)); err != nil {
-			debuglog.Log("codebase scan failed: %v", err)
-			return codebaseScanDoneMsg{Err: err}
-		}
-		debuglog.Log("codebase scan complete")
-		return codebaseScanDoneMsg{}
-	})
-}
-
-// runPipelineCmd runs the embedding pipeline for a completed or context-exhausted story.
-// It uses the provided embedder, embeds story data, then enforces collection caps.
-func runPipelineCmd(ctx context.Context, client *memory.ChromaClient, embedder memory.Embedder, projectDir, storyID string, contextExhausted bool) tea.Cmd {
-	return safeCmd(func() tea.Msg {
-		pipeline := memory.NewPipeline(client, embedder)
-		pipeline.RepoID = memory.RepoID(projectDir)
-
-		var err error
-		if contextExhausted {
-			err = pipeline.ProcessContextExhaustion(ctx, projectDir, storyID)
-		} else {
-			err = pipeline.ProcessStoryCompletion(ctx, projectDir, storyID)
-		}
-		if err != nil {
-			debuglog.Log("pipeline embed failed for %s: %v", storyID, err)
-			return pipelineEmbedDoneMsg{StoryID: storyID, Err: err}
-		}
-
-		// Enforce collection caps on all affected collections
-		for name, cap := range memory.CollectionCaps {
-			if capErr := memory.EnforceCollectionCap(ctx, client, name, cap); capErr != nil {
-				debuglog.Log("pipeline cap enforcement failed for %s: %v", name, capErr)
-			}
-		}
-
-		debuglog.Log("pipeline embed complete for %s", storyID)
-		return pipelineEmbedDoneMsg{StoryID: storyID}
-	})
-}
-
-// memoryStatsCmd fetches collection statistics and formats them for the memory panel.
-func memoryStatsCmd(ctx context.Context, client *memory.ChromaClient, disabled bool, opts ...memoryStatsOption) tea.Cmd {
-	var o memoryStatsOptions
-	for _, opt := range opts {
-		opt(&o)
-	}
-	return func() tea.Msg {
-		if disabled {
-			return memoryStatsMsg{Content: "  Memory disabled"}
-		}
-		if client == nil {
-			return memoryStatsMsg{Content: "  Memory unavailable (ChromaDB not running)"}
-		}
-
-		var sb fmt.Stringer = &memoryStatsBuilder{}
-		b := sb.(*memoryStatsBuilder)
-
-		b.WriteString("  Collection Statistics\n")
-		b.WriteString("  ─────────────────────\n")
-
-		collections := memory.AllCollections()
-		totalDocs := 0
-		for _, col := range collections {
-			count, err := client.CountDocuments(ctx, col.Name)
-			if err != nil {
-				b.WriteString(fmt.Sprintf("  %-20s  error\n", col.Name))
-				continue
-			}
-			totalDocs += count
-			bar := renderCapBar(count, col.MaxDocuments, 15)
-			b.WriteString(fmt.Sprintf("  %-20s %s %4d / %d\n", col.Name, bar, count, col.MaxDocuments))
-		}
-		b.WriteString(fmt.Sprintf("\n  Total documents: %d\n", totalDocs))
-
-		if !o.hasEmbedder {
-			b.WriteString("\n  ⚠ Embedder not available — no documents will be stored or retrieved\n")
-			b.WriteString("    Set VOYAGE_API_KEY or ANTHROPIC_API_KEY to enable semantic memory\n")
-		}
-
-		return memoryStatsMsg{Content: b.String()}
-	}
-}
-
-type memoryStatsOptions struct {
-	hasEmbedder bool
-}
-
-type memoryStatsOption func(*memoryStatsOptions)
-
-func withEmbedder(has bool) memoryStatsOption {
-	return func(o *memoryStatsOptions) {
-		o.hasEmbedder = has
-	}
-}
-
-// memoryStatsBuilder is a simple string builder implementing fmt.Stringer.
-type memoryStatsBuilder struct {
-	buf []byte
-}
-
-func (b *memoryStatsBuilder) WriteString(s string) {
-	b.buf = append(b.buf, s...)
-}
-
-func (b *memoryStatsBuilder) String() string {
-	return string(b.buf)
-}
-
-// renderCapBar renders a simple capacity bar like [████░░░░░░░░░░░].
-func renderCapBar(count, max, width int) string {
-	if max <= 0 {
-		return ""
-	}
-	filled := count * width / max
-	if filled > width {
-		filled = width
-	}
-	bar := make([]byte, width)
-	for i := range bar {
-		if i < filled {
-			bar[i] = '#'
-		} else {
-			bar[i] = '.'
-		}
-	}
-	return "[" + string(bar) + "]"
-}
-
-// synthesisCmd runs post-run synthesis: extracts lessons from the completed run
-// and embeds them into ChromaDB. Runs asynchronously so it does not block the TUI.
-func synthesisCmd(ctx context.Context, cfg *config.Config, client *memory.ChromaClient, embedder memory.Embedder, runSummary costs.RunSummary) tea.Cmd {
-	return safeCmd(func() tea.Msg {
-		// Load all story states
-		p, err := prd.Load(cfg.PRDFile)
-		if err != nil {
-			return synthesisCompleteMsg{Err: fmt.Errorf("load PRD for synthesis: %w", err)}
-		}
-		var states []storystate.StoryState
-		for _, s := range p.UserStories {
-			st, _ := storystate.Load(cfg.ProjectDir, s.ID)
-			if st.StoryID != "" {
-				states = append(states, st)
-			}
-		}
-
-		// Load events
-		evts, _ := events.Load(cfg.ProjectDir)
-
-		// Run synthesis
-		result, err := memory.SynthesizeRunLessons(ctx, cfg.ProjectDir, runSummary, states, evts)
-		if err != nil {
-			return synthesisCompleteMsg{Err: fmt.Errorf("synthesis: %w", err)}
-		}
-
-		// Embed lessons if we have a client and embedder
-		if len(result.Lessons) > 0 && client != nil && embedder != nil {
-			if err := memory.EmbedLessons(ctx, client, embedder, result.Lessons, cfg.ProjectDir); err != nil {
-				return synthesisCompleteMsg{Lessons: result.Lessons, Err: fmt.Errorf("embed lessons: %w", err)}
-			}
-		}
-
-		return synthesisCompleteMsg{Lessons: result.Lessons}
-	})
-}
-
-// detectAntiPatternsCmd runs anti-pattern detection against ChromaDB and returns results.
-func detectAntiPatternsCmd(ctx context.Context, client *memory.ChromaClient) tea.Cmd {
-	return func() tea.Msg {
-		if client == nil {
-			return antiPatternsMsg{}
-		}
-		patterns, err := memory.DetectAntiPatterns(ctx, client)
-		if err != nil {
-			debuglog.Log("anti-pattern detection failed (non-fatal): %v", err)
-			return antiPatternsMsg{}
-		}
-		return antiPatternsMsg{Patterns: patterns}
-	}
-}
