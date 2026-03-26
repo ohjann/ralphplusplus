@@ -117,6 +117,8 @@ func shouldRunArchitect(storyID string, iteration int, workspaceDir string, p *p
 
 // accumulateUsage merges token usage from two runs, summing token counts.
 // If either is nil, the other is returned. Duration and turns are summed.
+// Model is taken from the latest (b) phase when available, since different
+// phases may use different models and the last phase is the primary work.
 func accumulateUsage(a, b *costs.TokenUsage) *costs.TokenUsage {
 	if a == nil {
 		return b
@@ -124,16 +126,44 @@ func accumulateUsage(a, b *costs.TokenUsage) *costs.TokenUsage {
 	if b == nil {
 		return a
 	}
+	model := a.Model
+	if b.Model != "" {
+		model = b.Model
+	}
 	return &costs.TokenUsage{
 		InputTokens:  a.InputTokens + b.InputTokens,
 		OutputTokens: a.OutputTokens + b.OutputTokens,
 		CacheRead:    a.CacheRead + b.CacheRead,
 		CacheWrite:   a.CacheWrite + b.CacheWrite,
-		Model:        a.Model, // use first model (architect)
+		Model:        model,
 		Provider:     a.Provider,
 		NumTurns:     a.NumTurns + b.NumTurns,
 		DurationMS:   a.DurationMS + b.DurationMS,
 	}
+}
+
+// resolveModel determines the model to use for a given role by applying the
+// override precedence: config role-specific override > config global override > role default.
+func resolveModel(role roles.Role, cfg *config.Config) string {
+	// Check role-specific CLI overrides first
+	switch role {
+	case roles.RoleArchitect:
+		if cfg.ArchitectModel != "" {
+			return cfg.ArchitectModel
+		}
+	case roles.RoleImplementer:
+		if cfg.ImplementerModel != "" {
+			return cfg.ImplementerModel
+		}
+	}
+
+	// Then global override
+	if cfg.ModelOverride != "" {
+		return cfg.ModelOverride
+	}
+
+	// Fall back to role default
+	return roles.DefaultConfig(role).Model
 }
 
 // appendParallelMode adds the parallel mode stop condition to a prompt.
@@ -236,6 +266,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 			Iteration: w.Iteration,
 			StoryID:   w.StoryID,
 			Role:      roles.RoleArchitect,
+			Model:     resolveModel(roles.RoleArchitect, cfg),
 		})
 		if archResult != nil {
 			claudeUsage = archResult.TokenUsage
@@ -294,6 +325,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 		Iteration: w.Iteration,
 		StoryID:   w.StoryID,
 		Role:      implRole,
+		Model:     resolveModel(implRole, cfg),
 	})
 	if implResult != nil {
 		claudeUsage = accumulateUsage(claudeUsage, implResult.TokenUsage)

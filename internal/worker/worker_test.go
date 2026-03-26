@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/roles"
@@ -183,6 +184,111 @@ func TestWorkerUpdateHasRoleField(t *testing.T) {
 	}
 	if update.Role != roles.RoleArchitect {
 		t.Errorf("Role = %s, want %s", update.Role, roles.RoleArchitect)
+	}
+}
+
+func TestAccumulateUsageDifferentModels(t *testing.T) {
+	a := &costs.TokenUsage{
+		InputTokens: 100,
+		Model:       "claude-opus",
+		Provider:    "claude",
+	}
+	b := &costs.TokenUsage{
+		InputTokens: 200,
+		Model:       "claude-sonnet",
+		Provider:    "claude",
+	}
+	result := accumulateUsage(a, b)
+	if result.Model != "claude-sonnet" {
+		t.Errorf("Model = %s, want claude-sonnet (latest phase model)", result.Model)
+	}
+}
+
+func TestAccumulateUsageEmptyModelB(t *testing.T) {
+	a := &costs.TokenUsage{
+		InputTokens: 100,
+		Model:       "claude-opus",
+	}
+	b := &costs.TokenUsage{
+		InputTokens: 200,
+		Model:       "",
+	}
+	result := accumulateUsage(a, b)
+	if result.Model != "claude-opus" {
+		t.Errorf("Model = %s, want claude-opus (fallback to a when b is empty)", result.Model)
+	}
+}
+
+func TestResolveModel(t *testing.T) {
+	tests := []struct {
+		name     string
+		role     roles.Role
+		cfg      *config.Config
+		wantModel string
+	}{
+		{
+			name:      "architect uses role default",
+			role:      roles.RoleArchitect,
+			cfg:       &config.Config{},
+			wantModel: "opus",
+		},
+		{
+			name:      "implementer uses role default",
+			role:      roles.RoleImplementer,
+			cfg:       &config.Config{},
+			wantModel: "sonnet",
+		},
+		{
+			name:      "debugger uses role default",
+			role:      roles.RoleDebugger,
+			cfg:       &config.Config{},
+			wantModel: "opus",
+		},
+		{
+			name:      "global override applies to all roles",
+			role:      roles.RoleImplementer,
+			cfg:       &config.Config{ModelOverride: "haiku"},
+			wantModel: "haiku",
+		},
+		{
+			name:      "architect-specific override wins over global",
+			role:      roles.RoleArchitect,
+			cfg:       &config.Config{ModelOverride: "haiku", ArchitectModel: "sonnet"},
+			wantModel: "sonnet",
+		},
+		{
+			name:      "implementer-specific override wins over global",
+			role:      roles.RoleImplementer,
+			cfg:       &config.Config{ModelOverride: "haiku", ImplementerModel: "opus"},
+			wantModel: "opus",
+		},
+		{
+			name:      "architect-specific does not affect implementer",
+			role:      roles.RoleImplementer,
+			cfg:       &config.Config{ArchitectModel: "haiku"},
+			wantModel: "sonnet",
+		},
+		{
+			name:      "implementer-specific does not affect architect",
+			role:      roles.RoleArchitect,
+			cfg:       &config.Config{ImplementerModel: "haiku"},
+			wantModel: "opus",
+		},
+		{
+			name:      "global override applies to debugger",
+			role:      roles.RoleDebugger,
+			cfg:       &config.Config{ModelOverride: "sonnet"},
+			wantModel: "sonnet",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveModel(tt.role, tt.cfg)
+			if got != tt.wantModel {
+				t.Errorf("resolveModel(%s) = %s, want %s", tt.role, got, tt.wantModel)
+			}
+		})
 	}
 }
 
