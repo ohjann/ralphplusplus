@@ -24,49 +24,51 @@ If none of the above are available, ask the user to provide a plan.
 
 ## Step 2: Check for Learned PRD Lessons
 
-Before generating prd.json, check if `.ralph/lessons.json` exists in the project root. If it exists, read the `prd_lessons` array and incorporate applicable lessons into the generated PRD.
+Before generating prd.json, check if `.ralph/memory/prd-learnings.md` exists in the project root. If it exists, read its contents and incorporate the learned constraints into the generated PRD.
 
 ### How to incorporate lessons
 
-1. Read `.ralph/lessons.json` and extract the `prd_lessons` array
-2. If the file does not exist or `prd_lessons` is empty/missing, skip this step entirely — do not error
-3. Sort lessons by `confidence` descending
+1. Read `.ralph/memory/prd-learnings.md`
+2. If the file does not exist or is empty, skip this step entirely — do not error
+3. Parse the markdown content — each lesson is a section or bullet describing a learned pattern
 4. Take at most **10** lessons to avoid overwhelming the PRD
-5. Lessons with `confidence >= 0.7` are **constraints** — apply them as firm rules when generating stories
-6. Lessons with `confidence < 0.7` are **suggestions** — consider them but do not enforce strictly
+5. Lessons marked as high-confidence or confirmed multiple times are **constraints** — apply them as firm rules when generating stories
+6. Other lessons are **suggestions** — consider them but do not enforce strictly
 
 ### Learned PRD Constraints
 
 When lessons are found, add a `learnedConstraints` section to the generated prd.json inside the top-level `constraints` array, formatted as:
 
-For high-confidence lessons (>= 0.7):
+For high-confidence or well-confirmed lessons:
 ```
-"[LEARNED] <recommendation> (confidence: <confidence>, confirmed <times_confirmed>x)"
-```
-
-For lower-confidence lessons (< 0.7):
-```
-"[SUGGESTION] <recommendation> (confidence: <confidence>)"
+"[LEARNED] <lesson summary>"
 ```
 
-### Example lessons.json prd_lessons entry
-
-```json
-{
-  "id": "prd-sizing-001",
-  "category": "sizing",
-  "pattern": "Stories touching more than 8 files often fail on first attempt",
-  "evidence": "3 out of 4 large stories required debugger intervention",
-  "recommendation": "Split stories that touch more than 8 files into smaller units",
-  "confidence": 0.85,
-  "times_confirmed": 3,
-  "created_at": "2025-06-15T10:00:00Z"
-}
+For lower-confidence or unconfirmed lessons:
+```
+"[SUGGESTION] <lesson summary>"
 ```
 
-This would produce the constraint:
+### Example prd-learnings.md content
+
+```markdown
+## Sizing
+
+- **Split stories that touch more than 8 files into smaller units** (confirmed 3x, high confidence)
+  Evidence: 3 out of 4 large stories required debugger intervention
+
+## Criteria
+
+- Consider adding "Tests pass" criterion for any story with business logic
+
+## Ordering
+
+- Schema/migration stories must always come before stories that query new columns
 ```
-"[LEARNED] Split stories that touch more than 8 files into smaller units (confidence: 0.85, confirmed 3x)"
+
+The first lesson above would produce the constraint:
+```
+"[LEARNED] Split stories that touch more than 8 files into smaller units"
 ```
 
 ### Lesson categories to watch for
@@ -371,7 +373,7 @@ Each is one focused change that can be completed and verified independently.
 
 Before writing prd.json, verify:
 
-- [ ] **Learned lessons checked** (read `.ralph/lessons.json` prd_lessons if it exists, skip gracefully if not)
+- [ ] **Learned lessons checked** (read `.ralph/memory/prd-learnings.md` if it exists, skip gracefully if not)
 - [ ] **Output path is project root** (not `.claude/`, not `skills/`, not any subdirectory)
 - [ ] **Previous run archived** (if prd.json exists with different branchName, archive it first)
 - [ ] Each story is a coherent, self-contained change (one concern end-to-end)
