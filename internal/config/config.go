@@ -40,8 +40,7 @@ type Config struct {
 	QualityWorkers     int    // --quality-workers N: parallel reviewers (default: 3)
 	QualityMaxIters    int    // --quality-max-iterations N: review-fix cycles (default: 2)
 	Memory             MemoryConfig
-	MemoryCommand      string // "stats", "search", "prune", "reset" (empty = normal TUI mode)
-	MemoryQuery        string // query text for "ralph memory search <query>"
+	MemoryCommand      string // "stats", "consolidate", "reset" (empty = normal TUI mode)
 	StatusPort         int    // --status-port <port>: remote status page (0 = disabled)
 	NotifyTopic        string // --notify <topic>: ntfy.sh topic for push notifications
 	NtfyServer         string // --ntfy-server <url>: self-hosted ntfy server URL
@@ -117,23 +116,17 @@ func Parse(args []string) (*Config, error) {
 	// Check for "memory" subcommand as first argument.
 	if len(args) > 0 && args[0] == "memory" {
 		if len(args) < 2 {
-			return nil, fmt.Errorf("usage: ralph memory <stats|search|prune|reset>")
+			return nil, fmt.Errorf("usage: ralph memory <stats|consolidate|reset>")
 		}
 		switch args[1] {
 		case "stats":
 			cfg.MemoryCommand = "stats"
-		case "search":
-			if len(args) < 3 {
-				return nil, fmt.Errorf("usage: ralph memory search <query>")
-			}
-			cfg.MemoryCommand = "search"
-			cfg.MemoryQuery = strings.Join(args[2:], " ")
-		case "prune":
-			cfg.MemoryCommand = "prune"
+		case "consolidate":
+			cfg.MemoryCommand = "consolidate"
 		case "reset":
 			cfg.MemoryCommand = "reset"
 		default:
-			return nil, fmt.Errorf("unknown memory command %q. Use: stats, search, prune, reset", args[1])
+			return nil, fmt.Errorf("unknown memory command %q. Use: stats, consolidate, reset", args[1])
 		}
 		// Resolve paths needed for memory commands.
 		cfg.RalphHome = resolveRalphHome()

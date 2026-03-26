@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -11,7 +13,9 @@ import (
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/debuglog"
+	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
+	"github.com/eoghanhynes/ralph/internal/runner"
 	"github.com/eoghanhynes/ralph/internal/tui"
 )
 
@@ -44,8 +48,20 @@ func main() {
 
 	// Handle memory subcommand before validation (no prd.json needed).
 	if cfg.MemoryCommand != "" {
-		fmt.Fprintf(os.Stderr, "Vector DB memory has been removed. Memory subcommands are no longer available.\n")
-		os.Exit(1)
+		var err error
+		switch cfg.MemoryCommand {
+		case "stats":
+			err = printMemoryStats(cfg.RalphHome, cfg.ProjectDir)
+		case "consolidate":
+			err = runMemoryConsolidate(cfg)
+		case "reset":
+			err = runMemoryReset(cfg.RalphHome)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -418,6 +434,116 @@ func printModelGroup(g *modelGroup) {
 	fmt.Printf("    Avg iterations: %s\n", ai)
 	fmt.Printf("    Total tokens:   %dk in / %dk out\n", g.inputTokens/1000, g.outputTokens/1000)
 	fmt.Printf("    Total duration: %.0f min\n", g.durationMin)
+}
+
+// printMemoryStats shows file sizes, entry counts, last consolidation date, and runs since.
+func printMemoryStats(ralphHome, projectDir string) error {
+	fmt.Println("── Memory Stats ──")
+
+	stats := memory.MemoryStats(ralphHome)
+	for _, s := range stats {
+		if !s.Exists {
+			fmt.Printf("  %s: (not created yet)\n", s.Name)
+			continue
+		}
+		estTokens := s.SizeBytes * 4 / 3 // rough estimate: ~0.75 bytes per token
+		fmt.Printf("  %s: %d bytes (~%d tokens), %d entries\n", s.Name, s.SizeBytes, estTokens, s.EntryCount)
+	}
+
+	meta, err := memory.LoadRunMeta(projectDir)
+	if err != nil {
+		fmt.Printf("\n  Last consolidation: unknown (error reading run-meta.json: %v)\n", err)
+	} else if meta.LastDream == "" {
+		fmt.Printf("\n  Last consolidation: never\n")
+		fmt.Printf("  Runs since last consolidation: %d\n", meta.RunCount)
+	} else {
+		fmt.Printf("\n  Last consolidation: %s\n", meta.LastDream)
+		fmt.Printf("  Runs since last consolidation: %d\n", meta.RunCount)
+	}
+
+	return nil
+}
+
+// runMemoryConsolidate manually triggers the dream consolidation cycle.
+func runMemoryConsolidate(cfg *config.Config) error {
+	fmt.Println("Running dream consolidation...")
+
+	if err := os.MkdirAll(cfg.LogDir, 0o755); err != nil {
+		return fmt.Errorf("creating log directory: %w", err)
+	}
+
+	runClaude := func(ctx context.Context, projectDir, prompt, logFilePath string) error {
+		_, err := runner.RunClaude(ctx, projectDir, prompt, logFilePath)
+		return err
+	}
+
+	ctx := context.Background()
+	if err := memory.RunDream(ctx, cfg.ProjectDir, cfg.RalphHome, cfg.LogDir, cfg.Memory.MaxEntries, cfg.Memory.DreamEveryNRuns, runClaude); err != nil {
+		return fmt.Errorf("dream consolidation failed: %w", err)
+	}
+
+	fmt.Println("Dream consolidation complete.")
+
+	// Print summary of what was consolidated
+	stats := memory.MemoryStats(cfg.RalphHome)
+	for _, s := range stats {
+		if s.Exists {
+			fmt.Printf("  %s: %d entries (%d bytes)\n", s.Name, s.EntryCount, s.SizeBytes)
+		}
+	}
+	return nil
+}
+
+// runMemoryReset clears all memory files after confirmation.
+func runMemoryReset(ralphHome string) error {
+	memDir := filepath.Join(ralphHome, "memory")
+
+	// Check if directory exists
+	if _, err := os.Stat(memDir); os.IsNotExist(err) {
+		fmt.Println("No memory files to reset (directory does not exist).")
+		return nil
+	}
+
+	// Show what will be deleted
+	stats := memory.MemoryStats(ralphHome)
+	hasFiles := false
+	for _, s := range stats {
+		if s.Exists {
+			fmt.Printf("  Will delete: %s (%d bytes, %d entries)\n", s.Name, s.SizeBytes, s.EntryCount)
+			hasFiles = true
+		}
+	}
+	if !hasFiles {
+		fmt.Println("No memory files to reset.")
+		return nil
+	}
+
+	// Confirmation prompt
+	fmt.Print("\nType 'yes' to confirm reset: ")
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "yes" {
+		fmt.Println("Reset cancelled.")
+		return nil
+	}
+
+	// Delete all files in memory directory
+	entries, err := os.ReadDir(memDir)
+	if err != nil {
+		return fmt.Errorf("reading memory directory: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		path := filepath.Join(memDir, e.Name())
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("removing %s: %w", e.Name(), err)
+		}
+		fmt.Printf("  Deleted: %s\n", e.Name())
+	}
+
+	fmt.Println("Memory reset complete.")
+	return nil
 }
 
 // randomWords generates a short random identifier like "swift-oak-river".
