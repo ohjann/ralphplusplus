@@ -23,6 +23,8 @@ Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 - **Remote status page** — mobile-friendly HTTP status page with SSE live updates; JSON API at `/api/status`
 - **Stuck detection + hint injection** — detects tool-call loops, shows a status bar with notification, lets you inject a hint for the next iteration, then inserts a targeted fix story
 - **Interactive task mode** — submit ad-hoc tasks through a TUI input bar without needing a prd.json; tasks go through a lightweight clarification step before dispatch
+- **Multi-model orchestration** — Opus for architect/debugger (deep reasoning), Sonnet for implementer/reviewer (speed), Haiku for utility tasks (DAG analysis); configurable per role via CLI flags
+- **DAG tree visualization** — TUI stories panel renders dependency graph as a directory-tree structure with box-drawing connectors
 - **Plan quality scoring** — tracks first-pass success rate vs retries vs failures; displayed in the TUI header at run completion
 - **Automatic archiving** — previous runs archived to `.ralph/archive/` when you start a new feature
 
@@ -175,6 +177,10 @@ Options:
   --ntfy-server <url>             Self-hosted ntfy server URL (default: https://ntfy.sh)
   --status-port <port>            Start remote status page on given port (disabled by default)
   --enable-monitoring             Enable ntfy + status page using .ralph/.env config
+  --model <name>                  Override model for all roles
+  --architect-model <name>        Override model for architect role only
+  --implementer-model <name>      Override model for implementer role only
+  --utility-model <name>          Override model for utility tasks (default: haiku)
   --memory-disable                Disable memory injection
   --idle                          Launch TUI without executing (display only)
   --help, -h                      Show help

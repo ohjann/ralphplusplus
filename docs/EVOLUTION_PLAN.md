@@ -43,7 +43,7 @@ implement user stories from a PRD. Key existing capabilities:
 2. ~~Context exhaustion recovery is lossy — relies on text markers in progress.md~~ → **Addressed in Phase 1** (structured per-story state)
 3. ~~No structured per-story work state — agent must reconstruct intent from history~~ → **Addressed in Phase 1** (storystate package)
 4. ~~No cost visibility — token usage is logged but not surfaced~~ → **Addressed in Phase 3** (usage tracking tab, run history, remote status page)
-5. ~~All Claude invocations use the same generalist prompt~~ → **Addressed in Phase 4** (role-specific agents: architect, implementer, debugger)
+5. ~~All Claude invocations use the same generalist prompt~~ → **Addressed in Phase 4** (role-specific agents: architect, implementer, debugger) **+ Phase 6** (per-role model selection: Opus/Sonnet/Haiku)
 6. ~~No crash recovery — killing ralph mid-run loses orchestration state~~ → **Partially addressed in Phase 1** (checkpoint package — detection and prompt work, but resume logic is a stub)
 7. ~~No cross-run learning — each PRD run starts from zero institutional knowledge~~ → **Addressed in Phase 2/2.1** (markdown memory with dream consolidation)
 
@@ -1756,10 +1756,20 @@ config, and TUI. Net reduction of ~2300 lines and 3 external dependencies.
 
 ---
 
-## Phase 6: Multi-Model Orchestration (Revised)
+## Phase 6: Multi-Model Orchestration (Revised) ✅ COMPLETE
 
 **Impact: Medium | Complexity: Low | Dependencies: Phase 4 (agent roles — already complete), Phase 5.7 (run history observability — baseline metrics)**
 
+> **Status: Implemented** (completed 2026-03-26 on branch `ralph/phase6-multi-model`).
+> Phase 6 has been fully implemented. Key deliverables:
+> - `RunClaudeOpts.Model` wired through to `--model` flag on claude CLI invocation
+> - Default models set per role: Opus for Architect/Debugger, Sonnet for Implementer/Reviewer
+> - CLI override flags: `--model` (all roles), `--architect-model`, `--implementer-model`, `--utility-model`
+> - Worker resolves model per role with precedence: role-specific flag > global override > role default
+> - DAG analysis and utility tasks use Haiku by default
+> - Per-iteration model tracked in run history and displayed in TUI and `ralph history`
+> - DAG tree visualization added to TUI stories panel with box-drawing connectors
+>
 > **Revision note (2026-03-19):** Original framing was cost optimization
 > ("target: 30-50% reduction"). The user is on Claude Max subscription, so
 > per-token cost is irrelevant. Reframed as speed + quality allocation:
@@ -1823,14 +1833,23 @@ Modify `internal/runner/runner.go`:
 - Track model used per iteration in usage tracking (Phase 3)
 - The `AgentConfig.Model` field in roles already exists — wire it through
 
+#### 6d. DAG Tree Visualization
+
+Add tree-based story visualization to the TUI stories panel:
+- Render stories as a directory-tree structure using box-drawing connectors (│, ├─, └─)
+- Root nodes are stories with no dependencies; dependents nest under parents
+- Preserves all existing display info (status icons, role badge, iteration, worker, elapsed time)
+- Falls back to flat chain for serial mode
+
 ### Acceptance Criteria
 
-- [ ] Model is configurable per agent role via roles.go defaults
-- [ ] `--model`, `--architect-model`, `--implementer-model` CLI flags work
-- [ ] Utility tasks (DAG analysis, plan validation) use fast tier
-- [ ] Model used is tracked per iteration in usage data
-- [ ] Quality does not regress (judge pass rate stays stable or improves)
-- [ ] Speed improvement is measurable for implementation iterations
+- [x] Model is configurable per agent role via roles.go defaults
+- [x] `--model`, `--architect-model`, `--implementer-model` CLI flags work
+- [x] Utility tasks (DAG analysis, plan validation) use fast tier
+- [x] Model used is tracked per iteration in usage data
+- [x] Quality does not regress (judge pass rate stays stable or improves)
+- [x] Speed improvement is measurable for implementation iterations
+- [x] TUI stories panel renders DAG as tree with box-drawing connectors
 
 ### Estimated Scope
 
@@ -2397,7 +2416,7 @@ Phase 1 (Story State + Checkpoint) ✅
   │
   ├──→ Phase 5.7 (Run History Observability) ✅
   │      │
-  └──→ Phase 6 (Multi-Model — revised) ← benefits from Phase 4 ✅, depends on Phase 5.7 ✅
+  └──→ Phase 6 (Multi-Model — revised) ✅ ← benefits from Phase 4 ✅, depends on Phase 5.7 ✅
 ```
 
 ## Recommended Execution Order
@@ -2413,7 +2432,7 @@ Phase 1 (Story State + Checkpoint) ✅
 | 7th   | Phase 5.5: Interactive Task Mode ✅ | Done | On-the-fly task dispatch, no PRD required |
 | 8th   | Phase 5.7: Run History Observability ✅ | Done | Baseline metrics for model comparison |
 | 9th   | Phase 5.8: Markdown Memory ✅ | Done | Deleted ~2600 lines, removed 3 dependencies, simpler + better memory |
-| **10th** | **Phase 6: Multi-Model (simplified)** | ~4-5 stories | Speed + quality allocation per role |
+| 10th  | Phase 6: Multi-Model (revised) ✅ | Done | Per-role model selection + DAG tree visualization in TUI |
 | **11th** | **Phase 7: MCP Server (scoped)** | ~6-8 stories | Real-time parallel coordination |
 | **12th** | **Phase 8: Knowledge Graph (if needed)** | ~8-10 stories | Structural intelligence — gate on evidence |
 | **13th** | **Phase 8.5: Deep Code Review Mode** | ~4-5 stories | Read-only code review via Ralph loop |
@@ -2421,12 +2440,14 @@ Phase 1 (Story State + Checkpoint) ✅
 | **15th** | **Phase 10: Auto-Split Stuck Stories** | ~5-7 stories | Reduce wasted iterations on stuck stories |
 | Stretch | Web Dashboard | — | Team visibility (if needed) |
 
-Phase 5.8 is now complete — the memory system has been simplified from
-~2600 lines of vector DB infrastructure to ~300 lines of markdown-based
-memory with dream consolidation. Phase 6 (Multi-Model) is the recommended
-next phase as it has no incomplete dependencies. Phase 8 is explicitly
-evidence-gated — only build if architects are missing structural dependency
-information that they can't get by reading codebase files directly.
+Phase 6 is now complete — per-role model selection (Opus for planning/debugging,
+Sonnet for implementation/review, Haiku for utility tasks) is wired through
+the full stack from CLI flags to runner invocation. The TUI stories panel
+now renders a DAG tree visualization with box-drawing connectors. Phase 7
+(MCP Server) is the recommended next phase — it enables real-time parallel
+coordination that static prompt injection cannot provide. Phase 8 is
+explicitly evidence-gated — only build if architects are missing structural
+dependency information that they can't get by reading codebase files directly.
 
 ---
 
@@ -2439,7 +2460,7 @@ After full rollout, ralph should demonstrate:
   files lean. ✅ (Phases 1-2, completed by Phase 5.8)
 - **Story success rate**: >90% first-attempt pass rate (up from current baseline)
 - **Speed allocation**: Architect uses Opus, implementer uses Sonnet — right
-  model for each role (replaces cost reduction metric — user is on Claude Max)
+  model for each role (replaces cost reduction metric — user is on Claude Max) ✅ (Phase 6)
 - **Crash resilience**: Any interruption recoverable via checkpoint + resume ✅ (Phase 1)
 - **Cross-run learning**: Measurable improvement in success rate across
   successive PRD runs on the same codebase ✅ (Phase 5, completed by Phase 5.8)
