@@ -37,24 +37,28 @@ func DefaultConfig(role Role) AgentConfig {
 		return AgentConfig{
 			Role:      RoleArchitect,
 			PromptFile: "prompts/architect.md",
+			Model:     "opus",
 			MaxTokens: 16000,
 		}
 	case RoleImplementer:
 		return AgentConfig{
 			Role:      RoleImplementer,
 			PromptFile: "prompts/implementer.md",
+			Model:     "sonnet",
 			MaxTokens: 32000,
 		}
 	case RoleDebugger:
 		return AgentConfig{
 			Role:      RoleDebugger,
 			PromptFile: "prompts/debugger.md",
+			Model:     "opus",
 			MaxTokens: 32000,
 		}
 	case RoleReviewer:
 		return AgentConfig{
 			Role:      RoleReviewer,
 			PromptFile: "prompts/reviewer.md",
+			Model:     "sonnet",
 			MaxTokens: 16000,
 		}
 	default:

@@ -33,12 +33,13 @@ func TestDefaultConfig(t *testing.T) {
 	tests := []struct {
 		role       Role
 		wantPrompt string
+		wantModel  string
 		wantTokens int
 	}{
-		{RoleArchitect, "prompts/architect.md", 16000},
-		{RoleImplementer, "prompts/implementer.md", 32000},
-		{RoleDebugger, "prompts/debugger.md", 32000},
-		{RoleReviewer, "prompts/reviewer.md", 16000},
+		{RoleArchitect, "prompts/architect.md", "opus", 16000},
+		{RoleImplementer, "prompts/implementer.md", "sonnet", 32000},
+		{RoleDebugger, "prompts/debugger.md", "opus", 32000},
+		{RoleReviewer, "prompts/reviewer.md", "sonnet", 16000},
 	}
 
 	for _, tt := range tests {
@@ -50,8 +51,8 @@ func TestDefaultConfig(t *testing.T) {
 			if cfg.PromptFile != tt.wantPrompt {
 				t.Errorf("PromptFile = %q, want %q", cfg.PromptFile, tt.wantPrompt)
 			}
-			if cfg.Model != "" {
-				t.Errorf("Model = %q, want empty string", cfg.Model)
+			if cfg.Model != tt.wantModel {
+				t.Errorf("Model = %q, want %q", cfg.Model, tt.wantModel)
 			}
 			if cfg.MaxTokens != tt.wantTokens {
 				t.Errorf("MaxTokens = %d, want %d", cfg.MaxTokens, tt.wantTokens)

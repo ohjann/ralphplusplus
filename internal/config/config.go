@@ -52,6 +52,9 @@ type Config struct {
 	NoArchitect        bool   // --no-architect: globally skip architect phase for all stories
 	SpriteEnabled      bool   // sprite mascot overlay (default true)
 	NoPRD              bool   // true when no prd.json exists (interactive-only mode)
+	ModelOverride      string // --model: override model for all roles
+	ArchitectModel     string // --architect-model: override model for architect role only
+	ImplementerModel   string // --implementer-model: override model for implementer role only
 
 	// Derived paths
 	PRDFile        string
@@ -302,6 +305,24 @@ func Parse(args []string) (*Config, error) {
 		case "--no-architect":
 			cfg.NoArchitect = true
 			i++
+		case "--model":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--model requires a model name")
+			}
+			cfg.ModelOverride = args[i+1]
+			i += 2
+		case "--architect-model":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--architect-model requires a model name")
+			}
+			cfg.ArchitectModel = args[i+1]
+			i += 2
+		case "--implementer-model":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--implementer-model requires a model name")
+			}
+			cfg.ImplementerModel = args[i+1]
+			i += 2
 		default:
 			// Check for --key=value forms
 			if len(args[i]) > 6 && args[i][:6] == "--dir=" {
@@ -380,6 +401,21 @@ func Parse(args []string) (*Config, error) {
 			}
 			if strings.HasPrefix(args[i], "--ntfy-server=") {
 				cfg.NtfyServer = args[i][len("--ntfy-server="):]
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--model=") {
+				cfg.ModelOverride = args[i][len("--model="):]
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--architect-model=") {
+				cfg.ArchitectModel = args[i][len("--architect-model="):]
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--implementer-model=") {
+				cfg.ImplementerModel = args[i][len("--implementer-model="):]
 				i++
 				continue
 			}
@@ -577,6 +613,12 @@ Execution:
   --workers <n>                   Number of parallel workers (default: 1 = serial)
   --workspace-base <path>         Base directory for workspaces (default: /tmp/ralph-workspaces)
   --no-architect                  Skip architect phase for all stories (go straight to implementer)
+
+Model Selection:
+  --model <name>                  Override model for all roles (e.g. opus, sonnet, haiku)
+  --architect-model <name>        Override model for architect role only
+  --implementer-model <name>      Override model for implementer role only
+                                  Precedence: role-specific flag > --model > role default
 
 Judge:
   --no-judge                      Disable LLM-as-Judge verification (enabled by default)

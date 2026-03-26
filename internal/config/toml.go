@@ -22,6 +22,9 @@ type tomlConfig struct {
 	NoArchitect        *bool   `toml:"no_architect"`
 	SpriteEnabled      *bool   `toml:"sprite_enabled"`
 	WorkspaceBase      *string `toml:"workspace_base"`
+	ModelOverride      *string `toml:"model_override"`
+	ArchitectModel     *string `toml:"architect_model"`
+	ImplementerModel   *string `toml:"implementer_model"`
 }
 
 // loadTomlConfig reads .ralph/config.toml from the given project directory.
@@ -80,6 +83,15 @@ func (tc *tomlConfig) applyTo(cfg *Config) {
 	if tc.WorkspaceBase != nil {
 		cfg.WorkspaceBase = *tc.WorkspaceBase
 	}
+	if tc.ModelOverride != nil {
+		cfg.ModelOverride = *tc.ModelOverride
+	}
+	if tc.ArchitectModel != nil {
+		cfg.ArchitectModel = *tc.ArchitectModel
+	}
+	if tc.ImplementerModel != nil {
+		cfg.ImplementerModel = *tc.ImplementerModel
+	}
 }
 
 // SaveConfig writes the current tunable settings to .ralph/config.toml.
@@ -95,6 +107,9 @@ func (cfg *Config) SaveConfig() error {
 		NoArchitect:        boolPtr(cfg.NoArchitect),
 		SpriteEnabled:      boolPtr(cfg.SpriteEnabled),
 		WorkspaceBase:      stringPtr(cfg.WorkspaceBase),
+		ModelOverride:      stringPtr(cfg.ModelOverride),
+		ArchitectModel:     stringPtr(cfg.ArchitectModel),
+		ImplementerModel:   stringPtr(cfg.ImplementerModel),
 	}
 
 	dir := filepath.Join(cfg.ProjectDir, ".ralph")
