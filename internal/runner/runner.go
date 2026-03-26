@@ -347,6 +347,7 @@ type RunClaudeOpts struct {
 	Iteration int
 	StoryID   string
 	Role      roles.Role
+	Model     string
 }
 
 // RunClaudeResult holds the results from a RunClaude invocation.
@@ -373,13 +374,17 @@ func RunClaude(ctx context.Context, projectDir, prompt, logFilePath string, opts
 	}
 	defer activityFile.Close()
 
-	cmd := exec.CommandContext(ctx, "claude",
+	args := []string{
 		"--dangerously-skip-permissions",
 		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--include-partial-messages",
-	)
+	}
+	if len(opts) > 0 && opts[0].Model != "" {
+		args = append(args, "--model", opts[0].Model)
+	}
+	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = projectDir
 	cmd.Stdin = strings.NewReader(prompt)
 	var stderrBuf bytes.Buffer
