@@ -20,6 +20,7 @@ import (
 	rexec "github.com/eoghanhynes/ralph/internal/exec"
 	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/judge"
+	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/quality"
 	"github.com/eoghanhynes/ralph/internal/roles"
@@ -101,6 +102,13 @@ func pollWorktreeCmd(ctx context.Context, dir string) tea.Cmd {
 	return func() tea.Msg {
 		out, _ := rexec.JJStatus(ctx, dir)
 		return worktreeMsg{Content: out}
+	}
+}
+
+func pollMemoryStatsCmd(ralphHome string) tea.Cmd {
+	return func() tea.Msg {
+		stats := memory.MemoryStats(ralphHome)
+		return memoryStatsMsg{Stats: stats}
 	}
 }
 
@@ -312,7 +320,7 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 		if runArchitect {
 			debuglog.Log("runClaudeCmd: running architect phase for story=%s", storyID)
 
-			prompt, err := runner.BuildPrompt(cfg.RalphHome, cfg.ProjectDir, storyID, p, runner.BuildPromptOpts{Role: roles.RoleArchitect})
+			prompt, err := runner.BuildPrompt(cfg.RalphHome, cfg.ProjectDir, storyID, p, runner.BuildPromptOpts{Role: roles.RoleArchitect, MemoryDisabled: cfg.Memory.Disabled})
 			if err != nil {
 				return claudeDoneMsg{Err: fmt.Errorf("architect prompt: %w", err), Role: roles.RoleArchitect}
 			}
@@ -355,7 +363,7 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 		}
 		debuglog.Log("runClaudeCmd: running %s phase for story=%s", implRole, storyID)
 
-		prompt, err := runner.BuildPrompt(cfg.RalphHome, cfg.ProjectDir, storyID, p, runner.BuildPromptOpts{Role: implRole})
+		prompt, err := runner.BuildPrompt(cfg.RalphHome, cfg.ProjectDir, storyID, p, runner.BuildPromptOpts{Role: implRole, MemoryDisabled: cfg.Memory.Disabled})
 		if err != nil {
 			return claudeDoneMsg{Err: err, TokenUsage: totalUsage, Role: implRole}
 		}

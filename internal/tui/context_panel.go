@@ -343,9 +343,45 @@ func renderWorktreeCompact(content string) string {
 	return sb.String()
 }
 
-// renderMemoryContent returns the memory panel content (placeholder until P58-003).
-func renderMemoryContent(content string) string {
-	return content
+// renderMemoryContent formats memory file stats for the memory tab.
+func renderMemoryContent(stats []memory.MemoryFileInfo) string {
+	if len(stats) == 0 {
+		return styleMuted.Render("  No memory files")
+	}
+
+	var sb strings.Builder
+	sb.WriteString("  Markdown Memory Files\n")
+	sb.WriteString("  " + strings.Repeat("─", 40) + "\n")
+
+	anyExists := false
+	for _, s := range stats {
+		if !s.Exists {
+			sb.WriteString(fmt.Sprintf("  %s — not created yet\n", s.Name))
+			continue
+		}
+		anyExists = true
+		sizeStr := formatFileSize(s.SizeBytes)
+		sb.WriteString(fmt.Sprintf("  %s — %s, %d entries\n", s.Name, sizeStr, s.EntryCount))
+	}
+
+	if !anyExists {
+		sb.WriteString("\n")
+		sb.WriteString(styleMuted.Render("  Memory files will be created after the first post-run synthesis."))
+	}
+
+	return sb.String()
+}
+
+// formatFileSize returns a human-friendly file size.
+func formatFileSize(bytes int64) string {
+	switch {
+	case bytes >= 1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+	case bytes >= 1024:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
 }
 
 // formatTokens formats a token count with K/M suffixes.

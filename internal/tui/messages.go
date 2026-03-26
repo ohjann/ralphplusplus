@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/judge"
+	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/quality"
 	"github.com/eoghanhynes/ralph/internal/roles"
@@ -92,9 +93,9 @@ type synthesisDoneMsg struct {
 	Err error
 }
 
-// Memory stats message (placeholder - memory tab empty until P58-003)
+// Memory stats message
 type memoryStatsMsg struct {
-	Content string
+	Stats []memory.MemoryFileInfo
 }
 
 // Cost tracking

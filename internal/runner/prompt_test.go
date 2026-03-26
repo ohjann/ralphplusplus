@@ -581,3 +581,121 @@ func TestExtractFilePaths(t *testing.T) {
 		t.Errorf("expected to extract internal/runner/runner.go from text, got %v", paths)
 	}
 }
+
+func TestBuildPromptWithMemoryFilesIncludesLearnedContext(t *testing.T) {
+	ralphHome := t.TempDir()
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(ralphHome, "ralph-prompt.md"), []byte("base prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create memory files
+	memDir := filepath.Join(ralphHome, "memory")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "learnings.md"), []byte("### L-001\nAlways run tests before committing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "prd-learnings.md"), []byte("### PL-001\nBreak large stories into subtasks\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prompt, err := BuildPrompt(ralphHome, dir, "TEST-MEM1", nil)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if !strings.Contains(prompt, "## Learned Context (from previous runs)") {
+		t.Error("expected Learned Context section in prompt")
+	}
+	if !strings.Contains(prompt, "### Cross-Story Learnings") {
+		t.Error("expected Cross-Story Learnings subsection")
+	}
+	if !strings.Contains(prompt, "Always run tests before committing") {
+		t.Error("expected learnings content in prompt")
+	}
+	if !strings.Contains(prompt, "### PRD-Specific Learnings") {
+		t.Error("expected PRD-Specific Learnings subsection")
+	}
+	if !strings.Contains(prompt, "Break large stories into subtasks") {
+		t.Error("expected prd-learnings content in prompt")
+	}
+}
+
+func TestBuildPromptNoMemoryFilesOmitsSection(t *testing.T) {
+	ralphHome := t.TempDir()
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(ralphHome, "ralph-prompt.md"), []byte("base prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// No memory files exist
+	prompt, err := BuildPrompt(ralphHome, dir, "TEST-MEM2", nil)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if strings.Contains(prompt, "Learned Context") {
+		t.Error("prompt should NOT contain Learned Context when no memory files exist")
+	}
+}
+
+func TestBuildPromptMemoryDisabledSkipsInjection(t *testing.T) {
+	ralphHome := t.TempDir()
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(ralphHome, "ralph-prompt.md"), []byte("base prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create memory files
+	memDir := filepath.Join(ralphHome, "memory")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "learnings.md"), []byte("### L-001\nSome learning\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prompt, err := BuildPrompt(ralphHome, dir, "TEST-MEM3", nil, BuildPromptOpts{MemoryDisabled: true})
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if strings.Contains(prompt, "Learned Context") {
+		t.Error("prompt should NOT contain Learned Context when MemoryDisabled is true")
+	}
+}
+
+func TestBuildPromptEmptyMemoryFilesOmitsSection(t *testing.T) {
+	ralphHome := t.TempDir()
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(ralphHome, "ralph-prompt.md"), []byte("base prompt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create empty memory files
+	memDir := filepath.Join(ralphHome, "memory")
+	if err := os.MkdirAll(memDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "learnings.md"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "prd-learnings.md"), []byte("   \n  \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prompt, err := BuildPrompt(ralphHome, dir, "TEST-MEM4", nil)
+	if err != nil {
+		t.Fatalf("BuildPrompt: %v", err)
+	}
+
+	if strings.Contains(prompt, "Learned Context") {
+		t.Error("prompt should NOT contain Learned Context when memory files are empty/whitespace")
+	}
+}

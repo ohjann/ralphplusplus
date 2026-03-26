@@ -71,6 +71,43 @@ func appendEntry(ralphHome, filename string, entry LearningEntry) error {
 	return err
 }
 
+// MemoryFileInfo holds summary info about a memory file.
+type MemoryFileInfo struct {
+	Name       string
+	Exists     bool
+	SizeBytes  int64
+	EntryCount int
+}
+
+// MemoryStats returns summary info about memory files in {ralphHome}/memory/.
+func MemoryStats(ralphHome string) []MemoryFileInfo {
+	files := []string{learningsFile, prdLearningsFile}
+	var stats []MemoryFileInfo
+	for _, f := range files {
+		path := filepath.Join(memoryDir(ralphHome), f)
+		info := MemoryFileInfo{Name: f}
+		fi, err := os.Stat(path)
+		if err == nil {
+			info.Exists = true
+			info.SizeBytes = fi.Size()
+			// Count entries by counting "### " prefixes
+			if data, err := os.ReadFile(path); err == nil {
+				info.EntryCount = strings.Count(string(data), "\n### ") + countLeadingEntry(data)
+			}
+		}
+		stats = append(stats, info)
+	}
+	return stats
+}
+
+// countLeadingEntry returns 1 if data starts with "### ", else 0.
+func countLeadingEntry(data []byte) int {
+	if len(data) >= 4 && string(data[:4]) == "### " {
+		return 1
+	}
+	return 0
+}
+
 func formatEntry(entry LearningEntry) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "### %s\n", entry.ID)

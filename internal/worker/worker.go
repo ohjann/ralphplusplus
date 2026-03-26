@@ -224,7 +224,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	if !cfg.NoArchitect && shouldRunArchitect(w.StoryID, w.Iteration, ws.Dir, wsPRD) {
 		send(WorkerRunning, roles.RoleArchitect, nil, false, "")
 
-		archPrompt, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleArchitect})
+		archPrompt, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleArchitect, MemoryDisabled: cfg.Memory.Disabled})
 		if err != nil {
 			send(WorkerFailed, roles.RoleArchitect, fmt.Errorf("build architect prompt: %w", err), false, "")
 			return
@@ -282,7 +282,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	}
 	send(WorkerRunning, implRole, nil, false, "")
 
-	prompt, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: implRole})
+	prompt, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: implRole, MemoryDisabled: cfg.Memory.Disabled})
 	if err != nil {
 		send(WorkerFailed, implRole, fmt.Errorf("build prompt: %w", err), false, "")
 		return

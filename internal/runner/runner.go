@@ -25,8 +25,9 @@ import (
 
 // BuildPromptOpts holds optional parameters for BuildPrompt.
 type BuildPromptOpts struct {
-	Role         roles.Role
-	AntiPatterns []memory.AntiPattern
+	Role           roles.Role
+	AntiPatterns   []memory.AntiPattern
+	MemoryDisabled bool // skip memory injection when config.Memory.Disabled is true
 }
 
 // BuildPrompt reads ralph-prompt.md, appends PRD context, story state, iteration constraint,
@@ -63,6 +64,13 @@ func BuildPrompt(ralphHome, projectDir, storyID string, p *prd.PRD, opts ...Buil
 		storyFiles := collectStoryFiles(projectDir, storyID, story)
 		if warning := buildAntiPatternWarnings(opts[0].AntiPatterns, storyFiles); warning != "" {
 			prompt += warning
+		}
+	}
+
+	// Inject learned context from markdown memory files
+	if len(opts) == 0 || !opts[0].MemoryDisabled {
+		if section := buildLearnedContextSection(ralphHome); section != "" {
+			prompt += section
 		}
 	}
 
@@ -244,6 +252,33 @@ func HasStuckInfo(projectDir, storyID string) bool {
 		}
 	}
 	return false
+}
+
+// buildLearnedContextSection reads learnings.md and prd-learnings.md from
+// {ralphHome}/memory/ and returns a formatted "Learned Context" section.
+// Returns empty string if no memory files exist or all are empty.
+func buildLearnedContextSection(ralphHome string) string {
+	learnings, _ := memory.ReadLearnings(ralphHome)
+	prdLearnings, _ := memory.ReadPRDLearnings(ralphHome)
+
+	learnings = strings.TrimSpace(learnings)
+	prdLearnings = strings.TrimSpace(prdLearnings)
+
+	if learnings == "" && prdLearnings == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n\n---\n## Learned Context (from previous runs)\n")
+	if learnings != "" {
+		b.WriteString("\n### Cross-Story Learnings\n")
+		b.WriteString(learnings + "\n")
+	}
+	if prdLearnings != "" {
+		b.WriteString("\n### PRD-Specific Learnings\n")
+		b.WriteString(prdLearnings + "\n")
+	}
+	return b.String()
 }
 
 // buildDebuggerStuckContext finds the most recent stuck-*.json file for the

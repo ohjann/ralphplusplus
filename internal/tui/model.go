@@ -1180,6 +1180,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tickCmd())
 		cmds = append(cmds, pollWorktreeCmd(m.ctx, m.cfg.ProjectDir))
 		cmds = append(cmds, reloadPRDCmd(m.cfg.PRDFile))
+		cmds = append(cmds, pollMemoryStatsCmd(m.cfg.RalphHome))
 		// Auto-dismiss stuck alert after 30s
 		if m.stuckAlert != nil && time.Since(m.stuckAlertAt) > 30*time.Second {
 			m.stuckAlert = nil
@@ -1303,7 +1304,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case memoryStatsMsg:
-		m.memoryContent = renderMemoryContent(msg.Content)
+		m.memoryContent = renderMemoryContent(msg.Stats)
 
 	case costUpdateMsg:
 		if m.runCosting != nil {
