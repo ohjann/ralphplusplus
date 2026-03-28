@@ -405,7 +405,36 @@ func generateFixStoryCmd(ctx context.Context, cfg *config.Config, info runner.St
 		activityPath := runner.ActivityFilePath(cfg.LogDir, info.Iteration)
 		activityTail := runner.ReadLogTail(activityPath, 50)
 
-		fix, tokenUsage, err := autofix.GenerateFixStory(ctx, info, *original, activityTail)
+		// Build rich escalation context from story state
+		esc := autofix.EscalationContext{ActivityTail: activityTail}
+		if plan, err := storystate.LoadPlan(cfg.ProjectDir, info.StoryID); err == nil && plan != "" {
+			esc.Plan = plan
+		}
+		if state, err := storystate.Load(cfg.ProjectDir, info.StoryID); err == nil {
+			if len(state.FilesTouched) > 0 {
+				esc.FilesTouched = strings.Join(state.FilesTouched, "\n")
+			}
+			var errLines []string
+			for _, e := range state.ErrorsEncountered {
+				errLines = append(errLines, fmt.Sprintf("- %s → %s", e.Error, e.Resolution))
+			}
+			if len(errLines) > 0 {
+				esc.Errors = strings.Join(errLines, "\n")
+			}
+			var taskLines []string
+			for _, t := range state.Subtasks {
+				status := "[ ]"
+				if t.Done {
+					status = "[x]"
+				}
+				taskLines = append(taskLines, fmt.Sprintf("%s %s", status, t.Description))
+			}
+			if len(taskLines) > 0 {
+				esc.Subtasks = strings.Join(taskLines, "\n")
+			}
+		}
+
+		fix, tokenUsage, err := autofix.GenerateFixStory(ctx, info, *original, esc)
 		if err != nil {
 			return fixStoryGeneratedMsg{Err: err, TokenUsage: tokenUsage}
 		}

@@ -126,10 +126,10 @@ func printHistory(projectDir string, showAll bool) error {
 	}
 
 	// Print header
-	fmt.Printf("%-19s  %-20s  %9s  %8s  %8s  %9s  %8s  %-10s\n",
-		"DATE", "PRD", "STORIES", "COST", "DURATION", "AVG ITER", "1ST PASS", "MODEL")
-	fmt.Printf("%-19s  %-20s  %9s  %8s  %8s  %9s  %8s  %-10s\n",
-		"───────────────────", "────────────────────", "─────────", "────────", "────────", "─────────", "────────", "──────────")
+	fmt.Printf("%-19s  %-20s  %9s  %7s  %8s  %8s  %9s  %8s  %-10s\n",
+		"DATE", "PRD", "STORIES", "WORKERS", "COST", "DURATION", "AVG ITER", "1ST PASS", "MODEL")
+	fmt.Printf("%-19s  %-20s  %9s  %7s  %8s  %8s  %9s  %8s  %-10s\n",
+		"───────────────────", "────────────────────", "─────────", "───────", "────────", "────────", "─────────", "────────", "──────────")
 
 	for _, r := range runs {
 		// Truncate date to first 19 chars (YYYY-MM-DDTHH:MM:SS)
@@ -153,6 +153,11 @@ func printHistory(projectDir string, showAll bool) error {
 			firstPass = fmt.Sprintf("%.0f%%", r.FirstPassRate*100)
 		}
 
+		workers := "-"
+		if r.Workers > 0 {
+			workers = fmt.Sprintf("%d", r.Workers)
+		}
+
 		model := "-"
 		if len(r.ModelsUsed) == 1 {
 			model = shortModelName(r.ModelsUsed[0])
@@ -160,8 +165,8 @@ func printHistory(projectDir string, showAll bool) error {
 			model = "mixed"
 		}
 
-		fmt.Printf("%-19s  %-20s  %9s  %8s  %8s  %9s  %8s  %-10s\n",
-			date, prdName, stories, cost, duration, avgIter, firstPass, model)
+		fmt.Printf("%-19s  %-20s  %9s  %7s  %8s  %8s  %9s  %8s  %-10s\n",
+			date, prdName, stories, workers, cost, duration, avgIter, firstPass, model)
 	}
 
 	if !showAll && len(h.Runs) > 10 {

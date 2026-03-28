@@ -21,7 +21,9 @@ Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 - **Run history** — `ralph history` shows recent runs with date, stories, cost, duration, first-pass rate, and model; `--stats` for aggregates; `--compare` for model-vs-model comparison
 - **Push notifications** — ntfy.sh notifications on story complete/fail/stuck and run done; zero accounts needed
 - **Remote status page** — mobile-friendly HTTP status page with SSE live updates; JSON API at `/api/status`
-- **Stuck detection + hint injection** — detects tool-call loops, shows a status bar with notification, lets you inject a hint for the next iteration, then inserts a targeted fix story
+- **Stuck detection + hint injection** — detects tool-call loops, shows a status bar with notification, lets you inject a hint for the next iteration, then inserts a targeted fix story with rich escalation context (plan, files, errors, subtask progress)
+- **Pre-judge compilation gate** — runs `make build` / `go build` before invoking the judge, catching obvious failures without a full judge round-trip
+- **Wall clock timeout** — configurable per-story timeout (`--story-timeout`) cancels workers stuck in long-running iterations
 - **Interactive task mode** — submit ad-hoc tasks through a TUI input bar without needing a prd.json; tasks go through a lightweight clarification step before dispatch
 - **Multi-model orchestration** — Opus for architect/debugger (deep reasoning), Sonnet for implementer/reviewer (speed), Haiku for utility tasks (DAG analysis); configurable per role via CLI flags
 - **DAG tree visualization** — TUI stories panel renders dependency graph as a directory-tree structure with box-drawing connectors
@@ -181,6 +183,7 @@ Options:
   --architect-model <name>        Override model for architect role only
   --implementer-model <name>      Override model for implementer role only
   --utility-model <name>          Override model for utility tasks (default: haiku)
+  --story-timeout <minutes>       Max wall clock minutes per story before cancellation (default: 0 = no limit)
   --memory-disable                Disable memory injection
   --idle                          Launch TUI without executing (display only)
   --help, -h                      Show help

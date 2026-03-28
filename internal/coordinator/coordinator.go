@@ -3,12 +3,14 @@ package coordinator
 import (
 	"context"
 	"fmt"
-	"github.com/eoghanhynes/ralph/internal/debuglog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/eoghanhynes/ralph/internal/checkpoint"
@@ -182,7 +184,13 @@ func (c *Coordinator) ScheduleReady(ctx context.Context) int {
 			continue
 		}
 
-		wCtx, wCancel := context.WithCancel(ctx)
+		var wCtx context.Context
+		var wCancel context.CancelFunc
+		if c.cfg.StoryTimeout > 0 {
+			wCtx, wCancel = context.WithTimeout(ctx, time.Duration(c.cfg.StoryTimeout)*time.Minute)
+		} else {
+			wCtx, wCancel = context.WithCancel(ctx)
+		}
 		c.nextID++
 		w := &worker.Worker{
 			ID:         c.nextID,

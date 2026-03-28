@@ -2844,6 +2844,7 @@ func (m *Model) persistRunHistory() {
 		TotalOutputTokens:     totalOutputTokens,
 		CacheHitRate:          cacheHitRate,
 		StoryDetails:          storyDetails,
+		Workers:               m.cfg.Workers,
 	}
 
 	if err := costs.AppendRun(m.cfg.ProjectDir, summary); err != nil {

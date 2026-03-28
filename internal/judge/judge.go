@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/eoghanhynes/ralph/internal/costs"
+	"github.com/eoghanhynes/ralph/internal/debuglog"
 	rexec "github.com/eoghanhynes/ralph/internal/exec"
 	"github.com/eoghanhynes/ralph/internal/prd"
 )
@@ -60,6 +62,25 @@ func RunJudge(ctx context.Context, ralphHome, projectDir, prdFile, storyID strin
 	criteriaStr := strings.Join(criteria, "\n")
 	if len(criteria) == 0 {
 		criteriaStr = "No acceptance criteria specified"
+	}
+
+	// Pre-judge compilation gate: fast local check before expensive judge call
+	if buildErr := preBuildCheck(ctx, projectDir); buildErr != "" {
+		debuglog.Log("judge pre-build failed for %s: %s", storyID, buildErr)
+		writeFeedback(projectDir, storyID, &Verdict{
+			Verdict:        "FAIL",
+			CriteriaFailed: []string{"Code compiles successfully"},
+			Reason:         "Pre-judge build check failed: " + buildErr,
+			Suggestion:     "Fix the compilation error before the judge can review your changes.",
+		})
+		p.SetPasses(storyID, false)
+		_ = prd.Save(prdFile, p)
+		return Result{
+			Passed:         false,
+			Reason:         "Pre-judge build check failed: " + buildErr,
+			CriteriaFailed: []string{"Code compiles successfully"},
+			Suggestion:     "Fix the compilation error before the judge can review your changes.",
+		}
 	}
 
 	// Get diffs from all repos
@@ -330,4 +351,31 @@ Address the failed criteria above. Do not repeat the same approach that was reje
 
 	path := filepath.Join(projectDir, ".ralph", fmt.Sprintf("judge-feedback-%s.md", storyID))
 	_ = os.WriteFile(path, []byte(content), 0o644)
+}
+
+// preBuildCheck runs a fast compilation check before invoking the judge.
+// Returns empty string on success, or a trimmed error message on failure.
+func preBuildCheck(ctx context.Context, projectDir string) string {
+	// Try "make build" first (respects project's build config), fall back to "go build ./..."
+	var cmd *exec.Cmd
+	if _, err := os.Stat(filepath.Join(projectDir, "Makefile")); err == nil {
+		cmd = exec.CommandContext(ctx, "make", "build")
+	} else {
+		cmd = exec.CommandContext(ctx, "go", "build", "./...")
+	}
+	cmd.Dir = projectDir
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		// Truncate to keep feedback concise
+		if len(msg) > 500 {
+			msg = msg[:500] + "..."
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return msg
+	}
+	return ""
 }

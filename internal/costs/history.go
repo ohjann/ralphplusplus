@@ -38,6 +38,7 @@ type RunSummary struct {
 	TotalOutputTokens     int            `json:"total_output_tokens,omitempty"`
 	CacheHitRate          float64        `json:"cache_hit_rate,omitempty"`
 	StoryDetails          []StorySummary `json:"story_details,omitempty"`        // per-story breakdown
+	Workers               int            `json:"workers,omitempty"`              // number of parallel workers used
 }
 
 // RunHistory holds a list of run summaries.

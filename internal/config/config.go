@@ -56,7 +56,7 @@ type Config struct {
 	ArchitectModel     string // --architect-model: override model for architect role only
 	ImplementerModel   string // --implementer-model: override model for implementer role only
 	UtilityModel       string // --utility-model: model for DAG analysis and other utility tasks (default: haiku)
-
+	StoryTimeout       int    // --story-timeout: max minutes per story before cancellation (default: 0 = no limit)
 
 	// Derived paths
 	PRDFile        string
@@ -333,6 +333,17 @@ func Parse(args []string) (*Config, error) {
 			cfg.UtilityModel = args[i+1]
 			i += 2
 
+		case "--story-timeout":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--story-timeout requires a number of minutes")
+			}
+			val, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return nil, fmt.Errorf("--story-timeout must be a number: %w", err)
+			}
+			cfg.StoryTimeout = val
+			i += 2
+
 		default:
 			// Check for --key=value forms
 			if len(args[i]) > 6 && args[i][:6] == "--dir=" {
@@ -431,6 +442,15 @@ func Parse(args []string) (*Config, error) {
 			}
 			if strings.HasPrefix(args[i], "--utility-model=") {
 				cfg.UtilityModel = args[i][len("--utility-model="):]
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--story-timeout=") {
+				val, err := strconv.Atoi(args[i][len("--story-timeout="):])
+				if err != nil {
+					return nil, fmt.Errorf("--story-timeout must be a number: %w", err)
+				}
+				cfg.StoryTimeout = val
 				i++
 				continue
 			}
@@ -630,6 +650,7 @@ Execution:
   --workspace-base <path>         Base directory for workspaces (default: /tmp/ralph-workspaces)
   --no-architect                  Skip architect phase for all stories (go straight to implementer)
   --utility-model <name>          Model for DAG analysis and utility tasks (default: haiku)
+  --story-timeout <minutes>       Max wall clock minutes per story before cancellation (default: 0 = no limit)
 
 Model Selection:
   --model <name>                  Override model for all roles (e.g. opus, sonnet, haiku)

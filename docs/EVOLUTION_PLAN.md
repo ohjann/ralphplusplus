@@ -1858,10 +1858,20 @@ Straightforward wiring — the role system already has the Model field.
 
 ---
 
-## Phase 7: MCP Tool Server (Revised — Scoped Down)
+## Phase 7: MCP Tool Server (Revised — Evidence-Gated)
 
-**Impact: Medium | Complexity: Medium | Dependencies: Phase 5.8 (markdown memory), Phase 1 (story state — already complete)**
+**Impact: Medium | Complexity: Medium | Dependencies: Phase 5.8 (markdown memory — already complete), Phase 1 (story state — already complete)**
 
+> **Evidence gate (2026-03-26):** Run history now tracks worker count per
+> run. Before building Phase 7, analyse `--workers 4` runs for:
+> (1) stale-context judge rejections where a sibling changed a shared file,
+> (2) DAG-miss retries — stories failing iter 1 then passing after a
+> dependency completes, (3) duplicate learnings discovered independently
+> by parallel workers in the same run. If these are rare or absent, defer
+> further. The ~500-700 line investment + external MCP SDK dependency is
+> only justified if parallel coordination failures are measurably wasting
+> iterations.
+>
 > **Revision note (2026-03-19):** With 1M context, `BuildPrompt()` already
 > injects memory, story state, PRD context, and events effectively. The
 > original justification — letting agents pull context on-demand because
@@ -2068,9 +2078,16 @@ comprehension is handled natively by workers reading files with 1M context.
 
 ---
 
-## Phase 8.5: Deep Code Review Mode
+## Phase 8.5: Deep Code Review Mode — Stretch Goal
 
-**Impact: Medium-High | Complexity: Medium | Dependencies: Phase 8 (knowledge graph for structural context), Phase 4 (agent roles — already complete)**
+**Impact: Medium-High | Complexity: Medium | Dependencies: Phase 4 (agent roles — already complete)**
+
+> **Demoted to stretch (2026-03-28):** This adds a new operating mode
+> (read-only review) to a tool whose core job is implementation. The
+> same capability can be achieved ad-hoc via Claude Code directly or
+> via Ralph's interactive task mode. Only build if review-mode becomes
+> a frequent workflow. The Phase 8 (knowledge graph) dependency has
+> been dropped — with 1M context the reviewer can read files directly.
 
 > **Added 2026-03-24.** Ralph currently only operates in "implementation mode"
 > — stories describe what to build, and the pipeline is architect → implementer
@@ -2238,18 +2255,20 @@ worker/coordinator pipeline.
 
 ---
 
-## Phase 9: Improved DAG Accuracy (Revised — Replaces Speculative Parallel)
+## Phase 9: Improved DAG Accuracy — Stretch Goal
 
-**Impact: Medium | Complexity: Low-Medium | Dependencies: Phase 8 (knowledge graph for structural awareness, optional)**
+**Impact: Medium | Complexity: Low-Medium | Dependencies: None**
 
+> **Demoted to stretch (2026-03-28):** With well-decomposed 5-6 story PRDs
+> and 4 workers, DAG parallelism is rarely the bottleneck. The improvement
+> is mostly prompt engineering on the DAG analysis prompt (~200 lines).
+> Better addressed incrementally: when you notice false dependencies in a
+> specific run, improve the prompt. Doesn't warrant a full phase.
+>
 > **Revision note (2026-03-19):** The original Phase 9 (Speculative Parallel
 > Execution) has been dropped. With 1M context enabling bigger stories, PRDs
 > have fewer, larger stories — less parallelism opportunity and less value
-> from speculation. The rebase-on-conflict machinery is complex and
-> error-prone with jj workspaces. Instead, this phase focuses on the root
-> cause: the DAG analysis over-specifies dependencies, leaving parallelism
-> on the table. Better DAG accuracy unlocks more parallelism without
-> speculation.
+> from speculation.
 
 ### Goal
 
@@ -2300,10 +2319,18 @@ tracking.
 
 ---
 
-## Phase 10: Auto-Splitting Stuck Stories (New — Replaces Web Dashboard)
+## Phase 10: Auto-Splitting Stuck Stories — Evidence-Gated
 
-**Impact: Medium-High | Complexity: Medium | Dependencies: Phase 5 (anti-pattern detection), Phase 4 (architect role)**
+**Impact: Medium-High | Complexity: Medium | Dependencies: Phase 5 (anti-pattern detection — already complete), Phase 4 (architect role — already complete)**
 
+> **Evidence-gated (2026-03-28):** The 437 historical stuck events were all
+> from Phase 2's vector DB work (overlapping file edits). Recent runs with
+> well-decomposed PRDs (Phase 6: 6 stories, zero stuck events) suggest
+> better PRD generation may have solved the root cause. Track stuck counts
+> over the next 5-10 runs. If stuck stories remain rare, this phase is
+> unnecessary. The FIX-story system (now with rich escalation context
+> including plan, files, errors, and subtask progress) may be sufficient.
+>
 > **Added 2026-03-19.** The original Phase 10 (Web Dashboard) has been moved
 > to a stretch goal. This phase addresses a real pain point: stories that
 > are stuck after 3+ iterations waste significant execution time. Rather
@@ -2400,15 +2427,15 @@ Phase 1 (Story State + Checkpoint) ✅
   │      │      │
   │      │      ├──→ Phase 5.5 (Interactive Task Mode) ✅
   │      │      │
-  │      │      └──→ Phase 10 (Auto-Split Stuck Stories)
+  │      │      └──→ Phase 10 (Auto-Split Stuck Stories) ⊘ evidence-gated
   │      │
-  │      ├──→ Phase 8 (Knowledge Graph — evidence-gated)
+  │      ├──→ Phase 8 (Knowledge Graph) ⊘ evidence-gated
   │      │      │
-  │      │      ├──→ Phase 8.5 (Deep Code Review Mode)
+  │      │      ├──→ Phase 8.5 (Deep Code Review Mode) ⊘ stretch
   │      │      │
-  │      │      └──→ Phase 9 (Improved DAG Accuracy)
+  │      │      └──→ Phase 9 (Improved DAG Accuracy) ⊘ stretch
   │      │
-  │      └──→ Phase 7 (MCP Server — scoped) ← depends on Phase 5.8 ✅
+  │      └──→ Phase 7 (MCP Server) ⊘ evidence-gated ← depends on Phase 5.8 ✅
   │
   Phase 3 (Usage Tracking) ✅
   │
@@ -2433,21 +2460,38 @@ Phase 1 (Story State + Checkpoint) ✅
 | 8th   | Phase 5.7: Run History Observability ✅ | Done | Baseline metrics for model comparison |
 | 9th   | Phase 5.8: Markdown Memory ✅ | Done | Deleted ~2600 lines, removed 3 dependencies, simpler + better memory |
 | 10th  | Phase 6: Multi-Model (revised) ✅ | Done | Per-role model selection + DAG tree visualization in TUI |
-| **11th** | **Phase 7: MCP Server (scoped)** | ~6-8 stories | Real-time parallel coordination |
-| **12th** | **Phase 8: Knowledge Graph (if needed)** | ~8-10 stories | Structural intelligence — gate on evidence |
-| **13th** | **Phase 8.5: Deep Code Review Mode** | ~4-5 stories | Read-only code review via Ralph loop |
-| **14th** | **Phase 9: Improved DAG Accuracy** | ~3-4 stories | Better parallelism without speculation |
-| **15th** | **Phase 10: Auto-Split Stuck Stories** | ~5-7 stories | Reduce wasted iterations on stuck stories |
+| Evidence-gated | Phase 7: MCP Server | ~6-8 stories | Real-time parallel coordination — gate on worker count data |
+| Evidence-gated | Phase 8: Knowledge Graph | ~8-10 stories | Structural intelligence — gate on evidence |
+| Evidence-gated | Phase 10: Auto-Split Stuck Stories | ~5-7 stories | Gate on stuck counts over next 5-10 runs |
+| Stretch | Phase 8.5: Deep Code Review Mode | ~4-5 stories | Read-only code review via Ralph loop |
+| Stretch | Phase 9: Improved DAG Accuracy | ~3-4 stories | Prompt engineering, do incrementally |
 | Stretch | Web Dashboard | — | Team visibility (if needed) |
 
-Phase 6 is now complete — per-role model selection (Opus for planning/debugging,
-Sonnet for implementation/review, Haiku for utility tasks) is wired through
-the full stack from CLI flags to runner invocation. The TUI stories panel
-now renders a DAG tree visualization with box-drawing connectors. Phase 7
-(MCP Server) is the recommended next phase — it enables real-time parallel
-coordination that static prompt injection cannot provide. Phase 8 is
-explicitly evidence-gated — only build if architects are missing structural
-dependency information that they can't get by reading codebase files directly.
+**Roadmap status (2026-03-28):** All 10 planned phases are complete. The
+remaining items are either evidence-gated (build only when data shows the
+need) or stretch goals (build when the workflow demands it).
+
+Core loop hardening improvements have been applied directly rather than
+as a separate phase:
+- **Compaction-survival instructions** in `ralph-prompt.md` — workers
+  preserve critical state (story ID, criteria, files, errors) across
+  context compaction
+- **Pre-judge compilation gate** in `judge.go` — `make build` / `go build`
+  runs before the judge, catching obvious failures without a full judge
+  round-trip
+- **Wall clock timeout** — `--story-timeout <minutes>` cancels workers
+  that run too long (useful for detecting stuck states that iteration
+  counting misses)
+- **Structured escalation payloads** — FIX-stories now receive the
+  stuck story's implementation plan, files touched, errors encountered,
+  and subtask progress, enabling more targeted fixes
+- **Worker count tracking** — run history records `Workers` field per run
+  for future parallel coordination analysis
+
+Run history now records worker count per run. Phase 7 (MCP Server),
+Phase 8 (Knowledge Graph), and Phase 10 (Auto-Split) are evidence-gated:
+analyse run history for stale-context failures, DAG-miss retries, and
+stuck counts to determine whether they're worth the investment.
 
 ---
 

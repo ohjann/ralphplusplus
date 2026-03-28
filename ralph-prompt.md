@@ -170,15 +170,25 @@ If you believe ALL stories are complete, you may optionally reply with:
 
 This is a hint to the system — do NOT read or modify prd.json to check completion status.
 
-## Semantic Memory
+## Learned Context
 
-Your prompt may include a `## Relevant Memory` section containing semantically retrieved context from prior runs and iterations. This context is automatically curated and scored by the memory pipeline.
+Your prompt may include a `## Learned Context (from previous runs)` section containing cross-run learnings from `.ralph/memory/`. These are curated lessons from prior runs — patterns discovered, mistakes to avoid, and PRD quality feedback.
 
-- **Relevance scores**: Each memory result includes a relevance score (0.0–1.0). Higher scores indicate stronger semantic match to your current task — prioritize those results.
 - **Trust memory over rediscovery**: When memory provides patterns, architectural decisions, or conventions, trust them rather than re-exploring the codebase to rediscover the same information.
 - **Error resolutions**: If memory includes resolutions for errors similar to what you're encountering, try those solutions first before debugging from scratch.
-- **Memory is read-only**: Do not attempt to write to the vector database directly. New memories are embedded and stored automatically by the pipeline when you complete stories and update progress.md.
-- **Complement with progress.md**: Memory provides cross-run semantic context; progress.md provides sequential history. Use both together for the fullest picture.
+- **Complement with progress.md**: Memory provides cross-run context; progress.md provides sequential history within the current run. Use both together for the fullest picture.
+
+## Compaction Survival
+
+When your context is compacted (long sessions), the system preserves a summary. To ensure critical information survives compaction, always keep these details prominent in your working state:
+
+- **Story ID and acceptance criteria** — these define what you are building
+- **Files modified so far** — tracked in `.ralph/stories/{id}/state.json`
+- **Current subtask and plan** — what step you are on from your plan.md
+- **Judge feedback** — if you received feedback, the specific criteria that failed
+- **Errors encountered and their resolutions** — do not re-attempt failed approaches
+
+If you lose track of any of these after a long session, re-read `.ralph/stories/{id}/state.json` and `.ralph/stories/{id}/plan.md` to recover your context.
 
 ## Important
 
