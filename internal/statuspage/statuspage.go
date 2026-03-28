@@ -40,6 +40,15 @@ type SettingStatus struct {
 	Value string `json:"value"`
 }
 
+// WorkerTab represents a single worker tab entry for the status page.
+type WorkerTab struct {
+	WorkerID int    `json:"worker_id"`
+	StoryID  string `json:"story_id"`
+	Role     string `json:"role,omitempty"`
+	State    string `json:"state"`
+	Active   bool   `json:"active"`
+}
+
 // Badge represents an enabled feature badge.
 type Badge struct {
 	Label string `json:"label"`
@@ -75,6 +84,8 @@ type StatusState struct {
 	MemoryContent   string          `json:"memory_content,omitempty"`
 	CostsContent    string          `json:"costs_content,omitempty"`
 	ClaudeActivity   string              `json:"claude_activity,omitempty"`
+	WorkerLogs       map[int]string      `json:"worker_logs,omitempty"`
+	WorkerTabs       []WorkerTab         `json:"worker_tabs,omitempty"`
 	StuckAlert       string              `json:"stuck_alert,omitempty"`
 	RateLimit        RateLimitStatus     `json:"rate_limit"`
 	Version          string              `json:"version,omitempty"`
@@ -845,6 +856,48 @@ body {
   padding: 0.5rem 0;
 }
 
+/* ── Worker tabs inside Claude panel ──── */
+
+.worker-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0;
+  padding: 0.15rem 0 0.25rem;
+  overflow: hidden;
+}
+
+.worker-tab {
+  padding: 0.2rem 0.6ch;
+  min-height: 1.8rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  color: var(--overlay0);
+  font-size: 0.8em;
+  border: none;
+  background: none;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: color 0.15s ease-out, background 0.15s ease-out;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3ch;
+}
+
+.worker-tab.active {
+  background: var(--claude);
+  color: var(--crust);
+  font-weight: 700;
+}
+
+.worker-tab:not(.active):hover {
+  color: var(--subtext1);
+}
+
+.worker-tab .wt-id { font-weight: 700; }
+.worker-tab .wt-story { }
+.worker-tab .wt-state { opacity: 0.7; }
+.worker-tab .wt-sep { color: var(--surface2); }
+
 /* ── Footer ────────────────────────────────── */
 
 .footer {
@@ -1028,6 +1081,7 @@ body {
           <span id="claude-sparkle" class="claude-sparkle%s">✻</span>
           <span class="claude-label">Claude</span>
         </div>
+        <div id="worker-tabs" class="worker-tabs" style="display:none"></div>
         <div id="claude-activity" class="claude-scroll">%s</div>
       </div>
     </div>
@@ -1049,6 +1103,8 @@ body {
   // State
   var currentTab = "progress";
   var ctxData = { progress: "", worktree: "", judge: "", quality: "", memory: "", usage: "", settings: "" };
+  var activeWorker = null; // null = show main claude_activity, or worker ID int
+  var workerLogs = {};     // worker_id -> log content
 
   // Elements
   var $ = function(id){ return document.getElementById(id); };
@@ -1435,12 +1491,66 @@ body {
     if (d.settings !== undefined) ctxData.settings = renderSettingsContent(d.settings);
     showTab();
 
-    // Claude activity
+    // Worker tabs and logs
+    var wtEl = $("worker-tabs");
+    if (d.worker_tabs && d.worker_tabs.length > 0) {
+      // Update stored worker logs
+      if (d.worker_logs) {
+        for (var wid in d.worker_logs) {
+          workerLogs[wid] = d.worker_logs[wid];
+        }
+      }
+      // Render worker tab bar
+      var wtHTML = "";
+      for (var i = 0; i < d.worker_tabs.length; i++) {
+        var wt = d.worker_tabs[i];
+        var isActive = (activeWorker === wt.worker_id) || (activeWorker === null && wt.active);
+        wtHTML += '<button class="worker-tab' + (isActive ? ' active' : '') + '" data-wid="' + wt.worker_id + '">' +
+          '<span class="wt-id">W' + wt.worker_id + '</span>' +
+          '<span class="wt-story">' + esc(wt.story_id) + '</span>' +
+          (wt.role ? ' <span class="wt-state">' + esc(wt.role) + '</span>' : '') +
+          '<span class="wt-state">[' + esc(wt.state) + ']</span>' +
+          '</button>';
+        if (i < d.worker_tabs.length - 1) wtHTML += '<span class="wt-sep">│</span>';
+      }
+      wtEl.innerHTML = wtHTML;
+      wtEl.style.display = "flex";
+
+      // Bind click handlers
+      var wtBtns = wtEl.querySelectorAll(".worker-tab");
+      for (var i = 0; i < wtBtns.length; i++) {
+        wtBtns[i].addEventListener("click", function() {
+          activeWorker = parseInt(this.getAttribute("data-wid"), 10);
+          // Update active state visually
+          var all = wtEl.querySelectorAll(".worker-tab");
+          for (var j = 0; j < all.length; j++) all[j].classList.remove("active");
+          this.classList.add("active");
+          showWorkerLog();
+        });
+      }
+
+      // Auto-select first active worker if none selected
+      if (activeWorker === null) {
+        for (var i = 0; i < d.worker_tabs.length; i++) {
+          if (d.worker_tabs[i].active) {
+            activeWorker = d.worker_tabs[i].worker_id;
+            break;
+          }
+        }
+      }
+    } else {
+      wtEl.style.display = "none";
+      activeWorker = null;
+      workerLogs = {};
+    }
+
+    // Claude activity — show per-worker log if tabs are active
     var claudeEl = $("claude-activity");
     var sparkleEl = $("claude-sparkle");
-    if (d.claude_activity) {
+    if (d.worker_tabs && d.worker_tabs.length > 0) {
+      showWorkerLog();
+    } else if (d.claude_activity) {
       claudeEl.textContent = d.claude_activity;
-      // Auto-scroll to bottom
       claudeEl.scrollTop = claudeEl.scrollHeight;
     } else {
       claudeEl.innerHTML = '<span class="claude-empty">Monitoring...</span>';
@@ -1455,6 +1565,16 @@ body {
     if (d.updated_at) {
       var t = new Date(d.updated_at);
       $("updated-at").textContent = t.toLocaleTimeString();
+    }
+  }
+
+  function showWorkerLog() {
+    var claudeEl = $("claude-activity");
+    if (activeWorker !== null && workerLogs[activeWorker]) {
+      claudeEl.textContent = workerLogs[activeWorker];
+      claudeEl.scrollTop = claudeEl.scrollHeight;
+    } else {
+      claudeEl.innerHTML = '<span class="claude-empty">Waiting for worker output...</span>';
     }
   }
 

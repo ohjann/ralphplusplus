@@ -360,6 +360,31 @@ func (m *Model) buildStatusState() statuspage.StatusState {
 	// Claude activity (last portion to keep payload reasonable)
 	state.ClaudeActivity = tailTruncate(m.claudeContent, 4000)
 
+	// Worker logs and tabs for parallel/interactive mode
+	if (m.phase == phaseParallel || m.phase == phaseInteractive) && m.coord != nil && len(m.workerLogCache) > 0 {
+		workerLogs := make(map[int]string, len(m.workerLogCache))
+		for wID, content := range m.workerLogCache {
+			workerLogs[int(wID)] = tailTruncate(content, 4000)
+		}
+		state.WorkerLogs = workerLogs
+
+		// Build worker tabs matching the TUI tab order
+		workers := m.coord.Workers()
+		for _, wID := range m.workerTabOrder {
+			w := workers[wID]
+			if w == nil {
+				continue
+			}
+			state.WorkerTabs = append(state.WorkerTabs, statuspage.WorkerTab{
+				WorkerID: int(wID),
+				StoryID:  w.StoryID,
+				Role:     string(w.Role),
+				State:    string(w.State),
+				Active:   wID == m.activeWorkerView,
+			})
+		}
+	}
+
 	// Stuck alert
 	if m.stuckAlert != nil {
 		state.StuckAlert = fmt.Sprintf("⚠ STUCK: %s — %s (%dx)",
