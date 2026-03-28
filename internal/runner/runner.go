@@ -785,15 +785,16 @@ func (sp *streamProcessor) processLine(line string) {
 		sp.currentBlock = blockType
 		sp.inputBuf.Reset()
 
+		ts := time.Now().Format("15:04:05")
 		switch blockType {
 		case "thinking":
-			sp.writeLine("\n── Thinking ─────────────────────")
+			sp.writeLine(fmt.Sprintf("\n[%s] ── Thinking ─────────────────────", ts))
 		case "tool_use":
 			name, _ := block["name"].(string)
 			sp.currentTool = name
-			sp.writeLine(fmt.Sprintf("\n── Tool: %s ─────────────────────", name))
+			sp.writeLine(fmt.Sprintf("\n[%s] ── Tool: %s ─────────────────────", ts, name))
 		case "text":
-			sp.writeLine("\n── Response ─────────────────────")
+			sp.writeLine(fmt.Sprintf("\n[%s] ── Response ─────────────────────", ts))
 		}
 
 	case "content_block_delta":

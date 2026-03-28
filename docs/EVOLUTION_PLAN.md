@@ -358,11 +358,11 @@ progress.md does — just with fancier technology.
 - Documents that drop below 0.3 are evicted
 - This means a memory that's never retrieved again is gone after ~6 runs
 
-**Codebase-aware invalidation (deferred to Phase 8):**
-- When the knowledge graph (Phase 8) detects significant file changes,
+**Codebase-aware invalidation (deferred to Phase 9):**
+- When the knowledge graph (Phase 9) detects significant file changes,
   flag all memories referencing those files for re-validation
 - A fast model checks "is this memory still accurate given current code?"
-- Until Phase 8, this is handled implicitly by confidence decay
+- Until Phase 9, this is handled implicitly by confidence decay
 
 #### 2e. Cross-Run Persistence
 
@@ -1858,7 +1858,168 @@ Straightforward wiring — the role system already has the Model field.
 
 ---
 
-## Phase 7: MCP Tool Server (Revised — Evidence-Gated)
+## Phase 7: Daemon/Client Architecture — TUI Decoupling
+
+**Impact: High | Complexity: Medium-High | Dependencies: Phase 1 (checkpoint/resume — already complete), Phase 3 (status page — already complete)**
+
+> **Added 2026-03-28.** When Ralph's TUI freezes or crashes, all workers
+> (goroutines) die with the process, losing in-progress work. The checkpoint
+> system recovers completed/failed state, but in-flight workers, pending
+> merges, and Claude subprocesses are all killed. This phase splits Ralph
+> into a **daemon** (owns workers, coordination, merges) and a **client**
+> (the TUI, disposable), so the user can quit a frozen TUI and reconnect
+> without losing worker progress. The status page already demonstrates
+> that HTTP+SSE can push live state — the daemon extends this pattern to
+> full bidirectional control.
+
+### Goal
+
+Decouple the long-running work (workers, merges, coordination) from the
+ephemeral TUI process, so that TUI crashes or freezes do not kill workers.
+The user can restart `ralph` and automatically reconnect to the running
+session.
+
+### Context for Builder
+
+Ralph is currently a single Bubble Tea process. The coordinator, workers
+(goroutines calling `exec.CommandContext("claude")`), merge operations
+(`jj rebase` via `MergeAndSync()`), and the status page all live in the
+same process. Key coupling points:
+
+- **TUI creates Coordinator directly** (struct reference in `model.go`)
+- **Workers are goroutines** sending updates via `chan WorkerUpdate`
+- **TUI listens on channel** via `coordinator.ListenCmd()` → `tea.Cmd`
+- **Merge operations** triggered as `tea.Cmd` goroutines from `Update()`
+- **Status page** is push-only (TUI calls `updateStatusPage()`)
+- **~30 user key actions** in TUI map to coordinator method calls
+
+The status page server (`internal/statuspage/`) already serves HTTP with
+SSE streaming, JSON API, and handles concurrent clients — this pattern
+is the template for the daemon's own API.
+
+### Architecture
+
+```
+ralph (TUI client)              ralph --daemon (background)
+┌──────────────────┐           ┌──────────────────────────┐
+│ Bubble Tea Model │◄─────────►│ Unix Socket HTTP API     │
+│   renders state  │   IPC     │                          │
+│   sends commands │  (.ralph/ │ Coordinator              │
+│   local UI state │  daemon   │   Workers (goroutines)   │
+│                  │  .sock)   │   Merge operations       │
+└──────────────────┘           │   Checkpoint writes      │
+                               │   Cost tracking          │
+                               │   Status Page (TCP HTTP) │
+                               │   Notifications          │
+                               └──────────────────────────┘
+```
+
+**IPC**: HTTP/JSON over Unix domain socket at `.ralph/daemon.sock`.
+Reuses Go's `net/http` — zero new dependencies. SSE for event streaming
+(same pattern as existing status page).
+
+### What to Build
+
+#### 7a. Daemon Core (`internal/daemon/`)
+
+Create `internal/daemon/` package:
+
+**`daemon.go`** (~400 lines):
+- `Daemon` struct holding Coordinator, config, SSE broadcaster, HTTP mux
+- Internal coordination event loop: `for/select` on `updateCh` that
+  replaces the TUI's `Update()` handler for `WorkerUpdateMsg` and
+  `MergeCompleteMsg` — triggers merges, schedules ready stories,
+  writes checkpoints, broadcasts events
+- Lifecycle management: PID file (`.ralph/daemon.pid`), SIGTERM handler,
+  graceful shutdown (cancel workers, cleanup workspaces, delete socket)
+
+**`api.go`** (~250 lines):
+- Unix socket HTTP server at `.ralph/daemon.sock`
+- SSE endpoint: `GET /events` — pushes state snapshots, worker updates,
+  log lines, merge results, stuck alerts
+- Query endpoints: `GET /api/state` (full snapshot), `GET /api/worker/{id}/activity`
+- Command endpoints: `POST /api/quit`, `/api/pause`, `/api/resume`,
+  `/api/hint`, `/api/task`, `/api/settings`, `/api/clarify`
+
+**`protocol.go`** (~100 lines):
+- Shared event types: `DaemonStateEvent`, `WorkerLogEvent`, `LogLineEvent`
+- JSON serialization tags
+
+#### 7b. Client Library
+
+**`client.go`** (~200 lines):
+- `DaemonClient` struct: connects to Unix socket, subscribes to SSE
+- `Connect(socketPath)` — dials Unix socket, validates with `GET /api/state`
+- `StreamEvents(ctx) <-chan DaemonEvent` — SSE reader goroutine
+- `SendCommand(endpoint, body) error` — POST commands to daemon
+- `GetState() (DaemonState, error)` — fetch full state snapshot
+
+#### 7c. Daemon Lifecycle in main.go
+
+Modify `cmd/ralph/main.go`:
+- Add `--daemon` flag: run as daemon (no TUI, coordination loop + API)
+- Add `--kill` flag: send SIGTERM to running daemon
+- Default mode (auto-fork):
+  1. Check `.ralph/daemon.sock` exists and responds to `GET /api/state`
+  2. If alive: attach TUI as client
+  3. If stale (PID dead): delete socket/pid, start fresh
+  4. If absent: fork `ralph --daemon <same-flags>`, wait for socket, attach
+- Daemon stays alive after completion for interactive follow-up tasks,
+  exits on explicit quit (`POST /api/quit` from TUI's `q`/`ctrl+c`)
+
+#### 7d. TUI Refactor
+
+Modify `internal/tui/model.go`:
+- Replace `*coordinator.Coordinator` field with `*daemon.DaemonClient`
+- Replace `m.coord.ListenCmd()` with SSE stream reader that feeds
+  `program.Send(msg)` into the Bubble Tea event loop
+- Replace direct coordinator method calls (`ScheduleReady`, `HandleUpdate`,
+  `CancelAll`, `Resume`) with HTTP POST commands via DaemonClient
+- Keep all rendering, viewport, panel, and sprite logic unchanged
+- The `Update()` function handles the same message types, sourced from
+  SSE instead of Go channels
+
+Modify `internal/tui/commands.go`:
+- `mergeBackCmd` and coordinator-calling commands become HTTP POST calls
+
+Move status page ownership from TUI to daemon.
+
+#### 7e. Coordinator Cleanup
+
+Modify `internal/coordinator/coordinator.go`:
+- Add `UpdateCh() <-chan worker.WorkerUpdate` accessor to expose the
+  channel to the daemon's event loop
+- Remove `ListenCmd()` and any `tea.Cmd`/`tea.Msg` coupling
+
+### What Stays Unchanged
+
+- `internal/worker/worker.go` — workers run identically as daemon goroutines
+- `internal/runner/runner.go` — Claude invocation unchanged
+- `internal/workspace/workspace.go` — workspace lifecycle unchanged
+- `internal/checkpoint/checkpoint.go` — checkpoint system unchanged
+
+### Acceptance Criteria
+
+- [ ] `ralph` auto-forks daemon, TUI connects, workers run normally
+- [ ] Killing TUI (`kill -9`) leaves daemon alive, workers continue
+- [ ] Running `ralph` again reconnects to daemon, shows current state
+- [ ] All stories complete → daemon stays alive for interactive tasks
+- [ ] `q` in TUI → daemon shuts down gracefully
+- [ ] Daemon crash → next `ralph` resumes from checkpoint (existing behavior)
+- [ ] Status page (`--status-port`) works throughout TUI disconnection
+- [ ] Interactive tasks work: submit via TUI → daemon dispatches
+- [ ] `ralph --kill` sends SIGTERM to running daemon
+- [ ] `make build` passes, existing tests pass
+
+### Estimated Scope
+
+~950 lines of new Go code across 4 new files in `internal/daemon/`.
+Moderate modifications to `cmd/ralph/main.go`, `internal/tui/model.go`,
+`internal/tui/commands.go`, `internal/coordinator/coordinator.go`.
+
+---
+
+## Phase 8: MCP Tool Server (Revised — Evidence-Gated)
 
 **Impact: Medium | Complexity: Medium | Dependencies: Phase 5.8 (markdown memory — already complete), Phase 1 (story state — already complete)**
 
@@ -1974,9 +2135,9 @@ handling).
 
 ---
 
-## Phase 8: Codebase Knowledge Graph (Revised — Evidence-Gated)
+## Phase 9: Codebase Knowledge Graph (Revised — Evidence-Gated)
 
-**Impact: Medium | Complexity: Medium-High | Dependencies: Phase 7 (MCP for exposing graph queries)**
+**Impact: Medium | Complexity: Medium-High | Dependencies: Phase 8 (MCP for exposing graph queries)**
 
 > **Note:** Phase 7.5 (Activate `ralph_codebase`) was added on 2026-03-19
 > but removed the same day after audit confirmed that `ralph_codebase` was
@@ -2078,7 +2239,7 @@ comprehension is handled natively by workers reading files with 1M context.
 
 ---
 
-## Phase 8.5: Deep Code Review Mode — Stretch Goal
+## Phase 9.5: Deep Code Review Mode — Stretch Goal
 
 **Impact: Medium-High | Complexity: Medium | Dependencies: Phase 4 (agent roles — already complete)**
 
@@ -2086,7 +2247,7 @@ comprehension is handled natively by workers reading files with 1M context.
 > (read-only review) to a tool whose core job is implementation. The
 > same capability can be achieved ad-hoc via Claude Code directly or
 > via Ralph's interactive task mode. Only build if review-mode becomes
-> a frequent workflow. The Phase 8 (knowledge graph) dependency has
+> a frequent workflow. The Phase 9 (knowledge graph) dependency has
 > been dropped — with 1M context the reviewer can read files directly.
 
 > **Added 2026-03-24.** Ralph currently only operates in "implementation mode"
@@ -2101,11 +2262,11 @@ comprehension is handled natively by workers reading files with 1M context.
 > first-class operating mode where each PRD story defines a **review focus
 > area** and the output is a structured review document.
 >
-> **Why after Phase 8:** The knowledge graph provides structural codebase
+> **Why after Phase 9:** The knowledge graph provides structural codebase
 > awareness (dependency graphs, import chains, module boundaries) that makes
 > architectural reviews significantly more useful. Without it, the reviewer
 > is limited to what it can discover via Read/Grep/Glob in a single Claude
-> session. Phase 8's impact analysis queries enable the reviewer to trace
+> session. Phase 9's impact analysis queries enable the reviewer to trace
 > ripple effects and coupling that would otherwise be invisible.
 
 ### Goal
@@ -2156,7 +2317,7 @@ Read-only reviewer agent instructions:
   files broadly → analyse architecture, code quality, potential bugs, tech
   debt, security, performance, testing gaps, coupling → produce structured
   review in `<review>` tags.
-- **Knowledge graph integration:** When Phase 8's knowledge graph is
+- **Knowledge graph integration:** When Phase 9's knowledge graph is
   available, query it for dependency/import context, reverse dependencies,
   and interface implementations to inform architectural analysis.
 - **Output format (inside `<review>` tags):**
@@ -2244,7 +2405,7 @@ Stories define review targets rather than features:
 - [ ] Consolidated `REVIEW.md` generated at project root after all stories
 - [ ] Works in both serial and parallel (`--workers N`) modes
 - [ ] After a deep-review run, `jj diff` shows no code changes (only .ralph/ state and REVIEW.md)
-- [ ] Knowledge graph context injected into reviewer prompt when available (Phase 8)
+- [ ] Knowledge graph context injected into reviewer prompt when available (Phase 9)
 
 ### Estimated Scope
 
@@ -2255,7 +2416,7 @@ worker/coordinator pipeline.
 
 ---
 
-## Phase 9: Improved DAG Accuracy — Stretch Goal
+## Phase 10: Improved DAG Accuracy — Stretch Goal
 
 **Impact: Medium | Complexity: Low-Medium | Dependencies: None**
 
@@ -2282,7 +2443,7 @@ over-specified dependencies.
 #### 9a. Smarter DAG Analysis Prompt
 
 Improve the DAG analysis prompt in `internal/dag/dag.go`:
-- Provide structural codebase context (from Phase 8 knowledge graph if
+- Provide structural codebase context (from Phase 9 knowledge graph if
   available) so the analysis has actual import/dependency
   information rather than guessing
 - Explicitly ask the model to distinguish "touches the same module" from
@@ -2310,7 +2471,7 @@ Track DAG accuracy in run history:
 - [ ] Parallel utilization improves (more stories scheduled concurrently)
 - [ ] No increase in merge conflicts from relaxed dependencies
 - [ ] DAG quality metrics tracked in run history
-- [ ] Analysis uses structural codebase context when available (Phase 8)
+- [ ] Analysis uses structural codebase context when available (Phase 9)
 
 ### Estimated Scope
 
@@ -2319,7 +2480,7 @@ tracking.
 
 ---
 
-## Phase 10: Auto-Splitting Stuck Stories — Evidence-Gated
+## Phase 11: Auto-Splitting Stuck Stories — Evidence-Gated
 
 **Impact: Medium-High | Complexity: Medium | Dependencies: Phase 5 (anti-pattern detection — already complete), Phase 4 (architect role — already complete)**
 
@@ -2427,15 +2588,17 @@ Phase 1 (Story State + Checkpoint) ✅
   │      │      │
   │      │      ├──→ Phase 5.5 (Interactive Task Mode) ✅
   │      │      │
-  │      │      └──→ Phase 10 (Auto-Split Stuck Stories) ⊘ evidence-gated
+  │      │      └──→ Phase 11 (Auto-Split Stuck Stories) ⊘ evidence-gated
   │      │
-  │      ├──→ Phase 8 (Knowledge Graph) ⊘ evidence-gated
+  │      ├──→ Phase 9 (Knowledge Graph) ⊘ evidence-gated
   │      │      │
-  │      │      ├──→ Phase 8.5 (Deep Code Review Mode) ⊘ stretch
+  │      │      ├──→ Phase 9.5 (Deep Code Review Mode) ⊘ stretch
   │      │      │
-  │      │      └──→ Phase 9 (Improved DAG Accuracy) ⊘ stretch
+  │      │      └──→ Phase 10 (Improved DAG Accuracy) ⊘ stretch
   │      │
-  │      └──→ Phase 7 (MCP Server) ⊘ evidence-gated ← depends on Phase 5.8 ✅
+  │      └──→ Phase 8 (MCP Server) ⊘ evidence-gated ← depends on Phase 5.8 ✅
+  │
+  ├──→ Phase 7 (Daemon/Client Architecture) ← depends on Phase 1 ✅, Phase 3 ✅
   │
   Phase 3 (Usage Tracking) ✅
   │
@@ -2460,15 +2623,17 @@ Phase 1 (Story State + Checkpoint) ✅
 | 8th   | Phase 5.7: Run History Observability ✅ | Done | Baseline metrics for model comparison |
 | 9th   | Phase 5.8: Markdown Memory ✅ | Done | Deleted ~2600 lines, removed 3 dependencies, simpler + better memory |
 | 10th  | Phase 6: Multi-Model (revised) ✅ | Done | Per-role model selection + DAG tree visualization in TUI |
-| Evidence-gated | Phase 7: MCP Server | ~6-8 stories | Real-time parallel coordination — gate on worker count data |
-| Evidence-gated | Phase 8: Knowledge Graph | ~8-10 stories | Structural intelligence — gate on evidence |
-| Evidence-gated | Phase 10: Auto-Split Stuck Stories | ~5-7 stories | Gate on stuck counts over next 5-10 runs |
-| Stretch | Phase 8.5: Deep Code Review Mode | ~4-5 stories | Read-only code review via Ralph loop |
-| Stretch | Phase 9: Improved DAG Accuracy | ~3-4 stories | Prompt engineering, do incrementally |
+| 11th  | Phase 7: Daemon/Client Architecture | ~950 lines | TUI decoupling — workers survive TUI crash |
+| Evidence-gated | Phase 8: MCP Server | ~6-8 stories | Real-time parallel coordination — gate on worker count data |
+| Evidence-gated | Phase 9: Knowledge Graph | ~8-10 stories | Structural intelligence — gate on evidence |
+| Evidence-gated | Phase 11: Auto-Split Stuck Stories | ~5-7 stories | Gate on stuck counts over next 5-10 runs |
+| Stretch | Phase 9.5: Deep Code Review Mode | ~4-5 stories | Read-only code review via Ralph loop |
+| Stretch | Phase 10: Improved DAG Accuracy | ~3-4 stories | Prompt engineering, do incrementally |
 | Stretch | Web Dashboard | — | Team visibility (if needed) |
 
-**Roadmap status (2026-03-28):** All 10 planned phases are complete. The
-remaining items are either evidence-gated (build only when data shows the
+**Roadmap status (2026-03-28):** Phases 1-6 (plus sub-phases) are complete.
+Phase 7 (Daemon/Client Architecture) is the next implementation target.
+Remaining items are either evidence-gated (build only when data shows the
 need) or stretch goals (build when the workflow demands it).
 
 Core loop hardening improvements have been applied directly rather than
@@ -2488,8 +2653,8 @@ as a separate phase:
 - **Worker count tracking** — run history records `Workers` field per run
   for future parallel coordination analysis
 
-Run history now records worker count per run. Phase 7 (MCP Server),
-Phase 8 (Knowledge Graph), and Phase 10 (Auto-Split) are evidence-gated:
+Run history now records worker count per run. Phase 8 (MCP Server),
+Phase 9 (Knowledge Graph), and Phase 11 (Auto-Split) are evidence-gated:
 analyse run history for stale-context failures, DAG-miss retries, and
 stuck counts to determine whether they're worth the investment.
 
@@ -2511,12 +2676,14 @@ After full rollout, ralph should demonstrate:
 - **Minimal dependencies**: No external ML/vector infrastructure required.
   Memory system runs on markdown files + LLM comprehension ✅ (Phase 5.8)
 - **Parallel efficiency**: DAG analysis produces fewer false dependencies,
-  enabling more concurrent story execution (Phase 9)
+  enabling more concurrent story execution (Phase 10)
 - **Stuck recovery**: Stuck stories are automatically split rather than
-  wasting iterations (Phase 10)
+  wasting iterations (Phase 11)
 - **Deep review**: Ralph can perform meticulous read-only code reviews
   using the same loop infrastructure, producing structured findings with
-  file-by-file analysis and architectural observations (Phase 8.5)
+  file-by-file analysis and architectural observations (Phase 9.5)
+- **TUI resilience**: Workers survive TUI crashes; user can reconnect
+  without losing in-progress work (Phase 7)
 - **Interactive mode**: Tasks can be dispatched on the fly without a PRD,
   with clarification step ensuring quality input ✅ (Phase 5.5)
 - **Visibility**: Full usage and performance analytics in TUI ✅ (Phase 3)

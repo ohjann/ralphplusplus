@@ -244,6 +244,12 @@ func (m *Model) ExitCode() int {
 	return m.exitCode
 }
 
+// tsLog returns a timestamped log line for the claude panel.
+func tsLog(format string, args ...interface{}) string {
+	msg := fmt.Sprintf(format, args...)
+	return fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), msg)
+}
+
 // stopStatusServer gracefully shuts down the status page server if running.
 func (m *Model) stopStatusServer() {
 	if m.statusServer != nil {
@@ -655,7 +661,7 @@ func (m *Model) Init() tea.Cmd {
 			m.storyDAG = &dag.DAG{Nodes: make(map[string]*dag.StoryNode)}
 		}
 		m.phase = phaseInteractive
-		m.claudeContent += "── Interactive mode — add tasks with the input bar ──\n"
+		m.claudeContent += tsLog("── Interactive mode — add tasks with the input bar ──\n")
 		m.claudeVP.SetContent(m.claudeContent)
 		m.prevClaudeLen = len(m.claudeContent)
 		initCmds := []tea.Cmd{
@@ -747,7 +753,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if hint != "" && m.stuckAlert != nil {
 					storyID := m.stuckAlert.StoryID
 					_ = storystate.SaveHint(m.cfg.ProjectDir, storyID, hint)
-					m.claudeContent += fmt.Sprintf("\n── Hint injected: %s ──\n", hint)
+					m.claudeContent += "\n" + tsLog("── Hint injected: %s ──\n", hint)
 					m.claudeVP.SetContent(m.claudeContent)
 					m.claudeVP.GotoBottom()
 					m.prevClaudeLen = len(m.claudeContent)
@@ -780,7 +786,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyEsc:
 				if m.isClarifying() {
 					// Cancel clarification entirely
-					m.claudeContent += "── Clarification cancelled ──\n"
+					m.claudeContent += tsLog("── Clarification cancelled ──\n")
 					m.claudeVP.SetContent(m.claudeContent)
 					m.claudeVP.GotoBottom()
 					m.prevClaudeLen = len(m.claudeContent)
@@ -806,7 +812,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.clarifyIndex >= len(m.clarifyQuestions) {
 						// All questions answered — bundle description and dispatch
 						desc := m.buildClarifyDescription()
-						m.claudeContent += "── Clarification complete, creating story ──\n"
+						m.claudeContent += tsLog("── Clarification complete, creating story ──\n")
 						m.claudeVP.SetContent(m.claudeContent)
 						m.claudeVP.GotoBottom()
 						m.prevClaudeLen = len(m.claudeContent)
@@ -831,7 +837,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.taskInput.Blur()
 				m.taskInput.Reset()
 				if task != "" {
-					m.claudeContent += fmt.Sprintf("\n── Task submitted: %s ──\n── Clarifying... ──\n", task)
+					m.claudeContent += "\n" + tsLog("── Task submitted: %s ──\n", task) + tsLog("── Clarifying... ──\n")
 					m.claudeVP.SetContent(m.claudeContent)
 					m.claudeVP.GotoBottom()
 					m.prevClaudeLen = len(m.claudeContent)
@@ -1123,7 +1129,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusServer = nil
 				m.cfg.StatusPort = 0
 				m.notifier.SetDisabled(true)
-				m.claudeContent += "\n── Monitoring stopped (status page + notifications) ──\n"
+				m.claudeContent += "\n" + tsLog("── Monitoring stopped (status page + notifications) ──\n")
 			} else {
 				// Turn everything on
 				port := m.cfg.StatusPort
@@ -1132,15 +1138,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				ss := statuspage.New()
 				if err := ss.Start(port); err != nil {
-					m.claudeContent += fmt.Sprintf("\n── Status page failed to start on port %d: %v ──\n", port, err)
+					m.claudeContent += "\n" + tsLog("── Status page failed to start on port %d: %v ──\n", port, err)
 				} else {
 					m.statusServer = ss
 					m.cfg.StatusPort = port
 					m.updateStatusPage()
-					m.claudeContent += fmt.Sprintf("\n── Status page started: http://localhost:%d ──\n", port)
+					m.claudeContent += "\n" + tsLog("── Status page started: http://localhost:%d ──\n", port)
 				}
 				m.notifier.SetDisabled(false)
-				m.claudeContent += "── Notifications enabled ──\n"
+				m.claudeContent += tsLog("── Notifications enabled ──\n")
 			}
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
@@ -1158,7 +1164,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case msg.String() == "enter":
 			if m.phase == phasePaused {
-				m.claudeContent += "\n── Resuming... ──\n"
+				m.claudeContent += "\n" + tsLog("── Resuming... ──\n")
 				m.claudeVP.SetContent(m.claudeContent)
 				m.claudeVP.GotoBottom()
 				m.prevClaudeLen = len(m.claudeContent)
@@ -1194,7 +1200,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// User chose to continue fixing
 				m.qualityIteration++
 				m.phase = phaseQualityReview
-				m.claudeContent += fmt.Sprintf("\n── Continuing quality review (iteration %d)... ──\n", m.qualityIteration)
+				m.claudeContent += "\n" + tsLog("── Continuing quality review (iteration %d)... ──\n", m.qualityIteration)
 				m.claudeVP.SetContent(m.claudeContent)
 				m.claudeVP.GotoBottom()
 				m.prevClaudeLen = len(m.claudeContent)
@@ -1356,13 +1362,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.As(msg.Err, &usageErr) {
 				m.pausedDuring = phasePlanning
 				m.phase = phasePaused
-				m.claudeContent += "\n── Usage Limit Hit ──\nClaude API usage limit reached during planning.\nPress Enter to resume when your limit resets.\n"
+				m.claudeContent += "\n" + tsLog("── Usage Limit Hit ──\n") + "Claude API usage limit reached during planning.\nPress Enter to resume when your limit resets.\n"
 				m.claudeVP.SetContent(m.claudeContent)
 				m.claudeVP.GotoBottom()
 				m.prevClaudeLen = len(m.claudeContent)
 				return m, nil
 			}
-			m.claudeContent += fmt.Sprintf("\n── Plan Error ──\n%s\n", msg.Err)
+			m.claudeContent += "\n" + tsLog("── Plan Error ──\n") + fmt.Sprintf("%s\n", msg.Err)
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
@@ -1374,7 +1380,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.phase = phaseReview
-		m.claudeContent += "\n── prd.json generated. Review it, then press Enter to execute (q to quit) ──\n"
+		m.claudeContent += "\n" + tsLog("── prd.json generated. Review it, then press Enter to execute (q to quit) ──\n")
 		m.claudeVP.SetContent(m.claudeContent)
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
@@ -1405,7 +1411,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 			// Stale checkpoint — PRD changed, delete and continue
-			m.claudeContent += "── Checkpoint found but PRD has changed — starting fresh ──\n"
+			m.claudeContent += tsLog("── Checkpoint found but PRD has changed — starting fresh ──\n")
 			m.claudeVP.SetContent(m.claudeContent)
 			m.prevClaudeLen = len(m.claudeContent)
 			_ = checkpoint.Delete(m.cfg.ProjectDir)
@@ -1417,7 +1423,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// If no PRD stories exist, enter interactive mode
 		if p, err := prd.Load(m.cfg.PRDFile); err != nil || len(p.UserStories) == 0 {
 			m.phase = phaseInteractive
-			m.claudeContent += "── Interactive mode — no PRD stories found ──\n"
+			m.claudeContent += tsLog("── Interactive mode — no PRD stories found ──\n")
 			m.claudeVP.SetContent(m.claudeContent)
 			m.prevClaudeLen = len(m.claudeContent)
 		} else if m.cfg.Workers > 1 {
@@ -1453,7 +1459,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			// Clarification failed — fall back to dispatching task as-is with warning
 			debuglog.Log("clarifyResultMsg: error — falling back to direct dispatch: %v", msg.Err)
-			m.claudeContent += fmt.Sprintf("── Clarification failed (%v), dispatching task as-is ──\n", msg.Err)
+			m.claudeContent += tsLog("── Clarification failed (%v), dispatching task as-is ──\n", msg.Err)
 			m.statusText = "⚠ Clarification failed, task dispatched as-is"
 			m.statusLevel = statusWarn
 			cmds = append(cmds, tea.Tick(5*time.Second, func(time.Time) tea.Msg {
@@ -1462,7 +1468,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			dispatchReady = true
 		} else if msg.Ready {
 			// Task is clear — proceed to story creation
-			m.claudeContent += "── Task is clear, creating story ──\n"
+			m.claudeContent += tsLog("── Task is clear, creating story ──\n")
 			dispatchReady = true
 		} else {
 			// Questions returned — enter clarification Q&A mode
@@ -1471,7 +1477,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clarifyAnswers = make([]string, 0, len(msg.Questions))
 			m.clarifyIndex = 0
 
-			m.claudeContent += "── Clarifying questions: ──\n"
+			m.claudeContent += tsLog("── Clarifying questions: ──\n")
 			for i, q := range msg.Questions {
 				m.claudeContent += fmt.Sprintf("  %d. %s\n", i+1, q)
 			}
@@ -1556,7 +1562,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.As(msg.Err, &usageErr) {
 				m.pausedDuring = phaseClaudeRun
 				m.phase = phasePaused
-				m.claudeContent += "\n── Usage Limit Hit ──\nClaude API usage limit reached.\nPress Enter to resume when your limit resets.\n"
+				m.claudeContent += "\n" + tsLog("── Usage Limit Hit ──\n") + "Claude API usage limit reached.\nPress Enter to resume when your limit resets.\n"
 				m.claudeVP.SetContent(m.claudeContent)
 				m.claudeVP.GotoBottom()
 				m.prevClaudeLen = len(m.claudeContent)
@@ -1565,7 +1571,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Show Claude error in activity panel
 			m.notifier.Error(m.ctx, msg.Err.Error())
-			m.claudeContent += fmt.Sprintf("\n── Claude Error ──\n%s\n", msg.Err)
+			m.claudeContent += "\n" + tsLog("── Claude Error ──\n") + fmt.Sprintf("%s\n", msg.Err)
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
@@ -1649,7 +1655,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			f.Close()
 		}
 
-		m.claudeContent += fmt.Sprintf("\n── STUCK DETECTED: %s (%dx) ──\n", msg.Info.Pattern, msg.Info.Count)
+		m.claudeContent += "\n" + tsLog("── STUCK DETECTED: %s (%dx) ──\n", msg.Info.Pattern, msg.Info.Count)
 		m.claudeVP.SetContent(m.claudeContent)
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
@@ -1675,12 +1681,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case fixStoryGeneratedMsg:
 		if msg.Err != nil {
-			m.claudeContent += fmt.Sprintf("\n── Fix story generation failed: %s ──\n", msg.Err)
+			m.claudeContent += "\n" + tsLog("── Fix story generation failed: %s ──\n", msg.Err)
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
 		} else if msg.StoryID != "" {
-			m.claudeContent += fmt.Sprintf("\n── Fix story generated: %s ──\n", msg.StoryID)
+			m.claudeContent += "\n" + tsLog("── Fix story generated: %s ──\n", msg.StoryID)
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
@@ -1692,7 +1698,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case coordinator.DAGAnalyzedMsg:
 		if msg.Err != nil || msg.DAG == nil {
 			// Fallback to serial
-			m.claudeContent += fmt.Sprintf("\n── DAG analysis failed: %v — falling back to serial ──\n", msg.Err)
+			m.claudeContent += "\n" + tsLog("── DAG analysis failed: %v — falling back to serial ──\n", msg.Err)
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
@@ -1759,7 +1765,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if u.UsageLimit {
 			m.pausedDuring = m.phase
 			m.phase = phasePaused
-			m.claudeContent += fmt.Sprintf("\n── Usage Limit Hit (%s) ──\nClaude API usage limit reached. All workers paused.\nPress Enter to resume when your limit resets.\n", u.StoryID)
+			m.claudeContent += "\n" + tsLog("── Usage Limit Hit (%s) ──\n", u.StoryID) + "Claude API usage limit reached. All workers paused.\nPress Enter to resume when your limit resets.\n"
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
@@ -1797,7 +1803,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.coord.PreserveFailedLogs(u.StoryID, u.WorkerID)
 				go m.coord.CleanupWorker(m.ctx, u.WorkerID)
 				if willRetry {
-					m.claudeContent += fmt.Sprintf("\n── Worker %d (%s): story did not pass — retrying ──\n", u.WorkerID, u.StoryID)
+					m.claudeContent += "\n" + tsLog("── Worker %d (%s): story did not pass — retrying ──\n", u.WorkerID, u.StoryID)
 					m.claudeVP.SetContent(m.claudeContent)
 					m.claudeVP.GotoBottom()
 					m.prevClaudeLen = len(m.claudeContent)
@@ -1829,14 +1835,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.coord.PreserveFailedLogs(u.StoryID, u.WorkerID)
 			go m.coord.CleanupWorker(m.ctx, u.WorkerID)
 			if willRetry {
-				m.claudeContent += fmt.Sprintf("\n── Worker %d failed (%s): %v — retrying ──\n", u.WorkerID, u.StoryID, u.Err)
+				m.claudeContent += "\n" + tsLog("── Worker %d failed (%s): %v — retrying ──\n", u.WorkerID, u.StoryID, u.Err)
 			} else {
 				errMsg := "unknown error"
 				if u.Err != nil {
 					errMsg = u.Err.Error()
 				}
 				m.notifier.StoryFailed(m.ctx, u.StoryID, errMsg)
-				m.claudeContent += fmt.Sprintf("\n── Worker %d failed (%s): %v ──\n", u.WorkerID, u.StoryID, u.Err)
+				m.claudeContent += "\n" + tsLog("── Worker %d failed (%s): %v ──\n", u.WorkerID, u.StoryID, u.Err)
 			}
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
@@ -1880,14 +1886,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.ChangeID != "" {
 				_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, msg.ChangeID)
 			}
-			m.claudeContent += fmt.Sprintf("\n── Merge failed (%s): %v ──\n", msg.StoryID, msg.Err)
+			m.claudeContent += "\n" + tsLog("── Merge failed (%s): %v ──\n", msg.StoryID, msg.Err)
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
 		} else if msg.ConflictsResolved {
-			m.claudeContent += fmt.Sprintf("\n── Merged %s into main (conflicts resolved) ──\n", msg.StoryID)
+			m.claudeContent += "\n" + tsLog("── Merged %s into main (conflicts resolved) ──\n", msg.StoryID)
 		} else {
-			m.claudeContent += fmt.Sprintf("\n── Merged %s into main ──\n", msg.StoryID)
+			m.claudeContent += "\n" + tsLog("── Merged %s into main ──\n", msg.StoryID)
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
@@ -1975,7 +1981,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case qualityReviewDoneMsg:
 		m.ctxMode = contextQuality
 		if msg.Err != nil {
-			errMsg := fmt.Sprintf("\n── Quality review error: %v ──\n", msg.Err)
+			errMsg := "\n" + tsLog("── Quality review error: %v ──\n", msg.Err)
 			m.qualityContent += errMsg
 			m.claudeContent += errMsg
 			m.claudeVP.SetContent(m.claudeContent)
@@ -1995,9 +2001,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Assessment.TotalFindings() == 0 {
 			var statusMsg string
 			if msg.Assessment.HasParseFailures() {
-				statusMsg = "\n── Quality review: no findings parsed (some lenses failed to parse) ──\n"
+				statusMsg = "\n" + tsLog("── Quality review: no findings parsed (some lenses failed to parse) ──\n")
 			} else {
-				statusMsg = "\n── Quality review: all clean! ──\n"
+				statusMsg = "\n" + tsLog("── Quality review: all clean! ──\n")
 			}
 			m.claudeContent += statusMsg
 			m.qualityContent += statusMsg
@@ -2009,7 +2015,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Has findings — start fix phase
 		m.phase = phaseQualityFix
-		fixMsg := "\n── Fixing quality issues... ──\n"
+		fixMsg := "\n" + tsLog("── Fixing quality issues... ──\n")
 		m.claudeContent += fixMsg
 		m.qualityContent += fixMsg
 		m.claudeVP.SetContent(m.claudeContent)
@@ -2019,7 +2025,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case qualityFixDoneMsg:
 		if msg.Err != nil {
-			errMsg := fmt.Sprintf("\n── Quality fix error: %v ──\n", msg.Err)
+			errMsg := "\n" + tsLog("── Quality fix error: %v ──\n", msg.Err)
 			m.claudeContent += errMsg
 			m.qualityContent += errMsg
 			m.claudeVP.SetContent(m.claudeContent)
@@ -2030,7 +2036,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.qualityIteration >= m.cfg.QualityMaxIters {
 			// Max iterations reached — prompt user
 			m.phase = phaseQualityPrompt
-			maxMsg := "\n── Max quality iterations reached. Press Enter to continue fixing, q to finish ──\n"
+			maxMsg := "\n" + tsLog("── Max quality iterations reached. Press Enter to continue fixing, q to finish ──\n")
 			m.claudeContent += maxMsg
 			m.qualityContent += maxMsg
 			m.claudeVP.SetContent(m.claudeContent)
@@ -2042,7 +2048,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-review
 		m.qualityIteration++
 		m.phase = phaseQualityReview
-		reReviewMsg := fmt.Sprintf("\n── Re-reviewing (iteration %d)... ──\n", m.qualityIteration)
+		reReviewMsg := "\n" + tsLog("── Re-reviewing (iteration %d)... ──\n", m.qualityIteration)
 		m.claudeContent += reReviewMsg
 		m.qualityContent += reReviewMsg
 		m.claudeVP.SetContent(m.claudeContent)
@@ -2053,9 +2059,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case synthesisDoneMsg:
 		if msg.Err != nil {
 			debuglog.Log("post-run synthesis error (non-fatal): %v", msg.Err)
-			m.claudeContent += fmt.Sprintf("── Synthesis error (non-fatal): %v ──\n", msg.Err)
+			m.claudeContent += tsLog("── Synthesis error (non-fatal): %v ──\n", msg.Err)
 		} else {
-			m.claudeContent += "── Post-run synthesis complete ──\n"
+			m.claudeContent += tsLog("── Post-run synthesis complete ──\n")
 		}
 		m.claudeVP.SetContent(m.claudeContent)
 		m.claudeVP.GotoBottom()
@@ -2068,7 +2074,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if memory.ShouldDream(m.cfg.ProjectDir, m.cfg.Memory.DreamEveryNRuns) {
 			debuglog.Log("dream consolidation triggered (run_count=%d, threshold=%d)", runCount, m.cfg.Memory.DreamEveryNRuns)
-			m.claudeContent += "── Running dream consolidation... ──\n"
+			m.claudeContent += tsLog("── Running dream consolidation... ──\n")
 			m.claudeVP.SetContent(m.claudeContent)
 			m.prevClaudeLen = len(m.claudeContent)
 			return m, dreamCmd(m.ctx, m.cfg)
@@ -2078,9 +2084,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dreamDoneMsg:
 		if msg.Err != nil {
 			debuglog.Log("dream consolidation error (non-fatal): %v", msg.Err)
-			m.claudeContent += fmt.Sprintf("── Dream error (non-fatal): %v ──\n", msg.Err)
+			m.claudeContent += tsLog("── Dream error (non-fatal): %v ──\n", msg.Err)
 		} else {
-			m.claudeContent += "── Dream consolidation complete ──\n"
+			m.claudeContent += tsLog("── Dream consolidation complete ──\n")
 		}
 		m.claudeVP.SetContent(m.claudeContent)
 		m.claudeVP.GotoBottom()
@@ -2089,12 +2095,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case summaryDoneMsg:
 		if msg.Err != nil {
-			m.claudeContent += fmt.Sprintf("\n── Summary generation error: %v ──\n", msg.Err)
+			m.claudeContent += "\n" + tsLog("── Summary generation error: %v ──\n", msg.Err)
 		}
 		if msg.Content != "" {
 			m.claudeContent = msg.Content
 		} else {
-			m.claudeContent += "\n── Summary generation complete (no SUMMARY.md produced) ──\n"
+			m.claudeContent += "\n" + tsLog("── Summary generation complete (no SUMMARY.md produced) ──\n")
 		}
 		m.claudeVP.SetContent(m.claudeContent)
 		m.claudeVP.GotoBottom()
@@ -2104,7 +2110,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.persistRunHistory()
 		m.phase = phaseInteractive
 		m.allComplete = true
-		m.claudeContent += "\n── Interactive mode — all PRD stories complete, accepting follow-up tasks ──\n"
+		m.claudeContent += "\n" + tsLog("── Interactive mode — all PRD stories complete, accepting follow-up tasks ──\n")
 		m.claudeVP.SetContent(m.claudeContent)
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
@@ -2125,7 +2131,7 @@ func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 	if m.cfg.QualityReview && m.qualityIteration == 0 {
 		m.qualityIteration = 1
 		m.phase = phaseQualityReview
-		m.claudeContent = "── Starting quality review ──\n"
+		m.claudeContent = tsLog("── Starting quality review ──\n")
 		m.claudeVP.SetContent(m.claudeContent)
 		m.prevClaudeLen = len(m.claudeContent)
 		return m, qualityReviewCmd(m.ctx, m.cfg, m.qualityIteration)
@@ -2138,7 +2144,7 @@ func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 func (m *Model) transitionToSummary() (tea.Model, tea.Cmd) {
 	m.notifier.RunComplete(m.ctx, m.completedStories, m.totalStories, m.totalCost())
 	if !m.cfg.Memory.Disabled {
-		m.claudeContent += "── Running post-run synthesis... ──\n"
+		m.claudeContent += tsLog("── Running post-run synthesis... ──\n")
 		m.claudeVP.SetContent(m.claudeContent)
 		m.prevClaudeLen = len(m.claudeContent)
 		return m, synthesisCmd(m.ctx, m.cfg)
@@ -2153,7 +2159,7 @@ func (m *Model) finishSummary() (tea.Model, tea.Cmd) {
 	// Best-effort checkpoint cleanup on clean completion
 	_ = checkpoint.Delete(m.cfg.ProjectDir)
 	m.phase = phaseSummary
-	m.claudeContent += "── Generating summary of all changes... ──\n"
+	m.claudeContent += tsLog("── Generating summary of all changes... ──\n")
 	m.claudeVP.SetContent(m.claudeContent)
 	m.prevClaudeLen = len(m.claudeContent)
 	return m, generateSummaryCmd(m.ctx, m.cfg)
@@ -3065,7 +3071,7 @@ func (m *Model) dispatchInteractiveTask(taskText string) tea.Cmd {
 	m.coord.AddStory(&story)
 	m.totalStories++
 	m.coord.ScheduleReady(m.ctx)
-	m.claudeContent += fmt.Sprintf("── Interactive task %s dispatched ──\n", story.ID)
+	m.claudeContent += tsLog("── Interactive task %s dispatched ──\n", story.ID)
 	m.claudeVP.SetContent(m.claudeContent)
 	m.claudeVP.GotoBottom()
 	m.prevClaudeLen = len(m.claudeContent)
