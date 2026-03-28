@@ -2301,6 +2301,11 @@ func (m *Model) writeSerialCheckpoint(iterErr error) {
 		}
 	}
 
+	// Recompute PRD hash from current file (it may have been modified during the run)
+	if hash, err := checkpoint.ComputePRDHash(m.cfg.PRDFile); err == nil {
+		m.prdHash = hash
+	}
+
 	cp := checkpoint.Checkpoint{
 		PRDHash:          m.prdHash,
 		Phase:            "serial",

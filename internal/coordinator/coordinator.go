@@ -309,6 +309,11 @@ func (c *Coordinator) writeCheckpointLocked() {
 		}
 	}
 
+	// Recompute PRD hash from current file (it may have been modified during the run)
+	if hash, err := checkpoint.ComputePRDHash(c.cfg.PRDFile); err == nil {
+		c.prdHash = hash
+	}
+
 	cp := checkpoint.Checkpoint{
 		PRDHash:          c.prdHash,
 		Phase:            "parallel",
