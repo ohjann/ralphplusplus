@@ -49,16 +49,16 @@
 
 | Field | Level | Purpose |
 |-------|-------|---------|
-| `buildCommand` | PRD | Custom build/compile command used in pre-judge compilation gate (default: `make build`) |
-| `constraints` | PRD | Cross-cutting architectural decisions injected into every agent prompt |
-| `dependsOn` | Story | Explicit dependency graph — skips the Claude DAG analysis call when present |
-| `approach` | Story | Implementation strategy hint — guides the architect/implementer agents |
+| `buildCommand` | PRD | Build/compile command run before judge verification (default: `make build`) |
+| `constraints` | PRD | Architectural rules injected into every agent prompt |
+| `dependsOn` | Story | Explicit dependency graph, skips the DAG analysis call when present |
+| `approach` | Story | Implementation hint for the architect/implementer |
 
-All fields are optional. When `dependsOn` is provided on any story, Ralph uses it directly for parallel scheduling instead of running a Claude analysis pass.
+All fields are optional. When `dependsOn` is provided on any story, Ralph uses it for parallel scheduling instead of running a DAG analysis pass.
 
 ## Story Sizing
 
-Each story must be completable in **one context window**. If Claude runs out of context mid-story, it produces broken code.
+Each story needs to fit in one context window. If Claude runs out of context mid-story, it produces broken code.
 
 **Right-sized:** add a DB column, add a UI component, update server logic, add a filter
 

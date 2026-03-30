@@ -14,7 +14,7 @@ Options:
   --no-simplify                   Skip per-story simplification pass
   --no-fusion                     Disable automatic fusion mode for complex stories
   --fusion-workers <n>            Competing implementations per complex story (default: 2)
-  --no-judge                      Disable Gemini judge verification (enabled by default)
+  --no-judge                      Disable judge verification (enabled by default)
   --judge-max-rejections <n>      Max rejections before auto-pass (default: 2)
   --no-quality-review             Disable final quality review (enabled by default)
   --quality-workers <n>           Parallel quality reviewers (default: 3)
@@ -51,7 +51,7 @@ Examples:
   ralph --plan .claude/plans/my-plan.md         Plan, review, then execute
   ralph --workers 3                             Run up to 3 stories in parallel
   ralph --workers auto                          Scale workers to DAG width (max 5)
-  ralph --no-judge                               Run without Gemini judge
+  ralph --no-judge                               Run without judge verification
   ralph --no-quality-review                     Run without final quality gate
   ralph --plan plan.md --workers 2              Full pipeline
   ralph --enable-monitoring                     Use .ralph/.env for ntfy + status page
@@ -82,7 +82,7 @@ Examples:
 
 ## Monitoring Setup
 
-Ralph supports push notifications (ntfy.sh) and a remote status page.
+Ralph can send push notifications (ntfy.sh) and serve a status page.
 
 ### Quick Setup (`.ralph/.env`)
 
@@ -123,11 +123,9 @@ Combined with [Tailscale](https://tailscale.com), the status page is accessible 
 2. Find your laptop's Tailscale IP: `tailscale ip -4` (e.g., `100.64.1.42`)
 3. Open `http://100.64.1.42:8080` on your phone
 
-The status page shows: PRD name, current phase, run duration, story list with status/cost, and total run cost — all updating in real-time via SSE. JSON API available at `/api/status`.
+The status page shows PRD name, current phase, run duration, story list with status/cost, and total cost. Updates live via SSE. JSON API at `/api/status`.
 
-### Full Remote Monitoring Stack
-
-For the complete phone monitoring experience:
+### Putting it together
 
 ```bash
 # On your laptop (connected to Tailscale)

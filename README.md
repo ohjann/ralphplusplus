@@ -4,30 +4,25 @@
 
 [GitHub](https://github.com/ohjann/ralphplusplus) | [Radicle](https://app.radicle.xyz/nodes/iris.radicle.xyz/rad:z3hUHk2YiryoaHTS7jkbpAwGw3qd8)
 
-Ralph is an autonomous AI agent that runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) in a loop until all user stories in a PRD are complete. Each iteration gets a fresh context window. Memory persists via version control history, `progress.md`, `prd.json`, and markdown-based cross-run memory.
+Ralph runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) in a loop until all user stories in a PRD are done. Each iteration gets a fresh context window. Memory carries over through version control history, `progress.md`, `prd.json`, and markdown files in `.ralph/memory/`.
 
 Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 
 ## Why Ralph?
 
-Claude Code is excellent at implementing a single, well-scoped task. But a real feature is 5–15 tasks with ordering constraints, and Claude's context window resets between sessions. Ralph solves this: you describe the work as user stories, and Ralph handles sequencing, memory, verification, and retry — so you can walk away and come back to a working feature.
+Claude Code is good at one well-scoped task. But a real feature is 5-15 tasks with ordering constraints, and context resets between sessions. Ralph fills that gap. You write the stories, it handles sequencing, memory, verification, and retry. You can walk away and come back to a finished feature, or watch the TUI while it works.
 
 ## How It Works
 
-```
-prd.json (stories) ──► Ralph picks highest-priority incomplete story
-                            │
-                            ▼
-                       Spawns fresh Claude Code instance
-                            │
-                            ▼
-                       Claude implements + runs checks
-                            │
-                            ▼
-                       Commits with jj, marks story done
-                            │
-                            ▼
-                       Repeats until all stories pass
+```mermaid
+flowchart TD
+    A[prd.json stories] --> B[Ralph picks highest-priority\nincomplete story]
+    B --> C[Spawns fresh Claude Code instance]
+    C --> D[Claude implements + runs checks]
+    D --> E[Commits with jj, marks story done]
+    E --> F{All stories pass?}
+    F -- No --> B
+    F -- Yes --> G[Done]
 ```
 
 Memory between iterations comes from jj history, `progress.md`, `prd.json` status, per-story state files, and markdown memory in `.ralph/memory/`.
@@ -36,10 +31,9 @@ Memory between iterations comes from jj history, `progress.md`, `prd.json` statu
 
 - **Go 1.25+** (for building from source)
 - **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated (`npm install -g @anthropic-ai/claude-code`)
-- **[jj (Jujutsu)](https://martinvonz.github.io/jj/)** for version control — Ralph uses jj, not git. This is a deliberate choice for its workspace isolation and mutable commit model, but it means you'll need jj installed and initialized in your project (`jj git init --colocate` in an existing git repo)
-- (Optional) **[Gemini CLI](https://github.com/google-gemini/gemini-cli)** for judge mode
+- **[jj (Jujutsu)](https://martinvonz.github.io/jj/)** for version control. Ralph uses jj, not git. The workspace isolation and mutable commit model make parallel workers much simpler, but it means you need jj installed and initialized in your project (`jj git init --colocate` in an existing git repo)
 
-No external ML/vector infrastructure required — memory runs on plain markdown files.
+No vector databases or ML infrastructure needed. Memory is plain markdown files.
 
 ## Quick Start
 
@@ -59,18 +53,18 @@ ralph
 ralph
 ```
 
-## Key Features
+## What it does
 
-- **Parallel execution** — DAG analysis determines story dependencies; independent stories run across N workers in isolated jj workspaces (`--workers 3` or `--workers auto`)
-- **Gemini judge** — an independent LLM reviews each story after Claude marks it complete, rejecting subpar implementations (enabled by default, `--no-judge` to disable)
-- **Fusion mode** — complex stories automatically spawn competing implementations in parallel; the judge selects the best passing result
-- **Quality review gate** — parallel "lens" reviewers (security, efficiency, DRY, error handling, testing) examine the full changeset after all stories pass
-- **Stuck detection + hint injection** — detects tool-call loops, notifies you, and lets you inject a hint for the next iteration
-- **Per-story simplification pass** — fast code quality review between implementation and judge verification
-- **Markdown memory** — cross-run learnings stored in `.ralph/memory/`, injected into worker prompts with periodic dream consolidation
-- **Interactive task mode** — submit ad-hoc tasks through a TUI input bar without needing a prd.json
-- **Multi-model orchestration** — Opus for architect/debugger, Sonnet for implementer/reviewer, Haiku for utility tasks; configurable per role
-- **Crash-resilient checkpoints** — orchestration state saved after every story event; resume on restart
+- DAG analysis finds story dependencies, independent stories run across N workers in isolated jj workspaces (`--workers 3` or `--workers auto`)
+- A separate Claude instance (Sonnet) reviews each story after implementation and can reject it (`--no-judge` to disable)
+- Complex stories spawn competing implementations in parallel; the judge picks the best one
+- After all stories pass, lens reviewers (security, efficiency, DRY, error handling, testing) examine the full changeset
+- If Claude gets stuck in a loop, Ralph detects it, notifies you, and lets you inject a hint
+- Code simplification pass runs between implementation and judge verification
+- Cross-run learnings persist in `.ralph/memory/` as markdown, with periodic consolidation
+- Ad-hoc tasks via TUI input bar, no prd.json needed
+- Opus for architect/debugger, Sonnet for implementer/reviewer, Haiku for utility tasks (all configurable)
+- Orchestration state checkpointed after every story event; resume on restart
 
 ## Documentation
 
@@ -83,13 +77,13 @@ ralph
 
 ## Contributing
 
-Ralph is a personal project — it works for my workflow but comes with no guarantees. It uses [Jujutsu (jj)](https://martinvonz.github.io/jj/) for version control, not git, which is a deliberate choice but limits portability.
+Ralph is a personal project. It works for my workflow but comes with no guarantees. It uses [Jujutsu (jj)](https://martinvonz.github.io/jj/) for version control, not git, which limits portability.
 
-If you find Ralph useful, **fork it and make it your own**. Bug reports, PRs, and feature requests are welcome but may not be accepted if they don't align with the project's direction. No hard feelings either way.
+If you find it useful, fork it and make it your own. Bug reports and PRs are welcome but may not get merged if they don't fit the project's direction. No hard feelings either way.
 
 ## Acknowledgements
 
-This project started as a fork of [snarktank/ralph](https://github.com/snarktank/ralph) — thanks to Ryan Carson for the initial foundations. The core concept comes from [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
+Started as a fork of [snarktank/ralph](https://github.com/snarktank/ralph), thanks to Ryan Carson for the initial foundations. The core idea comes from [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 
 ## References
 

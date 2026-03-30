@@ -15,10 +15,11 @@ internal/
   workspace/        jj workspace create/destroy/merge
   fusion/           Competing implementations for complex stories
   roles/            Role-based model configuration
-  judge/            Gemini judge integration
+  judge/            Post-implementation judge verification
   archive/          Run archiving (previous prd.json + progress.md)
   autofix/          Stuck loop detection and fix story generation
   quality/          Final quality review gate (multi-lens reviewers)
+  debuglog/         Debug logging (RALPH_DEBUG=1)
   events/           Event log (events.jsonl)
   exec/             Shell command helpers (jj wrappers)
   storystate/       Per-story state persistence (state.json, plan.md, decisions.md)
@@ -29,24 +30,24 @@ internal/
   notify/           Push notifications via ntfy.sh
   statuspage/       Remote HTTP status page with SSE live updates
 ralph-prompt.md     Prompt template for Claude Code iterations
-judge-prompt.md     Review template for Gemini judge
+judge-prompt.md     Review template for judge verification
 skills/ralph/       Claude Code skill for converting plans to prd.json
 ```
 
 ## Memory Between Iterations
 
-Each iteration is a fresh Claude Code instance. Memory persists via:
+Each iteration is a fresh Claude Code instance. Memory carries over through:
 
-- **jj history** -- commits from previous iterations
-- **`progress.md`** -- learnings, patterns, and context
-- **`prd.json`** -- which stories are done (injected directly into prompt)
-- **`CLAUDE.md`** -- Ralph updates these with discovered patterns
-- **Story state** -- structured state.json, plan.md, decisions.md per story
-- **Markdown memory** -- cross-run learnings and PRD lessons in `.ralph/memory/`, injected into prompts with dream consolidation for maintenance
+- jj history: commits from previous iterations
+- `progress.md`: learnings, patterns, context
+- `prd.json`: which stories are done (injected into prompt)
+- `CLAUDE.md`: Ralph updates these with discovered patterns
+- Story state: state.json, plan.md, decisions.md per story
+- Markdown memory: cross-run learnings in `.ralph/memory/`, injected into prompts
 
-### Dream Consolidation
+### Dream consolidation
 
-A periodic consolidation cycle (every 5 runs by default, or manually via `ralph memory consolidate`) merges duplicates, drops stale entries, and keeps memory files lean. Inspired by Claude Code's Auto Dream.
+Every 5 runs (or manually via `ralph memory consolidate`), a consolidation cycle merges duplicates, drops stale entries, and keeps memory files lean.
 
 To disable memory injection entirely:
 
