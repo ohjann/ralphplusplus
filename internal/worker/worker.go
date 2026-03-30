@@ -25,6 +25,7 @@ const (
 	WorkerIdle WorkerState = iota
 	WorkerSetup
 	WorkerRunning
+	WorkerSimplifying
 	WorkerJudging
 	WorkerDone
 	WorkerFailed
@@ -38,6 +39,8 @@ func (s WorkerState) String() string {
 		return "Setup"
 	case WorkerRunning:
 		return "Running"
+	case WorkerSimplifying:
+		return "Simplifying"
 	case WorkerJudging:
 		return "Judging"
 	case WorkerDone:
@@ -60,6 +63,7 @@ type Worker struct {
 	BaseChangeID   string     // jj change ID of the commit the workspace branched from
 	LogDir         string
 	Iteration      int
+	FusionSuffix   string     // non-empty for fusion workers (e.g., "-f0", "-f1")
 	Ctx            context.Context
 	Cancel         context.CancelFunc
 }
@@ -166,6 +170,18 @@ func resolveModel(role roles.Role, cfg *config.Config) string {
 	return roles.DefaultConfig(role).Model
 }
 
+// shouldRunSimplify returns true when the simplify phase should run for a story.
+// Skips for FIX- stories (targeted fixes) and when disabled via config.
+func shouldRunSimplify(storyID string, cfg *config.Config) bool {
+	if cfg.NoSimplify {
+		return false
+	}
+	if strings.HasPrefix(storyID, "FIX-") {
+		return false
+	}
+	return true
+}
+
 // appendParallelMode adds the parallel mode stop condition to a prompt.
 func appendParallelMode(prompt, storyID string) string {
 	return prompt + fmt.Sprintf(`
@@ -211,13 +227,13 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 
 	// 1. Create workspace
 	send(WorkerSetup, "", nil, false, "")
-	ws, err := workspace.Create(w.Ctx, cfg.ProjectDir, w.StoryID, cfg.WorkspaceBase)
+	ws, err := workspace.Create(w.Ctx, cfg.ProjectDir, w.StoryID, cfg.WorkspaceBase, w.FusionSuffix)
 	if err != nil {
 		send(WorkerFailed, "", fmt.Errorf("workspace create: %w", err), false, "")
 		return
 	}
 	w.Workspace = ws.Dir
-	w.WorkspaceName = workspace.WorkspaceName(w.StoryID)
+	w.WorkspaceName = workspace.WorkspaceName(w.StoryID) + w.FusionSuffix
 	w.BaseChangeID = ws.BaseChangeID
 
 	// Copy state files into workspace
@@ -357,6 +373,55 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 		// Other Claude CLI failures are likely transient (network, etc.)
 		sendRetryable(fmt.Errorf("claude run: %w", err))
 		return
+	}
+
+	// 3b. Simplify phase: quick code quality pass before commit
+	if shouldRunSimplify(w.StoryID, cfg) {
+		send(WorkerSimplifying, roles.RoleSimplify, nil, false, "")
+
+		simplifyPrompt, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleSimplify, MemoryDisabled: cfg.Memory.Disabled})
+		if err != nil {
+			// Non-fatal: skip simplify if prompt build fails
+			w.State = WorkerRunning
+		} else {
+			simplifyPrompt = appendParallelMode(simplifyPrompt, w.StoryID)
+			simplifyLogPath := runner.LogFilePath(wsLogDir, w.Iteration) + ".simplify"
+			simplifyResult, simplifyErr := runner.RunClaude(w.Ctx, ws.Dir, simplifyPrompt, simplifyLogPath, runner.RunClaudeOpts{
+				Iteration: w.Iteration,
+				StoryID:   w.StoryID,
+				Role:      roles.RoleSimplify,
+				Model:     resolveModel(roles.RoleSimplify, cfg),
+			})
+			if simplifyResult != nil {
+				claudeUsage = accumulateUsage(claudeUsage, simplifyResult.TokenUsage)
+				if simplifyResult.RateLimitInfo != nil {
+					latestRateLimit = simplifyResult.RateLimitInfo
+				}
+			}
+			// Simplify errors are non-fatal — log but continue to commit+judge
+			if simplifyErr != nil {
+				if w.Ctx.Err() != nil {
+					send(WorkerFailed, roles.RoleSimplify, w.Ctx.Err(), false, "")
+					return
+				}
+				var usageErr *runner.UsageLimitError
+				if errors.As(simplifyErr, &usageErr) {
+					w.State = WorkerFailed
+					updateCh <- WorkerUpdate{
+						WorkerID:      w.ID,
+						StoryID:       w.StoryID,
+						State:         WorkerFailed,
+						Role:          roles.RoleSimplify,
+						Err:           simplifyErr,
+						UsageLimit:    true,
+						TokenUsage:    claudeUsage,
+						RateLimitInfo: latestRateLimit,
+					}
+					return
+				}
+				// Other errors: just skip simplify, continue to commit
+			}
+		}
 	}
 
 	// 4. Mark story as passed in workspace prd.json

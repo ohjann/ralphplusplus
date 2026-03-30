@@ -25,6 +25,9 @@ type tomlConfig struct {
 	ModelOverride      *string `toml:"model_override"`
 	ArchitectModel     *string `toml:"architect_model"`
 	ImplementerModel   *string `toml:"implementer_model"`
+	NoSimplify         *bool   `toml:"no_simplify"`
+	NoFusion           *bool   `toml:"no_fusion"`
+	FusionWorkers      *int    `toml:"fusion_workers"`
 }
 
 // loadTomlConfig reads .ralph/config.toml from the given project directory.
@@ -92,6 +95,15 @@ func (tc *tomlConfig) applyTo(cfg *Config) {
 	if tc.ImplementerModel != nil {
 		cfg.ImplementerModel = *tc.ImplementerModel
 	}
+	if tc.NoSimplify != nil {
+		cfg.NoSimplify = *tc.NoSimplify
+	}
+	if tc.NoFusion != nil {
+		cfg.NoFusion = *tc.NoFusion
+	}
+	if tc.FusionWorkers != nil {
+		cfg.FusionWorkers = *tc.FusionWorkers
+	}
 }
 
 // SaveConfig writes the current tunable settings to .ralph/config.toml.
@@ -110,6 +122,9 @@ func (cfg *Config) SaveConfig() error {
 		ModelOverride:      stringPtr(cfg.ModelOverride),
 		ArchitectModel:     stringPtr(cfg.ArchitectModel),
 		ImplementerModel:   stringPtr(cfg.ImplementerModel),
+		NoSimplify:         boolPtr(cfg.NoSimplify),
+		NoFusion:           boolPtr(cfg.NoFusion),
+		FusionWorkers:      intPtr(cfg.FusionWorkers),
 	}
 
 	dir := filepath.Join(cfg.ProjectDir, ".ralph")

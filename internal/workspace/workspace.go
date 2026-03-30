@@ -19,9 +19,13 @@ type CreateResult struct {
 // Create creates a jj workspace for the given story, branched from current @-.
 // If a workspace with the same name already exists (e.g. from a previous failed
 // attempt), it is forgotten and cleaned up before creating a fresh one.
-func Create(ctx context.Context, projectDir, storyID, baseDir string) (CreateResult, error) {
-	wsDir := filepath.Join(baseDir, storyID)
-	wsName := WorkspaceName(storyID)
+func Create(ctx context.Context, projectDir, storyID, baseDir string, suffix ...string) (CreateResult, error) {
+	sfx := ""
+	if len(suffix) > 0 {
+		sfx = suffix[0]
+	}
+	wsDir := filepath.Join(baseDir, storyID+sfx)
+	wsName := WorkspaceName(storyID) + sfx
 
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return CreateResult{}, fmt.Errorf("creating workspace base dir: %w", err)

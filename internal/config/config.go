@@ -57,6 +57,9 @@ type Config struct {
 	ImplementerModel   string // --implementer-model: override model for implementer role only
 	UtilityModel       string // --utility-model: model for DAG analysis and other utility tasks (default: haiku)
 	StoryTimeout       int    // --story-timeout: max minutes per story before cancellation (default: 0 = no limit)
+	NoSimplify         bool   // --no-simplify: skip per-story simplify pass
+	NoFusion           bool   // --no-fusion: disable automatic fusion mode for complex stories
+	FusionWorkers      int    // --fusion-workers N: competing implementations per complex story (default: 2)
 
 	// Derived paths
 	PRDFile        string
@@ -77,6 +80,7 @@ func Parse(args []string) (*Config, error) {
 		QualityMaxIters:    2,
 		SpriteEnabled:      true,
 		UtilityModel:       "haiku",
+		FusionWorkers:      2,
 		Memory: DefaultMemoryConfig(),
 	}
 
@@ -308,6 +312,25 @@ func Parse(args []string) (*Config, error) {
 		case "--no-architect":
 			cfg.NoArchitect = true
 			i++
+		case "--no-simplify":
+			cfg.NoSimplify = true
+			i++
+		case "--no-fusion":
+			cfg.NoFusion = true
+			i++
+		case "--fusion-workers":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--fusion-workers requires a number")
+			}
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return nil, fmt.Errorf("--fusion-workers: invalid number %q", args[i+1])
+			}
+			if n < 2 {
+				n = 2
+			}
+			cfg.FusionWorkers = n
+			i += 2
 		case "--model":
 			if i+1 >= len(args) {
 				return nil, fmt.Errorf("--model requires a model name")
@@ -442,6 +465,18 @@ func Parse(args []string) (*Config, error) {
 			}
 			if strings.HasPrefix(args[i], "--utility-model=") {
 				cfg.UtilityModel = args[i][len("--utility-model="):]
+				i++
+				continue
+			}
+			if strings.HasPrefix(args[i], "--fusion-workers=") {
+				n, err := strconv.Atoi(args[i][len("--fusion-workers="):])
+				if err != nil {
+					return nil, fmt.Errorf("--fusion-workers: invalid number %q", args[i][len("--fusion-workers="):])
+				}
+				if n < 2 {
+					n = 2
+				}
+				cfg.FusionWorkers = n
 				i++
 				continue
 			}
@@ -649,6 +684,9 @@ Execution:
   --workers <n>                   Number of parallel workers (default: 1 = serial)
   --workspace-base <path>         Base directory for workspaces (default: /tmp/ralph-workspaces)
   --no-architect                  Skip architect phase for all stories (go straight to implementer)
+  --no-simplify                   Skip per-story simplify pass (code quality review before judge)
+  --no-fusion                     Disable automatic fusion mode for complex stories
+  --fusion-workers <n>            Competing implementations per complex story (default: 2)
   --utility-model <name>          Model for DAG analysis and utility tasks (default: haiku)
   --story-timeout <minutes>       Max wall clock minutes per story before cancellation (default: 0 = no limit)
 

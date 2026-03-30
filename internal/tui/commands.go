@@ -17,6 +17,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/dag"
 	"github.com/eoghanhynes/ralph/internal/debuglog"
 	rexec "github.com/eoghanhynes/ralph/internal/exec"
+	"github.com/eoghanhynes/ralph/internal/fusion"
 	"github.com/eoghanhynes/ralph/internal/judge"
 	"github.com/eoghanhynes/ralph/internal/memory"
 	"github.com/eoghanhynes/ralph/internal/prd"
@@ -537,6 +538,108 @@ func mergeBackCmd(ctx context.Context, coord *coordinator.Coordinator, u worker.
 			ChangeID:          u.ChangeID,
 			Err:               err,
 			ConflictsResolved: conflictsResolved,
+		}
+	})
+}
+
+func fusionCompareCmd(ctx context.Context, coord *coordinator.Coordinator, storyID string, fg *fusion.FusionGroup) tea.Cmd {
+	return safeCmd(func() tea.Msg {
+		story := coord.GetStory(storyID)
+		if story == nil {
+			return coordinator.FusionCompareDoneMsg{
+				StoryID: storyID,
+				Err:     fmt.Errorf("story %s not found", storyID),
+			}
+		}
+
+		passing := fg.PassingResults()
+		if len(passing) == 0 {
+			return coordinator.FusionCompareDoneMsg{
+				StoryID: storyID,
+				Passed:  false,
+			}
+		}
+
+		// If only one passed, it wins automatically
+		if len(passing) == 1 {
+			var loserIDs []worker.WorkerID
+			var loserChangeIDs []string
+			for _, r := range fg.Results {
+				if r.WorkerID != passing[0].WorkerID {
+					loserIDs = append(loserIDs, r.WorkerID)
+					if r.ChangeID != "" {
+						loserChangeIDs = append(loserChangeIDs, r.ChangeID)
+					}
+				}
+			}
+			return coordinator.FusionCompareDoneMsg{
+				StoryID:        storyID,
+				WinnerWorkerID: passing[0].WorkerID,
+				WinnerChangeID: passing[0].ChangeID,
+				LoserWorkerIDs: loserIDs,
+				LoserChangeIDs: loserChangeIDs,
+				Reason:         "only passing implementation",
+				Passed:         true,
+			}
+		}
+
+		// Multiple passed — get diffs and run comparison judge
+		var candidates []judge.CompareCandidate
+		for i, r := range passing {
+			// Get diff from the worker's workspace
+			w := coord.Workers()[r.WorkerID]
+			if w == nil || w.Workspace == "" {
+				continue
+			}
+			diff, err := rexec.JJDiff(ctx, w.Workspace, w.BaseChangeID, r.ChangeID)
+			if err != nil {
+				debuglog.Log("fusion: failed to get diff for worker %d: %v", r.WorkerID, err)
+				continue
+			}
+			candidates = append(candidates, judge.CompareCandidate{
+				Index:    i,
+				ChangeID: r.ChangeID,
+				Diff:     diff,
+			})
+		}
+
+		if len(candidates) == 0 {
+			return coordinator.FusionCompareDoneMsg{
+				StoryID: storyID,
+				Err:     fmt.Errorf("could not extract diffs from any candidate"),
+			}
+		}
+
+		result, err := judge.RunComparison(ctx, story, candidates)
+		if err != nil {
+			return coordinator.FusionCompareDoneMsg{
+				StoryID: storyID,
+				Err:     err,
+			}
+		}
+
+		// Map winner index back to the passing result
+		winnerPassing := passing[result.WinnerIndex]
+
+		var loserIDs []worker.WorkerID
+		var loserChangeIDs []string
+		for _, r := range fg.Results {
+			if r.WorkerID != winnerPassing.WorkerID {
+				loserIDs = append(loserIDs, r.WorkerID)
+				if r.ChangeID != "" {
+					loserChangeIDs = append(loserChangeIDs, r.ChangeID)
+				}
+			}
+		}
+
+		return coordinator.FusionCompareDoneMsg{
+			StoryID:        storyID,
+			WinnerWorkerID: winnerPassing.WorkerID,
+			WinnerChangeID: winnerPassing.ChangeID,
+			LoserWorkerIDs: loserIDs,
+			LoserChangeIDs: loserChangeIDs,
+			Reason:         result.Reason,
+			Passed:         true,
 		}
 	})
 }

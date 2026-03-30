@@ -17,6 +17,7 @@ import (
 	"github.com/eoghanhynes/ralph/internal/config"
 	"github.com/eoghanhynes/ralph/internal/costs"
 	"github.com/eoghanhynes/ralph/internal/dag"
+	"github.com/eoghanhynes/ralph/internal/fusion"
 	"github.com/eoghanhynes/ralph/internal/notify"
 	"github.com/eoghanhynes/ralph/internal/prd"
 	"github.com/eoghanhynes/ralph/internal/runner"
@@ -68,6 +69,8 @@ type Coordinator struct {
 	runCosting      *costs.RunCosting         // optional: for including cost data in checkpoints
 	notifier        *notify.Notifier          // optional: for push notifications
 	firstPass       map[string]bool           // tracks stories that passed on first attempt
+	fusionGroups    map[string]*fusion.FusionGroup // active fusion groups by storyID
+	complexityCache map[string]bool                // cached complexity assessment results
 }
 
 func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory) *Coordinator {
@@ -97,7 +100,9 @@ func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory
 		storyRetries: make(map[string]int),
 		stories:      storyMap,
 		prdHash:      prdHash,
-		firstPass:    make(map[string]bool),
+		firstPass:       make(map[string]bool),
+		fusionGroups:    make(map[string]*fusion.FusionGroup),
+		complexityCache: make(map[string]bool),
 	}
 }
 
@@ -176,39 +181,93 @@ func (c *Coordinator) ScheduleReady(ctx context.Context) int {
 	}
 
 	launched := 0
-	for i := 0; i < slots; i++ {
+	for i := 0; i < len(available) && slots > 0; i++ {
 		storyID := available[i]
 		story := c.stories[storyID]
 		if story == nil {
 			continue
 		}
 
-		var wCtx context.Context
-		var wCancel context.CancelFunc
-		if c.cfg.StoryTimeout > 0 {
-			wCtx, wCancel = context.WithTimeout(ctx, time.Duration(c.cfg.StoryTimeout)*time.Minute)
-		} else {
-			wCtx, wCancel = context.WithCancel(ctx)
+		// Check if this story should use fusion mode (competing implementations)
+		useFusion := false
+		if !c.cfg.NoFusion && c.cfg.FusionWorkers >= 2 && slots >= c.cfg.FusionWorkers {
+			useFusion = c.shouldUseFusionLocked(ctx, story)
 		}
-		c.nextID++
-		w := &worker.Worker{
-			ID:         c.nextID,
-			StoryID:    storyID,
-			StoryTitle: story.Title,
-			State:      worker.WorkerIdle,
-			Iteration:  int(c.nextID), // use worker ID as iteration for unique log paths
-			Ctx:        wCtx,
-			Cancel:     wCancel,
-		}
-		c.workers[w.ID] = w
-		c.inProgress[storyID] = w.ID
 
-		go worker.Run(w, c.cfg, c.updateCh)
-		launched++
-		c.iterationCount++
+		if useFusion {
+			fg := &fusion.FusionGroup{
+				StoryID:  storyID,
+				Expected: c.cfg.FusionWorkers,
+			}
+			for fi := 0; fi < c.cfg.FusionWorkers; fi++ {
+				suffix := fmt.Sprintf("-f%d", fi)
+				w := c.spawnWorkerLocked(ctx, storyID, story, suffix)
+				fg.Workers = append(fg.Workers, w.ID)
+				go worker.Run(w, c.cfg, c.updateCh)
+				launched++
+				c.iterationCount++
+			}
+			c.fusionGroups[storyID] = fg
+			slots -= c.cfg.FusionWorkers
+			debuglog.Log("fusion: spawned %d workers for complex story %s", c.cfg.FusionWorkers, storyID)
+		} else {
+			w := c.spawnWorkerLocked(ctx, storyID, story, "")
+			go worker.Run(w, c.cfg, c.updateCh)
+			launched++
+			c.iterationCount++
+			slots--
+		}
 	}
 
 	return launched
+}
+
+// spawnWorkerLocked creates and registers a new worker. Must be called with c.mu held.
+func (c *Coordinator) spawnWorkerLocked(ctx context.Context, storyID string, story *prd.UserStory, fusionSuffix string) *worker.Worker {
+	var wCtx context.Context
+	var wCancel context.CancelFunc
+	if c.cfg.StoryTimeout > 0 {
+		wCtx, wCancel = context.WithTimeout(ctx, time.Duration(c.cfg.StoryTimeout)*time.Minute)
+	} else {
+		wCtx, wCancel = context.WithCancel(ctx)
+	}
+	c.nextID++
+	w := &worker.Worker{
+		ID:           c.nextID,
+		StoryID:      storyID,
+		StoryTitle:   story.Title,
+		State:        worker.WorkerIdle,
+		Iteration:    int(c.nextID),
+		FusionSuffix: fusionSuffix,
+		Ctx:          wCtx,
+		Cancel:       wCancel,
+	}
+	c.workers[w.ID] = w
+	c.inProgress[storyID] = w.ID
+	return w
+}
+
+// shouldUseFusionLocked checks whether a story is complex enough for fusion mode.
+// Uses cached results when available. Must be called with c.mu held.
+func (c *Coordinator) shouldUseFusionLocked(ctx context.Context, story *prd.UserStory) bool {
+	if cached, ok := c.complexityCache[story.ID]; ok {
+		return cached
+	}
+
+	// Release lock for the LLM call (can take a few seconds)
+	c.mu.Unlock()
+	complex, reason, err := fusion.AssessComplexity(ctx, story, c.cfg.UtilityModel)
+	c.mu.Lock()
+
+	if err != nil {
+		debuglog.Log("fusion: complexity assessment failed for %s: %v", story.ID, err)
+		c.complexityCache[story.ID] = false
+		return false
+	}
+
+	c.complexityCache[story.ID] = complex
+	debuglog.Log("fusion: %s assessed as complex=%v (%s)", story.ID, complex, reason)
+	return complex
 }
 
 // HandleUpdate processes a worker update.
@@ -225,6 +284,20 @@ func (c *Coordinator) HandleUpdate(u worker.WorkerUpdate) bool {
 	shouldRetry := false
 	switch u.State {
 	case worker.WorkerDone:
+		// Check if this worker is part of a fusion group
+		if fg, ok := c.fusionGroups[u.StoryID]; ok {
+			fg.Results = append(fg.Results, fusion.FusionResult{
+				WorkerID:    u.WorkerID,
+				ChangeID:    u.ChangeID,
+				Passed:      u.Passed,
+				JudgeResult: u.JudgeResult,
+				TokenUsage:  u.TokenUsage,
+			})
+			delete(c.inProgress, u.StoryID)
+			// Don't complete/retry yet — wait for all fusion workers
+			break
+		}
+
 		delete(c.inProgress, u.StoryID)
 		if u.Passed {
 			c.completed[u.StoryID] = true
@@ -463,6 +536,65 @@ Be concise. Just fix the conflicts and stop.`, storyID, conflictedFiles)
 	return workspace.AdvanceAfterResolve(ctx, c.cfg.ProjectDir)
 }
 
+// FusionGroupReady returns the fusion group for a story if all workers have reported.
+// Returns nil if the story is not a fusion story or not all workers are done yet.
+func (c *Coordinator) FusionGroupReady(storyID string) *fusion.FusionGroup {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fg, ok := c.fusionGroups[storyID]
+	if !ok {
+		return nil
+	}
+	if !fg.AllDone() {
+		return nil
+	}
+	return fg
+}
+
+// CompleteFusion marks a fusion story as completed with the winning worker's result.
+// Callers should merge the winner and abandon losers before calling this.
+func (c *Coordinator) CompleteFusion(storyID string, passed bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if passed {
+		c.completed[storyID] = true
+		if c.retries[storyID] == 0 && c.storyRetries[storyID] == 0 {
+			c.firstPass[storyID] = true
+		}
+	} else {
+		c.storyRetries[storyID]++
+		c.failedErrors[storyID] = "all fusion implementations failed"
+	}
+	delete(c.fusionGroups, storyID)
+	c.writeCheckpointLocked()
+}
+
+// IsFusionStory returns true if the story is currently in fusion mode.
+func (c *Coordinator) IsFusionStory(storyID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.fusionGroups[storyID]
+	return ok
+}
+
+// FusionProgress returns (completed, total) worker counts for a fusion story.
+func (c *Coordinator) FusionProgress(storyID string) (int, int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fg, ok := c.fusionGroups[storyID]
+	if !ok {
+		return 0, 0
+	}
+	return len(fg.Results), fg.Expected
+}
+
+// GetStory returns a story by ID.
+func (c *Coordinator) GetStory(storyID string) *prd.UserStory {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stories[storyID]
+}
+
 // CleanupWorker destroys the workspace for a completed/failed worker.
 func (c *Coordinator) CleanupWorker(ctx context.Context, workerID worker.WorkerID) {
 	c.mu.Lock()
@@ -530,6 +662,10 @@ func (c *Coordinator) AllDone() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.inProgress) > 0 {
+		return false
+	}
+	// Fusion groups still collecting results are not done
+	if len(c.fusionGroups) > 0 {
 		return false
 	}
 	for id := range c.dag.Nodes {
@@ -669,6 +805,18 @@ type MergeCompleteMsg struct {
 	ChangeID          string // jj change ID, needed for cleanup on merge failure
 	Err               error
 	ConflictsResolved bool
+}
+
+// FusionCompareDoneMsg signals that a fusion comparison is complete.
+type FusionCompareDoneMsg struct {
+	StoryID        string
+	WinnerWorkerID worker.WorkerID
+	WinnerChangeID string
+	LoserWorkerIDs []worker.WorkerID
+	LoserChangeIDs []string
+	Reason         string
+	Passed         bool // true if at least one candidate passed and a winner was selected
+	Err            error
 }
 
 // DAGAnalyzedMsg signals that DAG analysis is complete.

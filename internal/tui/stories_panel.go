@@ -440,7 +440,7 @@ func BuildStoryDisplayInfos(stories []prd.UserStory, currentStoryID string, coor
 	workerStartTimes := make(map[string]time.Time)
 	if coord != nil {
 		for wID, w := range coord.Workers() {
-			if w.State == worker.WorkerRunning || w.State == worker.WorkerSetup || w.State == worker.WorkerJudging {
+			if w.State == worker.WorkerRunning || w.State == worker.WorkerSetup || w.State == worker.WorkerJudging || w.State == worker.WorkerSimplifying {
 				workerAssignments[w.StoryID] = wID
 				workerIterations[w.StoryID] = w.Iteration
 				workerRoles[w.StoryID] = string(w.Role)

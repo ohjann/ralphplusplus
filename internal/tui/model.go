@@ -381,7 +381,7 @@ func (m *Model) buildStatusState() statuspage.StatusState {
 				WorkerID: int(wID),
 				StoryID:  w.StoryID,
 				Role:     string(w.Role),
-				State:    string(w.State),
+				State:    w.State.String(),
 				Active:   wID == m.activeWorkerView,
 			})
 		}
@@ -1826,6 +1826,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cacheWorkerLog(u.WorkerID)
 			// Preserve logs to .ralph/logs/ so they survive workspace destruction
 			m.coord.PreserveWorkerLogs(u.StoryID, u.WorkerID)
+
+			// Check if this is a fusion worker — if so, collect result and dispatch comparison when ready
+			if fg := m.coord.FusionGroupReady(u.StoryID); fg != nil {
+				done, total := len(fg.Results), fg.Expected
+				m.claudeContent += "\n" + tsLog("── Fusion %s: all %d/%d implementations complete — comparing ──\n", u.StoryID, done, total)
+				m.claudeVP.SetContent(m.claudeContent)
+				m.claudeVP.GotoBottom()
+				m.prevClaudeLen = len(m.claudeContent)
+				cmds = append(cmds, fusionCompareCmd(m.ctx, m.coord, u.StoryID, fg))
+				break
+			} else if m.coord.IsFusionStory(u.StoryID) {
+				// Still waiting for other fusion workers
+				done, total := m.coord.FusionProgress(u.StoryID)
+				m.claudeContent += "\n" + tsLog("── Fusion %s: worker %d done (%d/%d) — waiting for others ──\n", u.StoryID, u.WorkerID, done, total)
+				m.claudeVP.SetContent(m.claudeContent)
+				m.claudeVP.GotoBottom()
+				m.prevClaudeLen = len(m.claudeContent)
+				break
+			}
+
 			if u.Passed && u.ChangeID != "" {
 				m.notifyStoryComplete(u.StoryID, m.coord.StoryTitle(u.StoryID))
 				cmds = append(cmds, mergeBackCmd(m.ctx, m.coord, u))
@@ -1918,6 +1938,55 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			debuglog.Log("entering phaseDone: %s", m.completionReason)
 			m.showCompletionReport()
 			return m, nil
+		}
+
+	case coordinator.FusionCompareDoneMsg:
+		m.updateStatusPage()
+		if msg.Err != nil || !msg.Passed {
+			reason := "no passing implementations"
+			if msg.Err != nil {
+				reason = msg.Err.Error()
+			}
+			m.claudeContent += "\n" + tsLog("── Fusion %s failed: %s ──\n", msg.StoryID, reason)
+			m.claudeVP.SetContent(m.claudeContent)
+			m.claudeVP.GotoBottom()
+			m.prevClaudeLen = len(m.claudeContent)
+			// Abandon all change IDs
+			for _, cid := range msg.LoserChangeIDs {
+				_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, cid)
+			}
+			if msg.WinnerChangeID != "" {
+				_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, msg.WinnerChangeID)
+			}
+			// Clean up all fusion workers
+			for _, wid := range msg.LoserWorkerIDs {
+				go m.coord.CleanupWorker(m.ctx, wid)
+			}
+			m.coord.CompleteFusion(msg.StoryID, false)
+			m.coord.ScheduleReady(m.ctx)
+		} else {
+			m.claudeContent += "\n" + tsLog("── Fusion %s: winner selected (worker %d) — %s ──\n", msg.StoryID, msg.WinnerWorkerID, msg.Reason)
+			m.claudeVP.SetContent(m.claudeContent)
+			m.claudeVP.GotoBottom()
+			m.prevClaudeLen = len(m.claudeContent)
+			// Abandon losers
+			for i, cid := range msg.LoserChangeIDs {
+				_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, cid)
+				go m.coord.CleanupWorker(m.ctx, msg.LoserWorkerIDs[i])
+			}
+			// Merge winner
+			m.coord.CompleteFusion(msg.StoryID, true)
+			winnerUpdate := worker.WorkerUpdate{
+				WorkerID: msg.WinnerWorkerID,
+				StoryID:  msg.StoryID,
+				ChangeID: msg.WinnerChangeID,
+				Passed:   true,
+			}
+			cmds = append(cmds, mergeBackCmd(m.ctx, m.coord, winnerUpdate))
+			m.notifyStoryComplete(msg.StoryID, m.coord.StoryTitle(msg.StoryID))
+		}
+		if m.coord.ActiveCount() > 0 {
+			cmds = append(cmds, m.coord.ListenCmd())
 		}
 
 	case coordinator.MergeCompleteMsg:

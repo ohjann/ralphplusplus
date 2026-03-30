@@ -10,6 +10,7 @@ const (
 	RoleImplementer Role = "implementer"
 	RoleDebugger    Role = "debugger"
 	RoleReviewer    Role = "reviewer"
+	RoleSimplify    Role = "simplify"
 )
 
 // AgentConfig holds role-specific configuration for an agent.
@@ -60,6 +61,13 @@ func DefaultConfig(role Role) AgentConfig {
 			PromptFile: "prompts/reviewer.md",
 			Model:     "sonnet",
 			MaxTokens: 16000,
+		}
+	case RoleSimplify:
+		return AgentConfig{
+			Role:       RoleSimplify,
+			PromptFile: "prompts/simplify.md",
+			Model:      "sonnet",
+			MaxTokens:  16000,
 		}
 	default:
 		return AgentConfig{
