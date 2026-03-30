@@ -307,7 +307,15 @@ func (m *Model) buildStatusState() statuspage.StatusState {
 	if m.cfg.QualityReview {
 		state.Badges = append(state.Badges, statuspage.Badge{Label: "Quality", Icon: "◇"})
 	}
-	if m.cfg.Workers > 1 {
+	if m.cfg.WorkersAuto {
+		if m.cfg.Workers > 1 {
+			state.Badges = append(state.Badges, statuspage.Badge{
+				Label: fmt.Sprintf("Auto %d Workers", m.cfg.Workers), Icon: "⫘"})
+		} else {
+			state.Badges = append(state.Badges, statuspage.Badge{
+				Label: "Auto Workers", Icon: "⫘"})
+		}
+	} else if m.cfg.Workers > 1 {
 		state.Badges = append(state.Badges, statuspage.Badge{
 			Label: fmt.Sprintf("%d Workers", m.cfg.Workers), Icon: "⫘"})
 	}
@@ -965,7 +973,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.costsContent = renderCostsContent(m.runCosting, m.storyDisplayInfos)
 				}
 
-				if cp.Phase == "parallel" && m.cfg.Workers > 1 {
+				if cp.Phase == "parallel" && (m.cfg.Workers > 1 || m.cfg.WorkersAuto) {
 					p, err := prd.Load(m.cfg.PRDFile)
 					if err != nil {
 						debuglog.Log("Error loading PRD for resume: %v", err)
@@ -984,6 +992,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 
+					m.cfg.ResolveAutoWorkers(len(incomplete))
 					m.coord = coordinator.NewFromCheckpoint(
 						m.cfg, m.storyDAG, m.cfg.Workers, incomplete,
 						cp.CompletedStories, cp.FailedStories, cp.IterationCount,
@@ -1003,7 +1012,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Start fresh — delete checkpoint and continue normal startup
 				_ = checkpoint.Delete(m.cfg.ProjectDir)
 				m.loadedCheckpoint = nil
-				if m.cfg.Workers > 1 {
+				if m.cfg.Workers > 1 || m.cfg.WorkersAuto {
 					m.phase = phaseDagAnalysis
 					cmds = append(cmds, dagAnalyzeCmd(m.ctx, m.cfg))
 				} else {
@@ -1462,7 +1471,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.claudeVP.SetContent(m.claudeContent)
 			m.prevClaudeLen = len(m.claudeContent)
 			return m.transitionToComplete()
-		} else if m.cfg.Workers > 1 {
+		} else if m.cfg.Workers > 1 || m.cfg.WorkersAuto {
 			m.phase = phaseDagAnalysis
 			cmds = append(cmds, dagAnalyzeCmd(m.ctx, m.cfg))
 		} else {
@@ -1759,6 +1768,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !s.Passes {
 					incomplete = append(incomplete, s)
 				}
+			}
+			// Resolve --workers auto now that we know the story count
+			m.cfg.ResolveAutoWorkers(len(incomplete))
+			if m.cfg.WorkersAuto {
+				m.claudeContent += "\n" + tsLog("── Auto workers: scaling to %d (DAG width cap) ──\n", m.cfg.Workers)
+				m.claudeVP.SetContent(m.claudeContent)
+				m.claudeVP.GotoBottom()
+				m.prevClaudeLen = len(m.claudeContent)
 			}
 			m.coord = coordinator.New(m.cfg, m.storyDAG, m.cfg.Workers, incomplete)
 			m.coord.SetRunCosting(m.runCosting)

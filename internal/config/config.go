@@ -57,6 +57,8 @@ type Config struct {
 	ImplementerModel   string // --implementer-model: override model for implementer role only
 	UtilityModel       string // --utility-model: model for DAG analysis and other utility tasks (default: haiku)
 	StoryTimeout       int    // --story-timeout: max minutes per story before cancellation (default: 0 = no limit)
+	WorkersAuto        bool   // --workers auto: scale workers to DAG width (capped at AutoMaxWorkers)
+	AutoMaxWorkers     int    // cap for auto worker scaling (default: 5)
 	NoSimplify         bool   // --no-simplify: skip per-story simplify pass
 	NoFusion           bool   // --no-fusion: disable automatic fusion mode for complex stories
 	FusionWorkers      int    // --fusion-workers N: competing implementations per complex story (default: 2)
@@ -80,6 +82,7 @@ func Parse(args []string) (*Config, error) {
 		QualityMaxIters:    2,
 		SpriteEnabled:      true,
 		UtilityModel:       "haiku",
+		AutoMaxWorkers:     5,
 		FusionWorkers:      2,
 		Memory: DefaultMemoryConfig(),
 	}
@@ -219,16 +222,21 @@ func Parse(args []string) (*Config, error) {
 			i++
 		case "--workers":
 			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--workers requires a number")
+				return nil, fmt.Errorf("--workers requires a number or 'auto'")
 			}
-			n, err := strconv.Atoi(args[i+1])
-			if err != nil {
-				return nil, fmt.Errorf("--workers: invalid number %q", args[i+1])
+			if args[i+1] == "auto" {
+				cfg.WorkersAuto = true
+				cfg.Workers = 1 // will be resolved after DAG analysis
+			} else {
+				n, err := strconv.Atoi(args[i+1])
+				if err != nil {
+					return nil, fmt.Errorf("--workers: invalid value %q (use a number or 'auto')", args[i+1])
+				}
+				if n < 1 {
+					n = 1
+				}
+				cfg.Workers = n
 			}
-			if n < 1 {
-				n = 1
-			}
-			cfg.Workers = n
 			i += 2
 		case "--plan":
 			if i+1 >= len(args) {
@@ -380,14 +388,20 @@ func Parse(args []string) (*Config, error) {
 				continue
 			}
 			if strings.HasPrefix(args[i], "--workers=") {
-				n, err := strconv.Atoi(args[i][len("--workers="):])
-				if err != nil {
-					return nil, fmt.Errorf("--workers: invalid number %q", args[i][len("--workers="):])
+				val := args[i][len("--workers="):]
+				if val == "auto" {
+					cfg.WorkersAuto = true
+					cfg.Workers = 1
+				} else {
+					n, err := strconv.Atoi(val)
+					if err != nil {
+						return nil, fmt.Errorf("--workers: invalid value %q (use a number or 'auto')", val)
+					}
+					if n < 1 {
+						n = 1
+					}
+					cfg.Workers = n
 				}
-				if n < 1 {
-					n = 1
-				}
-				cfg.Workers = n
 				i++
 				continue
 			}
@@ -597,6 +611,24 @@ func (c *Config) MonitoringSummary() string {
 	return "Monitoring:\n" + strings.Join(lines, "\n")
 }
 
+// ResolveAutoWorkers sets the Workers count when --workers auto is active.
+// Called after DAG analysis with the total number of stories. Workers is set
+// to min(storyCount, AutoMaxWorkers) — the DAG scheduling loop naturally
+// limits concurrency to actually-ready stories each cycle.
+func (c *Config) ResolveAutoWorkers(storyCount int) {
+	if !c.WorkersAuto {
+		return
+	}
+	n := storyCount
+	if n > c.AutoMaxWorkers {
+		n = c.AutoMaxWorkers
+	}
+	if n < 1 {
+		n = 1
+	}
+	c.Workers = n
+}
+
 func (c *Config) Validate() error {
 	if c.IdleMode {
 		return nil
@@ -681,7 +713,7 @@ General:
   --help, -h                      Show this help message
 
 Execution:
-  --workers <n>                   Number of parallel workers (default: 1 = serial)
+  --workers <n|auto>              Number of parallel workers, or 'auto' to scale to DAG width (default: 1 = serial)
   --workspace-base <path>         Base directory for workspaces (default: /tmp/ralph-workspaces)
   --no-architect                  Skip architect phase for all stories (go straight to implementer)
   --no-simplify                   Skip per-story simplify pass (code quality review before judge)

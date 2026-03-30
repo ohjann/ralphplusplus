@@ -15,6 +15,8 @@ type tomlConfig struct {
 	JudgeEnabled       *bool    `toml:"judge_enabled"`
 	JudgeMaxRejections *int    `toml:"judge_max_rejections"`
 	Workers            *int    `toml:"workers"`
+	WorkersAuto        *bool   `toml:"workers_auto"`
+	AutoMaxWorkers     *int    `toml:"auto_max_workers"`
 	QualityReview      *bool   `toml:"quality_review"`
 	QualityWorkers     *int    `toml:"quality_workers"`
 	QualityMaxIters    *int    `toml:"quality_max_iterations"`
@@ -65,6 +67,12 @@ func (tc *tomlConfig) applyTo(cfg *Config) {
 	if tc.Workers != nil {
 		cfg.Workers = *tc.Workers
 	}
+	if tc.WorkersAuto != nil {
+		cfg.WorkersAuto = *tc.WorkersAuto
+	}
+	if tc.AutoMaxWorkers != nil {
+		cfg.AutoMaxWorkers = *tc.AutoMaxWorkers
+	}
 	if tc.QualityReview != nil {
 		cfg.QualityReview = *tc.QualityReview
 	}
@@ -112,6 +120,8 @@ func (cfg *Config) SaveConfig() error {
 		JudgeEnabled:       boolPtr(cfg.JudgeEnabled),
 		JudgeMaxRejections: intPtr(cfg.JudgeMaxRejections),
 		Workers:            intPtr(cfg.Workers),
+		WorkersAuto:        boolPtr(cfg.WorkersAuto),
+		AutoMaxWorkers:     intPtr(cfg.AutoMaxWorkers),
 		QualityReview:      boolPtr(cfg.QualityReview),
 		QualityWorkers:     intPtr(cfg.QualityWorkers),
 		QualityMaxIters:    intPtr(cfg.QualityMaxIters),
