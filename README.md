@@ -6,6 +6,8 @@
 
 Ralph runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) in a loop until all user stories in a PRD are done. Each iteration gets a fresh context window. Memory carries over through version control history, `progress.md`, `prd.json`, and markdown files in `.ralph/memory/`.
 
+![Ralph TUI](ralph.png)
+
 Based on [Geoffrey Huntley's Ralph pattern](https://ghuntley.com/ralph/).
 
 ## Why Ralph?
