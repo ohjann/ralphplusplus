@@ -84,6 +84,18 @@ func tickCmd() tea.Cmd {
 	})
 }
 
+// usageLimitResumeCmd waits until the given time (plus a small buffer) then
+// fires a usageLimitResumeMsg to auto-resume paused workers.
+func usageLimitResumeCmd(resetsAt time.Time) tea.Cmd {
+	wait := time.Until(resetsAt) + 30*time.Second // 30s buffer for safety
+	if wait < 10*time.Second {
+		wait = 10 * time.Second
+	}
+	return tea.Tick(wait, func(time.Time) tea.Msg {
+		return usageLimitResumeMsg{}
+	})
+}
+
 func checkMemorySizeCmd(projectDir string) tea.Cmd {
 	return safeCmd(func() tea.Msg {
 		result, err := memory.CheckSize(projectDir)

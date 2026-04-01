@@ -523,6 +523,13 @@ func (m *Model) buildCurrentTaskText() string {
 	case phaseQualityPrompt:
 		return "Issues remain — Enter to continue, q to finish"
 	case phasePaused:
+		if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
+			remaining := time.Until(m.rateLimitInfo.ResetsAt)
+			if remaining <= 0 {
+				return "Usage limit — resuming shortly..."
+			}
+			return fmt.Sprintf("Usage limit — auto-resuming in %s", formatDuration(remaining.Truncate(time.Second)))
+		}
 		return "Usage limit — press Enter to resume"
 	case phaseDone:
 		if m.allComplete {
@@ -1281,6 +1288,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, spriteTickCmd())
 		}
 
+	// --- Auto-resume after usage limit reset ---
+	case usageLimitResumeMsg:
+		if m.phase == phasePaused {
+			m.claudeContent += "\n" + tsLog("── Usage limit reset — auto-resuming ──\n")
+			m.claudeVP.SetContent(m.claudeContent)
+			m.claudeVP.GotoBottom()
+			m.prevClaudeLen = len(m.claudeContent)
+			m.ctx, m.cancel = context.WithCancel(context.Background())
+
+			switch m.pausedDuring {
+			case phaseParallel:
+				m.coord.Resume()
+				m.phase = phaseParallel
+				return m, tea.Batch(scheduleReadyCmd(m.ctx, m.coord), fastTickCmd(), tickCmd())
+			case phaseInteractive:
+				m.coord.Resume()
+				m.phase = phaseInteractive
+				return m, tea.Batch(scheduleReadyCmd(m.ctx, m.coord), fastTickCmd(), tickCmd())
+			case phasePlanning:
+				m.phase = phasePlanning
+				return m, tea.Batch(planCmd(m.ctx, m.cfg), fastTickCmd())
+			default:
+				// Serial mode — retry current story
+				m.phase = phaseIterating
+				return m, findNextStoryCmd(m.cfg.PRDFile)
+			}
+		}
+
 	// --- Fast tick: poll activity + progress ---
 	case fastTickMsg:
 		cmds = append(cmds, fastTickCmd())
@@ -1400,11 +1435,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.As(msg.Err, &usageErr) {
 				m.pausedDuring = phasePlanning
 				m.phase = phasePaused
-				m.claudeContent += "\n" + tsLog("── Usage Limit Hit ──\n") + "Claude API usage limit reached during planning.\nPress Enter to resume when your limit resets.\n"
+				resumeMsg := "Press Enter to resume manually."
+				var autoResumeCmd tea.Cmd
+				if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
+					remaining := time.Until(m.rateLimitInfo.ResetsAt)
+					resumeMsg = fmt.Sprintf("Will auto-resume in %s (or press Enter to resume manually).", formatDuration(remaining.Truncate(time.Second)))
+					autoResumeCmd = usageLimitResumeCmd(m.rateLimitInfo.ResetsAt)
+				}
+				m.claudeContent += "\n" + tsLog("── Usage Limit Hit ──\n") + fmt.Sprintf("Claude API usage limit reached during planning.\n%s\n", resumeMsg)
 				m.claudeVP.SetContent(m.claudeContent)
 				m.claudeVP.GotoBottom()
 				m.prevClaudeLen = len(m.claudeContent)
-				return m, nil
+				return m, autoResumeCmd
 			}
 			m.claudeContent += "\n" + tsLog("── Plan Error ──\n") + fmt.Sprintf("%s\n", msg.Err)
 			m.claudeVP.SetContent(m.claudeContent)
@@ -1603,16 +1645,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.stopStatusServer()
 					return m, tea.Quit
 			}
-			// Usage limit — pause and wait for user
+			// Usage limit — pause and auto-resume when limit resets
 			var usageErr *runner.UsageLimitError
 			if errors.As(msg.Err, &usageErr) {
 				m.pausedDuring = phaseClaudeRun
 				m.phase = phasePaused
-				m.claudeContent += "\n" + tsLog("── Usage Limit Hit ──\n") + "Claude API usage limit reached.\nPress Enter to resume when your limit resets.\n"
+				resumeMsg := "Press Enter to resume manually."
+				var autoResumeCmd tea.Cmd
+				if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
+					remaining := time.Until(m.rateLimitInfo.ResetsAt)
+					resumeMsg = fmt.Sprintf("Will auto-resume in %s (or press Enter to resume manually).", formatDuration(remaining.Truncate(time.Second)))
+					autoResumeCmd = usageLimitResumeCmd(m.rateLimitInfo.ResetsAt)
+				}
+				m.claudeContent += "\n" + tsLog("── Usage Limit Hit ──\n") + fmt.Sprintf("Claude API usage limit reached.\n%s\n", resumeMsg)
 				m.claudeVP.SetContent(m.claudeContent)
 				m.claudeVP.GotoBottom()
 				m.prevClaudeLen = len(m.claudeContent)
-				return m, nil
+				return m, autoResumeCmd
 			}
 
 			// Show Claude error in activity panel
@@ -1814,7 +1863,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}))
 		}
 
-		// Usage limit — pause everything and wait for user
+		// Usage limit — pause everything and auto-resume when limit resets
 		if u.UsageLimit {
 			m.pausedDuring = m.phase
 			m.phase = phasePaused
@@ -1823,11 +1872,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if drained := m.coord.DrainUpdates(); drained > 0 {
 				debuglog.Log("drained %d stale worker updates after usage limit pause", drained)
 			}
-			m.claudeContent += "\n" + tsLog("── Usage Limit Hit (%s) ──\n", u.StoryID) + "Claude API usage limit reached. All workers paused.\nPress Enter to resume when your limit resets.\n"
+			resumeMsg := "Press Enter to resume manually."
+			var autoResumeCmd tea.Cmd
+			if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
+				remaining := time.Until(m.rateLimitInfo.ResetsAt)
+				resumeMsg = fmt.Sprintf("Will auto-resume in %s (or press Enter to resume manually).", formatDuration(remaining.Truncate(time.Second)))
+				autoResumeCmd = usageLimitResumeCmd(m.rateLimitInfo.ResetsAt)
+			}
+			m.claudeContent += "\n" + tsLog("── Usage Limit Hit (%s) ──\n", u.StoryID) + fmt.Sprintf("Claude API usage limit reached. All workers paused.\n%s\n", resumeMsg)
 			m.claudeVP.SetContent(m.claudeContent)
 			m.claudeVP.GotoBottom()
 			m.prevClaudeLen = len(m.claudeContent)
-			return m, nil
+			return m, autoResumeCmd
 		}
 
 		// Auto-select first worker if none selected yet
@@ -2814,7 +2870,8 @@ func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bo
 			styleKey.Render("q") + styleFooter.Render(": quit")
 	}
 	if paused {
-		return "  " + styleKey.Render("enter") + styleFooter.Render(": resume  ") +
+		return "  " + styleFooter.Render("auto-resuming on limit reset  ") +
+			styleKey.Render("enter") + styleFooter.Render(": resume now  ") +
 			styleKey.Render("q") + styleFooter.Render(": quit")
 	}
 	if resumePrompt {
