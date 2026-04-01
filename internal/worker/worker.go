@@ -64,6 +64,7 @@ type Worker struct {
 	LogDir         string
 	Iteration      int
 	FusionSuffix   string     // non-empty for fusion workers (e.g., "-f0", "-f1")
+	SessionID      string     // captured from Claude stream for kill+resume
 	Ctx            context.Context
 	Cancel         context.CancelFunc
 }
@@ -347,6 +348,15 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 		claudeUsage = accumulateUsage(claudeUsage, implResult.TokenUsage)
 		if implResult.RateLimitInfo != nil {
 			latestRateLimit = implResult.RateLimitInfo
+		}
+		// Capture session ID for kill+resume support
+		if implResult.SessionID != "" {
+			w.SessionID = implResult.SessionID
+			// Persist to story state so TUI can read it
+			if ss, loadErr := storystate.Load(ws.Dir, w.StoryID); loadErr == nil {
+				ss.SessionID = implResult.SessionID
+				_ = storystate.Save(ws.Dir, ss)
+			}
 		}
 	}
 	if err != nil {

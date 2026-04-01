@@ -38,6 +38,7 @@ type StoryState struct {
 	ErrorsEncountered []ErrorEntry `json:"errors_encountered"`
 	JudgeFeedback     []string     `json:"judge_feedback"`
 	LastUpdated       time.Time    `json:"last_updated"`
+	SessionID         string       `json:"session_id,omitempty"`
 }
 
 // storyDir returns the path to a story's state directory.

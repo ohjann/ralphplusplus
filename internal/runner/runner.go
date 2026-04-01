@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ohjann/ralphplusplus/internal/costs"
@@ -354,6 +355,7 @@ type RunClaudeOpts struct {
 type RunClaudeResult struct {
 	TokenUsage    *costs.TokenUsage
 	RateLimitInfo *costs.RateLimitInfo
+	SessionID     string
 }
 
 // RunClaude executes claude with streaming JSON output, parsing events into
@@ -418,6 +420,7 @@ func RunClaude(ctx context.Context, projectDir, prompt, logFilePath string, opts
 	result := &RunClaudeResult{
 		TokenUsage:    &usage,
 		RateLimitInfo: proc.rateLimitInfo,
+		SessionID:     proc.SessionID(),
 	}
 
 	if err := cmd.Wait(); err != nil {
@@ -641,6 +644,29 @@ type streamProcessor struct {
 
 	// Rate limit info from rate_limit_event
 	rateLimitInfo *costs.RateLimitInfo
+
+	// Session ID from stream-json events (thread-safe)
+	sessionMu sync.Mutex
+	sessionID string
+}
+
+// SessionID returns the captured session ID in a thread-safe manner.
+func (sp *streamProcessor) SessionID() string {
+	sp.sessionMu.Lock()
+	defer sp.sessionMu.Unlock()
+	return sp.sessionID
+}
+
+// setSessionID stores the session ID if not already set (first-seen wins).
+func (sp *streamProcessor) setSessionID(id string) {
+	if id == "" {
+		return
+	}
+	sp.sessionMu.Lock()
+	defer sp.sessionMu.Unlock()
+	if sp.sessionID == "" {
+		sp.sessionID = id
+	}
 }
 
 // tokenUsage returns the accumulated token usage as a costs.TokenUsage.
@@ -716,6 +742,10 @@ func (sp *streamProcessor) processLine(line string) {
 		if model, ok := raw["model"].(string); ok && sp.model == "" {
 			sp.model = model
 		}
+		// Fallback: capture session_id from result event
+		if sid, ok := raw["session_id"].(string); ok {
+			sp.setSessionID(sid)
+		}
 		return
 
 	case "assistant":
@@ -732,6 +762,10 @@ func (sp *streamProcessor) processLine(line string) {
 	case "system":
 		if model, ok := raw["model"].(string); ok && sp.model == "" {
 			sp.model = model
+		}
+		// Capture session_id from system/init event (arrives early in stream)
+		if sid, ok := raw["session_id"].(string); ok {
+			sp.setSessionID(sid)
 		}
 		return
 
