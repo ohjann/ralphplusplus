@@ -66,6 +66,8 @@ type Worker struct {
 	FusionSuffix       string // non-empty for fusion workers (e.g., "-f0", "-f1")
 	SessionID          string // captured from Claude stream for kill+resume
 	ArchitectSessionID string // if set, skip architect and fork from this session
+	ResumeHint         string // if set after cancel, resume with this hint instead of treating as failure
+	IsResumed          bool   // true when current run is a resume (for logging/diagnostics)
 	Ctx            context.Context
 	Cancel         context.CancelFunc
 }
@@ -371,28 +373,90 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	}
 	if err != nil {
 		if w.Ctx.Err() != nil {
-			send(WorkerFailed, implRole, w.Ctx.Err(), false, "")
-			return
-		}
-		// Usage limit — signal to pause, don't retry automatically
-		var usageErr *runner.UsageLimitError
-		if errors.As(err, &usageErr) {
-			w.State = WorkerFailed
-			updateCh <- WorkerUpdate{
-				WorkerID:      w.ID,
-				StoryID:       w.StoryID,
-				State:         WorkerFailed,
-				Role:          implRole,
-				Err:           err,
-				UsageLimit:    true,
-				TokenUsage:    claudeUsage,
-				RateLimitInfo: latestRateLimit,
+			// Check if this cancellation was for a hint-resume
+			if w.ResumeHint != "" {
+				resumeHint := w.ResumeHint
+				w.ResumeHint = "" // consume the hint
+
+				if w.SessionID != "" {
+					// Resume with hint: relaunch with --resume
+					w.IsResumed = true
+					activityPath := runner.ActivityFilePath(wsLogDir, w.Iteration)
+
+					// Check for partial tool call and warn
+					rawLogPath := runner.LogFilePath(wsLogDir, w.Iteration)
+					if runner.CheckPartialToolCall(rawLogPath) {
+						_ = runner.AppendActivityMarker(activityPath,
+							"\n--- WARNING: resumed from partial tool call; tool_use had no tool_result ---")
+					}
+
+					// Write user guidance marker
+					_ = runner.AppendActivityMarker(activityPath,
+						"\n--- USER GUIDANCE (resumed session) ---\n"+resumeHint)
+
+					resumePrompt := resumeHint + "\n\nResume directly from where you left off. Do not recap or acknowledge this guidance — just act on it."
+
+					// Create a fresh context for the resumed run
+					resumeCtx, resumeCancel := context.WithCancel(context.Background())
+					w.Ctx = resumeCtx
+					w.Cancel = resumeCancel
+
+					resumeResult, resumeErr := runner.RunClaude(resumeCtx, ws.Dir, resumePrompt, logPath, runner.RunClaudeOpts{
+						Iteration:       w.Iteration,
+						StoryID:         w.StoryID,
+						Role:            implRole,
+						Model:           ResolveModel(implRole, cfg),
+						ResumeSessionID: w.SessionID,
+					})
+					if resumeResult != nil {
+						claudeUsage = accumulateUsage(claudeUsage, resumeResult.TokenUsage)
+						if resumeResult.RateLimitInfo != nil {
+							latestRateLimit = resumeResult.RateLimitInfo
+						}
+						if resumeResult.SessionID != "" {
+							w.SessionID = resumeResult.SessionID
+						}
+					}
+					if resumeErr != nil {
+						if resumeCtx.Err() != nil {
+							send(WorkerFailed, implRole, resumeCtx.Err(), false, "")
+							return
+						}
+						sendRetryable(fmt.Errorf("claude resume: %w", resumeErr))
+						return
+					}
+					// Resume succeeded — fall through to simplify/commit
+				} else {
+					// No session ID — fall back to hint.md + retry
+					_ = storystate.SaveHint(ws.Dir, w.StoryID, resumeHint)
+					sendRetryable(fmt.Errorf("hint resume: no session ID available, saved hint for next iteration"))
+					return
+				}
+			} else {
+				send(WorkerFailed, implRole, w.Ctx.Err(), false, "")
+				return
 			}
+		} else {
+			// Usage limit — signal to pause, don't retry automatically
+			var usageErr *runner.UsageLimitError
+			if errors.As(err, &usageErr) {
+				w.State = WorkerFailed
+				updateCh <- WorkerUpdate{
+					WorkerID:      w.ID,
+					StoryID:       w.StoryID,
+					State:         WorkerFailed,
+					Role:          implRole,
+					Err:           err,
+					UsageLimit:    true,
+					TokenUsage:    claudeUsage,
+					RateLimitInfo: latestRateLimit,
+				}
+				return
+			}
+			// Other Claude CLI failures are likely transient (network, etc.)
+			sendRetryable(fmt.Errorf("claude run: %w", err))
 			return
 		}
-		// Other Claude CLI failures are likely transient (network, etc.)
-		sendRetryable(fmt.Errorf("claude run: %w", err))
-		return
 	}
 
 	// 3b. Simplify phase: quick code quality pass before commit

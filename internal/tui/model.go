@@ -141,8 +141,9 @@ type Model struct {
 	// Stuck alert (shown as status bar) + hint input
 	stuckAlert    *runner.StuckInfo
 	stuckAlertAt  time.Time
-	hintInput     textarea.Model
-	hintActive    bool // true when user is typing a hint
+	hintInput        textarea.Model
+	hintActive       bool            // true when user is typing a hint
+	hintTargetWorker worker.WorkerID // worker to send the hint to (for resume)
 
 	// Task input bar (interactive mode)
 	taskInput       textarea.Model
@@ -792,10 +793,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case tea.KeyEnter:
 				hint := strings.TrimSpace(m.hintInput.Value())
-				if hint != "" && m.stuckAlert != nil {
-					storyID := m.stuckAlert.StoryID
-					_ = storystate.SaveHint(m.cfg.ProjectDir, storyID, hint)
-					m.claudeContent += "\n" + tsLog("── Hint injected: %s ──\n", hint)
+				if hint != "" {
+					if m.coord != nil && m.coord.IsWorkerActive(m.hintTargetWorker) {
+						// Resume worker with hint (kill + resume with --resume)
+						m.coord.ResumeWorkerWithHint(m.hintTargetWorker, hint)
+						m.claudeContent += "\n" + tsLog("── Hint sent (resuming worker): %s ──\n", hint)
+					} else if m.stuckAlert != nil {
+						// Fallback: save hint for next iteration
+						storyID := m.stuckAlert.StoryID
+						_ = storystate.SaveHint(m.cfg.ProjectDir, storyID, hint)
+						m.claudeContent += "\n" + tsLog("── Hint injected: %s ──\n", hint)
+					}
 					m.claudeVP.SetContent(m.claudeContent)
 					m.claudeVP.GotoBottom()
 					m.prevClaudeLen = len(m.claudeContent)
@@ -803,6 +811,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.hintActive = false
 				m.hintInput.Blur()
 				m.hintInput.Reset()
+				m.hintTargetWorker = 0
 				m.stuckAlert = nil
 				return m, nil
 			case tea.KeyTab:
@@ -1272,6 +1281,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cur := m.workerTabIndex()
 					next := (cur + 1) % len(m.workerTabOrder)
 					m.switchToWorkerTab(next)
+				}
+				// 'h': open hint input for the active worker (resume with guidance)
+				if msg.String() == "h" && m.coord != nil && m.coord.IsWorkerActive(m.activeWorkerView) {
+					m.hintTargetWorker = m.activeWorkerView
+					m.hintActive = true
+					m.hintInput.SetWidth(m.width - 4)
+					return m, m.hintInput.Focus()
 				}
 			}
 		}
@@ -2890,6 +2906,7 @@ func renderFooter(width int, confirmQuit bool, done bool, idle bool, parallel bo
 		styleKey.Render("m") + styleFooter.Render(": monitor")
 	if parallel {
 		baseHelp += "  " + styleKey.Render("</>") + styleFooter.Render(": worker") +
+			"  " + styleKey.Render("h") + styleFooter.Render(": hint") +
 			"  " + styleKey.Render("t") + styleFooter.Render(": task")
 	} else if done {
 		baseHelp += "  " + styleKey.Render("t") + styleFooter.Render(": new task")

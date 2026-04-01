@@ -1033,6 +1033,61 @@ func (sp *streamProcessor) writeToolSummary(inputJSON string) {
 	}
 }
 
+// AppendActivityMarker writes a visible marker line to the activity log file.
+// Used to inject user guidance markers into the stream before a resumed session.
+func AppendActivityMarker(activityPath, marker string) error {
+	f, err := os.OpenFile(activityPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintln(f, marker)
+	return err
+}
+
+// CheckPartialToolCall scans a JSONL activity log for the last tool_use event
+// and checks whether it has a matching tool_result. Returns true if a partial
+// (orphaned) tool call was detected — meaning Claude was killed mid-tool-call.
+func CheckPartialToolCall(logPath string) bool {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return false
+	}
+	// Scan lines for content_block_start with tool_use and content_block_stop
+	var lastToolUseIdx int = -1
+	var lastToolStopIdx int = -1
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		var raw map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			continue
+		}
+		// Check for stream_event wrapping
+		event := raw
+		if topType, _ := raw["type"].(string); topType == "stream_event" {
+			if inner, ok := raw["event"].(map[string]interface{}); ok {
+				event = inner
+			}
+		}
+		eventType, _ := event["type"].(string)
+		if eventType == "content_block_start" {
+			if block, ok := event["content_block"].(map[string]interface{}); ok {
+				if blockType, _ := block["type"].(string); blockType == "tool_use" {
+					lastToolUseIdx = i
+				}
+			}
+		}
+		if eventType == "content_block_stop" && lastToolUseIdx >= 0 {
+			lastToolStopIdx = i
+		}
+	}
+	// If we found a tool_use start but no subsequent stop, it's partial
+	return lastToolUseIdx >= 0 && lastToolStopIdx < lastToolUseIdx
+}
+
 func (sp *streamProcessor) writeLine(line string) {
 	fmt.Fprintln(sp.activityFile, line)
 	sp.activityFile.Sync()

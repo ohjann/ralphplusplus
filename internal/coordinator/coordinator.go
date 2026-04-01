@@ -679,6 +679,19 @@ func (c *Coordinator) GetStory(storyID string) *prd.UserStory {
 }
 
 // CleanupWorker destroys the workspace for a completed/failed worker.
+// ResumeWorkerWithHint sets a resume hint on the worker and cancels its context,
+// triggering the worker's run loop to relaunch Claude with --resume and the hint.
+func (c *Coordinator) ResumeWorkerWithHint(workerID worker.WorkerID, hint string) {
+	c.mu.Lock()
+	w, ok := c.workers[workerID]
+	c.mu.Unlock()
+	if !ok {
+		return
+	}
+	w.ResumeHint = hint
+	w.Cancel()
+}
+
 func (c *Coordinator) CleanupWorker(ctx context.Context, workerID worker.WorkerID) {
 	c.mu.Lock()
 	w, ok := c.workers[workerID]
