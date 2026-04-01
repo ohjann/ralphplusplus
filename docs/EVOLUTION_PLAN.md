@@ -1858,9 +1858,295 @@ Straightforward wiring — the role system already has the Model field.
 
 ---
 
-## Phase 7: Daemon/Client Architecture — TUI Decoupling
+## Phase 7: Claude Code Deep Integration — Interactive Workers
 
-**Impact: High | Complexity: Medium-High | Dependencies: Phase 1 (checkpoint/resume — already complete), Phase 3 (status page — already complete)**
+**Impact: High | Complexity: Medium | Dependencies: Phase 4 (agent roles — already complete), Phase 6 (multi-model — already complete)**
+
+> **Added 2026-04-01.** Analysis of Claude Code's internal architecture
+> (via its open-source Rust/Python port, claw-code) revealed that Ralph
+> significantly underutilizes the CLI's session management and tool
+> control capabilities. Workers currently run as fire-and-forget
+> processes — if a worker gets stuck, Ralph kills it and starts fresh
+> with hints baked into a new prompt, losing the full conversation
+> context (tool results, error messages, reasoning chain). Claude Code's
+> `--resume` flag preserves this context by restoring the complete
+> session transcript. Combined with per-role tool restrictions via
+> `--disallowedTools` (which removes tools from the model's context
+> entirely — saving tokens on tool descriptions), `--fork-session` for
+> fusion mode, hook-based stuck prevention, and session file inspection,
+> this phase makes Ralph workers behave more like interactive Claude Code
+> sessions that a human is steering.
+>
+> **Key insights from claw-code internals (not discoverable via
+> `--help`):**
+>
+> 1. **Sessions are JSONL files** at
+>    `~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl` — one
+>    message per line, incrementally appended. Each line contains the
+>    full message structure: role, content blocks (text, tool_use,
+>    tool_result with `is_error` flag), and token usage. This means
+>    Ralph can *read* session files to see exactly what a worker tried,
+>    not just the activity log summary.
+>
+> 2. **Tool errors and permission denials are conversation messages.**
+>    When a tool fails or is denied, the reason string becomes a
+>    `tool_result` with `is_error: true` in the conversation. On resume,
+>    the model already knows what failed and why — Ralph doesn't need to
+>    reconstruct error context.
+>
+> 3. **Killing mid-tool-call leaves a partial session.** The JSONL file
+>    may have an assistant message with a `tool_use` block but no
+>    corresponding `tool_result`. The resume logic needs to handle this
+>    edge case (Claude Code appears to handle this gracefully, but Ralph
+>    should detect and log it).
+>
+> 4. **`--disallowedTools` removes tools from the API request entirely**
+>    — the model doesn't know the tool exists. This is different from
+>    blocking at execution time. It saves tokens (tool descriptions are
+>    large) and prevents the model from even attempting disallowed
+>    actions.
+>
+> 5. **Compaction uses a "direct resume" instruction** that suppresses
+>    the model's tendency to recap context. The exact pattern:
+>    `"Resume directly — do not acknowledge the summary, do not recap
+>    what was happening, and do not preface with continuation text."`
+>    Ralph should use this when injecting hints via resume.
+>
+> 6. **PreToolUse hooks fire before every tool call** with exit code 2
+>    meaning "deny". The denial message becomes the tool result. This
+>    enables catching stuck patterns *at the tool level* — denying
+>    repeated commands before they execute, rather than detecting
+>    repetition after the fact.
+>
+> 7. **`--append-system-prompt` content lands BELOW the internal
+>    `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` marker** — it does NOT benefit
+>    from prompt caching. Its value is semantic (system-level authority,
+>    cleaner separation from user messages), not caching.
+
+### Goal
+
+Make Ralph workers interactive and session-aware. A user watching a stuck
+worker should be able to select it, type guidance, and have the worker
+resume with full conversation context intact — like hitting Esc in regular
+Claude Code and typing a correction. Additionally, leverage Claude Code's
+internal architecture to prevent stuck loops at the tool level and give
+debugger agents richer context from session transcripts.
+
+### Context for Builder
+
+Claude Code stores sessions as JSONL files — one message per line,
+incrementally appended during execution. Each message includes role,
+content blocks (text, tool_use, tool_result), and usage metadata. The
+`--resume <session-id>` flag restores this full conversation context.
+The session ID is emitted in `stream-json` output via the `system/init`
+event early in the stream (before any tool calls), making it available
+for kill+resume without waiting for completion.
+
+Currently, `RunClaude()` in `runner.go` does not capture session IDs, and
+the hint system works by killing the process and injecting hints into a
+fresh prompt for a brand-new session — discarding everything Claude
+learned during execution.
+
+Claude Code's PreToolUse hook pipeline fires a shell command before every
+tool call with the tool name and input as JSON stdin. Exit code 0 allows,
+exit code 2 denies (with stdout becoming the tool result error message).
+This can be used to catch stuck patterns at the source — a hook script
+that tracks recent tool calls and denies repeats, injecting a redirect
+message that the model sees immediately.
+
+### What to Build
+
+#### 7a. Session ID Capture
+
+Modify `internal/runner/runner.go`:
+- Parse `session_id` from `stream-json` events — it first appears in the
+  `system/init` event at the start of the stream, before any tool calls
+- Add `SessionID string` to `RunClaudeResult`
+- Capture session ID as early as possible during streaming (not just from
+  the final `result` event) so it's available for mid-run kill+resume
+- Add `SessionID string` to `storystate.StoryState` for persistence
+  across iterations
+
+#### 7b. Kill + Resume Per Worker
+
+Modify `internal/worker/worker.go` and `internal/tui/model.go`:
+- New TUI action: user selects a running worker (via tab in parallel
+  mode, or the active worker in serial mode) and presses the hint key
+- TUI shows a text input overlay (reuse existing `hintInput` component)
+- On Enter: cancel the worker's context (killing the Claude process),
+  then immediately relaunch with
+  `--resume <session-id> -p "<user guidance>"`
+- Claude receives the guidance as a new user message appended to the
+  existing conversation, with full prior context (tool results, errors,
+  reasoning chain, everything it already explored)
+- The resumed process continues streaming to the same activity log
+- Append a direct-resume instruction to the hint to suppress preamble:
+  `"Resume directly from where you left off. Do not recap or acknowledge
+  this guidance — just act on it."`
+- If no session ID is available yet (first event not yet received), fall
+  back to the current kill-and-restart behavior with hint.md injection
+
+This replaces the current hint mechanism for running workers. The existing
+hint.md file-based mechanism remains as fallback for between-iteration
+hints (when no process is running to resume).
+
+**Partial session handling:** When killing a worker mid-tool-call, the
+JSONL session file may have an assistant `tool_use` block without a
+corresponding `tool_result`. Claude Code handles this gracefully on
+resume, but Ralph should detect this state (check if the last line of
+the JSONL is an assistant message) and log it for diagnostics.
+
+#### 7c. Prompt Separation with --append-system-prompt
+
+Modify `internal/runner/runner.go` `RunClaude()`:
+- Role-specific prompt template content → `--append-system-prompt` flag
+- Story-specific context (PRD, state, judge feedback, learnings)
+  → stdin as the user message
+- This separates "how to behave" (system-level authority) from "what to
+  do now" (user-level task). While `--append-system-prompt` content does
+  NOT benefit from Claude Code's internal prompt caching (it lands below
+  the `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`), system prompt instructions carry
+  higher authority than user messages in the model's attention hierarchy
+
+Update `BuildPrompt()` to return two strings: `systemAppend` (role
+template) and `userMessage` (story context), instead of a single
+monolithic prompt.
+
+#### 7d. Per-Role Tool Restrictions
+
+Modify `internal/roles/roles.go`:
+- Add `DisallowedTools []string` to `AgentConfig`
+- `--disallowedTools` removes tools from the model's context entirely
+  (confirmed from claw-code internals: tools are stripped from the API
+  request, not just blocked at execution time). This saves tokens on
+  tool descriptions AND prevents the model from attempting disallowed
+  actions.
+- Default restrictions:
+  - **Architect**: `--disallowedTools "Edit,Write,NotebookEdit"` — explore
+    and plan only, no code writing
+  - **Simplify**: `--disallowedTools "Write"` — edit existing files only,
+    no new file creation
+  - **Judge**: already runs via separate invocation, no change needed
+  - **Implementer/Debugger**: no restrictions (full tool access)
+- Wire through `RunClaude()` as CLI flags
+
+#### 7e. Fork Session for Fusion Mode
+
+Modify `internal/worker/worker.go` fusion handling:
+- When fusion mode spawns competing implementations:
+  1. Run architect once → capture session ID from `RunClaudeResult`
+  2. Fork the architect session for each fusion worker using
+     `--resume <architect-session-id> --fork-session`
+  3. Each fusion worker starts with the architect's full context
+     (plan, reasoning, codebase exploration) without re-running it
+- Saves an entire architect invocation per fusion worker and gives
+  implementers richer starting context than a cold start with plan.md
+
+#### 7f. Hook-Based Stuck Prevention
+
+Create a hook script that Ralph generates per-worker and registers via
+Claude Code's settings. This replaces the current after-the-fact stuck
+detection with prevention at the tool level:
+
+**PreToolUse hook script** (generated by Ralph into workspace):
+```bash
+#!/bin/bash
+# Ralph stuck-prevention hook
+# Tracks recent tool calls and denies repeats
+INPUT=$(cat)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name')
+TOOL_INPUT=$(echo "$INPUT" | jq -r '.tool_input_json' | head -c 200)
+KEY="${TOOL_NAME}:${TOOL_INPUT}"
+HISTORY_FILE="${RALPH_HOOK_DIR}/tool_history.txt"
+
+# Count occurrences of this exact call
+COUNT=$(grep -c "^${KEY}$" "$HISTORY_FILE" 2>/dev/null || echo 0)
+echo "$KEY" >> "$HISTORY_FILE"
+
+if [ "$COUNT" -ge 3 ]; then
+  echo "STUCK: You have attempted this exact tool call $COUNT times. Try
+a fundamentally different approach — read the error output from your
+previous attempts and address the root cause."
+  exit 2  # Deny
+fi
+exit 0  # Allow
+```
+
+**Integration:**
+- Ralph writes this script to the workspace before launching Claude
+- Configures it via `.claude/settings.json` `hooks.preToolUse` in the
+  worker's project directory
+- Set `RALPH_HOOK_DIR` environment variable pointing to worker's state
+  directory for the history file
+- Reset history file between iterations
+- The hook fires before EVERY tool call — when it denies, the denial
+  message plus the redirect text becomes the tool_result (with
+  `is_error: true`) that Claude sees immediately, allowing it to
+  self-correct without wasting a full tool execution
+
+This is fundamentally better than current stuck detection because:
+- It prevents the Nth repeated call from executing at all (saves time)
+- The redirect message is part of the conversation (Claude reasons about
+  it) rather than an external signal that requires killing the process
+- It catches repetition at the exact tool level, not via stream parsing
+
+#### 7g. Session File Inspection for Debugger Context
+
+When a worker fails or gets stuck, Ralph can read the JSONL session file
+to extract richer context for the next iteration:
+
+- Session files are at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`
+- Parse the JSONL to extract: tool calls attempted, errors encountered,
+  files read/edited, reasoning chain
+- Feed this into the debugger prompt as structured context:
+  `"Previous session attempted these tool calls: [list]. These failed:
+  [list with error messages]. The agent's reasoning was: [extracted
+  text blocks]."`
+- This is much richer than the current activity log (which is a
+  human-readable summary) — the session file contains the actual
+  conversation between Claude and its tools
+
+**Implementation:**
+- Add `parseSessionJSONL(path string)` to `internal/runner/`
+- Called by `buildDebuggerStuckContext()` when a session ID is available
+- Extract last N tool calls, any `is_error: true` results, and the
+  assistant's text blocks explaining its reasoning
+- Truncate to a reasonable size (e.g., 8k chars) before injection
+
+### Acceptance Criteria
+
+- [ ] Session ID captured from stream-json `system/init` event and
+      persisted in story state
+- [ ] User can select a running worker, type guidance, and resume it with
+      full conversation context via `--resume`
+- [ ] TUI shows hint input overlay per-worker; worker resumes on Enter
+- [ ] Resume hint includes direct-resume instruction to suppress preamble
+- [ ] Partial session state (killed mid-tool-call) detected and logged
+- [ ] Role instructions sent via `--append-system-prompt`, story context
+      via stdin
+- [ ] Architect cannot write files; simplify cannot create new files
+      (tools removed from context, not just blocked)
+- [ ] Fusion workers fork from architect session instead of running
+      architect independently
+- [ ] PreToolUse hook prevents repeated tool calls with redirect message
+- [ ] Debugger receives parsed session transcript context when available
+- [ ] Fallback to current kill-and-restart if session ID not yet captured
+- [ ] `make build` passes, existing tests pass
+
+### Estimated Scope
+
+~600-700 lines of Go code + ~30 lines of hook script. Modifications to
+runner.go (session capture, prompt separation, tool flags, JSONL parser),
+worker.go (resume logic, fusion forking, hook setup), roles.go (tool
+restrictions), tui/model.go (per-worker hint UI), storystate.go (session
+ID persistence). New hook script template in `internal/runner/` or
+`internal/workspace/`.
+
+---
+
+## Phase 8: Daemon/Client Architecture — TUI Decoupling
+
+**Impact: High | Complexity: Medium-High | Dependencies: Phase 1 (checkpoint/resume — already complete), Phase 3 (status page — already complete), Phase 7 (session management — workers can resume after TUI reconnect)**
 
 > **Added 2026-03-28.** When Ralph's TUI freezes or crashes, all workers
 > (goroutines) die with the process, losing in-progress work. The checkpoint
@@ -1920,7 +2206,7 @@ Reuses Go's `net/http` — zero new dependencies. SSE for event streaming
 
 ### What to Build
 
-#### 7a. Daemon Core (`internal/daemon/`)
+#### 8a. Daemon Core (`internal/daemon/`)
 
 Create `internal/daemon/` package:
 
@@ -1945,7 +2231,7 @@ Create `internal/daemon/` package:
 - Shared event types: `DaemonStateEvent`, `WorkerLogEvent`, `LogLineEvent`
 - JSON serialization tags
 
-#### 7b. Client Library
+#### 8b. Client Library
 
 **`client.go`** (~200 lines):
 - `DaemonClient` struct: connects to Unix socket, subscribes to SSE
@@ -1954,7 +2240,7 @@ Create `internal/daemon/` package:
 - `SendCommand(endpoint, body) error` — POST commands to daemon
 - `GetState() (DaemonState, error)` — fetch full state snapshot
 
-#### 7c. Daemon Lifecycle in main.go
+#### 8c. Daemon Lifecycle in main.go
 
 Modify `cmd/ralph/main.go`:
 - Add `--daemon` flag: run as daemon (no TUI, coordination loop + API)
@@ -1967,7 +2253,7 @@ Modify `cmd/ralph/main.go`:
 - Daemon stays alive after completion for interactive follow-up tasks,
   exits on explicit quit (`POST /api/quit` from TUI's `q`/`ctrl+c`)
 
-#### 7d. TUI Refactor
+#### 8d. TUI Refactor
 
 Modify `internal/tui/model.go`:
 - Replace `*coordinator.Coordinator` field with `*daemon.DaemonClient`
@@ -1984,7 +2270,7 @@ Modify `internal/tui/commands.go`:
 
 Move status page ownership from TUI to daemon.
 
-#### 7e. Coordinator Cleanup
+#### 8e. Coordinator Cleanup
 
 Modify `internal/coordinator/coordinator.go`:
 - Add `UpdateCh() <-chan worker.WorkerUpdate` accessor to expose the
@@ -2019,12 +2305,12 @@ Moderate modifications to `cmd/ralph/main.go`, `internal/tui/model.go`,
 
 ---
 
-## Phase 8: MCP Tool Server (Revised — Evidence-Gated)
+## Phase 9: MCP Tool Server (Revised — Evidence-Gated)
 
-**Impact: Medium | Complexity: Medium | Dependencies: Phase 5.8 (markdown memory — already complete), Phase 1 (story state — already complete)**
+**Impact: Medium | Complexity: Medium | Dependencies: Phase 5.8 (markdown memory — already complete), Phase 1 (story state — already complete), Phase 7 (session management — MCP hint tool can leverage session resume)**
 
 > **Evidence gate (2026-03-26):** Run history now tracks worker count per
-> run. Before building Phase 7, analyse `--workers 4` runs for:
+> run. Before building Phase 9, analyse `--workers 4` runs for:
 > (1) stale-context judge rejections where a sibling changed a shared file,
 > (2) DAG-miss retries — stories failing iter 1 then passing after a
 > dependency completes, (3) duplicate learnings discovered independently
@@ -2060,7 +2346,7 @@ have no way to check what happened *after* their prompt was assembled.
 
 ### What to Build
 
-#### 7a. MCP Server
+#### 9a. MCP Server
 
 Create `internal/mcp/` package implementing an MCP tool server:
 
@@ -2086,7 +2372,7 @@ ralph_report_pattern(pattern: string, category: string)
     pick up new entries on their next `BuildPrompt()` cycle.
 ```
 
-#### 7b. Server Lifecycle
+#### 9b. Server Lifecycle
 
 - Ralph starts the MCP server on a random localhost port at startup
 - Port is passed to each Claude invocation via MCP configuration
@@ -2095,7 +2381,7 @@ ralph_report_pattern(pattern: string, category: string)
 - Use a Go MCP SDK (e.g., `github.com/mark3labs/mcp-go`) to avoid
   implementing the protocol from scratch
 
-#### 7c. Claude Integration
+#### 9c. Claude Integration
 
 Modify `internal/runner/runner.go`:
 - Write a temporary MCP config file per worker that points to ralph's
@@ -2108,7 +2394,7 @@ Modify prompt templates (minimal additions):
 - Inform agents that `ralph_report_blocker` is available if they discover
   an unexpected dependency at runtime
 
-#### 7d. Blocker Coordination
+#### 9d. Blocker Coordination
 
 When an agent reports a blocker via `ralph_report_blocker`:
 - Coordinator checks if the blocking story is in progress
@@ -2135,9 +2421,9 @@ handling).
 
 ---
 
-## Phase 9: Codebase Knowledge Graph (Revised — Evidence-Gated)
+## Phase 10: Codebase Knowledge Graph (Revised — Evidence-Gated)
 
-**Impact: Medium | Complexity: Medium-High | Dependencies: Phase 8 (MCP for exposing graph queries)**
+**Impact: Medium | Complexity: Medium-High | Dependencies: Phase 9 (MCP for exposing graph queries)**
 
 > **Note:** Phase 7.5 (Activate `ralph_codebase`) was added on 2026-03-19
 > but removed the same day after audit confirmed that `ralph_codebase` was
@@ -2172,7 +2458,7 @@ this function's signature, what breaks?" The knowledge graph fills this gap.
 
 ### What to Build
 
-#### 8a. Graph Schema
+#### 10a. Graph Schema
 
 Store in SQLite (`.ralph/knowledge.db`):
 
@@ -2199,7 +2485,7 @@ Note: With Phase 5.8, the `ralph_codebase` ChromaDB collection no longer
 exists. The graph stores purely structural data — relationships that
 can't be derived from reading individual files.
 
-#### 8b. Graph Builder
+#### 10b. Graph Builder
 
 Create `internal/knowledge/` package:
 
@@ -2210,9 +2496,9 @@ Create `internal/knowledge/` package:
 - Run on first launch (full build), incrementally after story completion,
   and via `ralph knowledge rebuild` for manual refresh.
 
-#### 8c. Query Interface
+#### 10c. Query Interface
 
-Expose via MCP (Phase 7) as an additional tool:
+Expose via MCP (Phase 9) as an additional tool:
 
 ```
 ralph_get_impact_analysis(files: []string)
@@ -2239,7 +2525,7 @@ comprehension is handled natively by workers reading files with 1M context.
 
 ---
 
-## Phase 9.5: Deep Code Review Mode — Stretch Goal
+## Phase 10.5: Deep Code Review Mode — Stretch Goal
 
 **Impact: Medium-High | Complexity: Medium | Dependencies: Phase 4 (agent roles — already complete)**
 
@@ -2247,7 +2533,7 @@ comprehension is handled natively by workers reading files with 1M context.
 > (read-only review) to a tool whose core job is implementation. The
 > same capability can be achieved ad-hoc via Claude Code directly or
 > via Ralph's interactive task mode. Only build if review-mode becomes
-> a frequent workflow. The Phase 9 (knowledge graph) dependency has
+> a frequent workflow. The Phase 10 (knowledge graph) dependency has
 > been dropped — with 1M context the reviewer can read files directly.
 
 > **Added 2026-03-24.** Ralph currently only operates in "implementation mode"
@@ -2262,11 +2548,11 @@ comprehension is handled natively by workers reading files with 1M context.
 > first-class operating mode where each PRD story defines a **review focus
 > area** and the output is a structured review document.
 >
-> **Why after Phase 9:** The knowledge graph provides structural codebase
+> **Why after Phase 10:** The knowledge graph provides structural codebase
 > awareness (dependency graphs, import chains, module boundaries) that makes
 > architectural reviews significantly more useful. Without it, the reviewer
 > is limited to what it can discover via Read/Grep/Glob in a single Claude
-> session. Phase 9's impact analysis queries enable the reviewer to trace
+> session. Phase 10's impact analysis queries enable the reviewer to trace
 > ripple effects and coupling that would otherwise be invisible.
 
 ### Goal
@@ -2292,7 +2578,7 @@ richer markdown content.
 
 ### What to Build
 
-#### 8.5a. Config Flag and Role
+#### 10.5a. Config Flag and Role
 
 Add `DeepReview bool` to `internal/config/config.go`. When set:
 - Auto-disable: `JudgeEnabled = false`, `QualityReview = false`, `NoArchitect = true`
@@ -2309,7 +2595,7 @@ case RoleDeepReviewer:
     }
 ```
 
-#### 8.5b. Deep Reviewer Prompt (`prompts/deep-reviewer.md`)
+#### 10.5b. Deep Reviewer Prompt (`prompts/deep-reviewer.md`)
 
 Read-only reviewer agent instructions:
 - **Tools allowed:** Read, Grep, Glob only. MUST NOT use Write, Edit, or Bash.
@@ -2317,7 +2603,7 @@ Read-only reviewer agent instructions:
   files broadly → analyse architecture, code quality, potential bugs, tech
   debt, security, performance, testing gaps, coupling → produce structured
   review in `<review>` tags.
-- **Knowledge graph integration:** When Phase 9's knowledge graph is
+- **Knowledge graph integration:** When Phase 10's knowledge graph is
   available, query it for dependency/import context, reverse dependencies,
   and interface implementations to inform architectural analysis.
 - **Output format (inside `<review>` tags):**
@@ -2344,7 +2630,7 @@ Read-only reviewer agent instructions:
 - **Story state:** Write state.json with status "complete", update
   progress.md with review summary.
 
-#### 8.5c. Review Worker (`internal/worker/review.go`)
+#### 10.5c. Review Worker (`internal/worker/review.go`)
 
 Simplified worker function `RunReview(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate)`:
 
@@ -2360,12 +2646,12 @@ Simplified worker function `RunReview(w *Worker, cfg *config.Config, updateCh ch
 9. Send `WorkerDone` with `Passed: true`, empty `ChangeID` (no commit)
 10. No judge, no workspace cleanup
 
-#### 8.5d. Coordinator Routing
+#### 10.5d. Coordinator Routing
 
 In `coordinator.ScheduleReady()`, dispatch `worker.RunReview` instead
 of `worker.Run` when `cfg.DeepReview` is true.
 
-#### 8.5e. TUI Integration
+#### 10.5e. TUI Integration
 
 - **Serial mode:** `nextStoryMsg` dispatches `runDeepReviewCmd` instead of
   `runClaudeCmd`. Skip judge check in `claudeDoneMsg` handler.
@@ -2377,7 +2663,7 @@ of `worker.Run` when `cfg.DeepReview` is true.
   of contents.
 - **Display:** Show "Deep Review" instead of "Running" in phase labels.
 
-#### 8.5f. PRD Format for Reviews
+#### 10.5f. PRD Format for Reviews
 
 Stories define review targets rather than features:
 ```json
@@ -2405,7 +2691,7 @@ Stories define review targets rather than features:
 - [ ] Consolidated `REVIEW.md` generated at project root after all stories
 - [ ] Works in both serial and parallel (`--workers N`) modes
 - [ ] After a deep-review run, `jj diff` shows no code changes (only .ralph/ state and REVIEW.md)
-- [ ] Knowledge graph context injected into reviewer prompt when available (Phase 9)
+- [ ] Knowledge graph context injected into reviewer prompt when available (Phase 10)
 
 ### Estimated Scope
 
@@ -2416,7 +2702,7 @@ worker/coordinator pipeline.
 
 ---
 
-## Phase 10: Improved DAG Accuracy — Stretch Goal
+## Phase 11: Improved DAG Accuracy — Stretch Goal
 
 **Impact: Medium | Complexity: Low-Medium | Dependencies: None**
 
@@ -2440,17 +2726,17 @@ over-specified dependencies.
 
 ### What to Build
 
-#### 9a. Smarter DAG Analysis Prompt
+#### 11a. Smarter DAG Analysis Prompt
 
 Improve the DAG analysis prompt in `internal/dag/dag.go`:
-- Provide structural codebase context (from Phase 9 knowledge graph if
+- Provide structural codebase context (from Phase 10 knowledge graph if
   available) so the analysis has actual import/dependency
   information rather than guessing
 - Explicitly ask the model to distinguish "touches the same module" from
   "actually depends on the other story's output"
 - Include examples of over-specification and correct classification
 
-#### 9b. DAG Validation with Codebase Awareness
+#### 11b. DAG Validation with Codebase Awareness
 
 After DAG generation, validate dependencies against actual file-level
 relationships:
@@ -2458,7 +2744,7 @@ relationships:
   different files and packages, flag as likely over-specified
 - Optionally auto-remove clearly false dependencies (with logging)
 
-#### 9c. DAG Quality Tracking
+#### 11c. DAG Quality Tracking
 
 Track DAG accuracy in run history:
 - How many stories were serialized vs could have been parallel?
@@ -2471,7 +2757,7 @@ Track DAG accuracy in run history:
 - [ ] Parallel utilization improves (more stories scheduled concurrently)
 - [ ] No increase in merge conflicts from relaxed dependencies
 - [ ] DAG quality metrics tracked in run history
-- [ ] Analysis uses structural codebase context when available (Phase 9)
+- [ ] Analysis uses structural codebase context when available (Phase 10)
 
 ### Estimated Scope
 
@@ -2480,7 +2766,7 @@ tracking.
 
 ---
 
-## Phase 11: Auto-Splitting Stuck Stories — Evidence-Gated
+## Phase 12: Auto-Splitting Stuck Stories — Evidence-Gated
 
 **Impact: Medium-High | Complexity: Medium | Dependencies: Phase 5 (anti-pattern detection — already complete), Phase 4 (architect role — already complete)**
 
@@ -2588,17 +2874,19 @@ Phase 1 (Story State + Checkpoint) ✅
   │      │      │
   │      │      ├──→ Phase 5.5 (Interactive Task Mode) ✅
   │      │      │
-  │      │      └──→ Phase 11 (Auto-Split Stuck Stories) ⊘ evidence-gated
+  │      │      └──→ Phase 12 (Auto-Split Stuck Stories) ⊘ evidence-gated
   │      │
-  │      ├──→ Phase 9 (Knowledge Graph) ⊘ evidence-gated
+  │      ├──→ Phase 10 (Knowledge Graph) ⊘ evidence-gated
   │      │      │
-  │      │      ├──→ Phase 9.5 (Deep Code Review Mode) ⊘ stretch
+  │      │      ├──→ Phase 10.5 (Deep Code Review Mode) ⊘ stretch
   │      │      │
-  │      │      └──→ Phase 10 (Improved DAG Accuracy) ⊘ stretch
+  │      │      └──→ Phase 11 (Improved DAG Accuracy) ⊘ stretch
   │      │
-  │      └──→ Phase 8 (MCP Server) ⊘ evidence-gated ← depends on Phase 5.8 ✅
+  │      └──→ Phase 9 (MCP Server) ⊘ evidence-gated ← depends on Phase 5.8 ✅
   │
-  ├──→ Phase 7 (Daemon/Client Architecture) ← depends on Phase 1 ✅, Phase 3 ✅
+  ├──→ Phase 7 (Claude Code Deep Integration) ← depends on Phase 4 ✅, Phase 6 ✅
+  │      │
+  │      └──→ Phase 8 (Daemon/Client Architecture) ← depends on Phase 1 ✅, Phase 3 ✅, Phase 7
   │
   Phase 3 (Usage Tracking) ✅
   │
@@ -2623,18 +2911,20 @@ Phase 1 (Story State + Checkpoint) ✅
 | 8th   | Phase 5.7: Run History Observability ✅ | Done | Baseline metrics for model comparison |
 | 9th   | Phase 5.8: Markdown Memory ✅ | Done | Deleted ~2600 lines, removed 3 dependencies, simpler + better memory |
 | 10th  | Phase 6: Multi-Model (revised) ✅ | Done | Per-role model selection + DAG tree visualization in TUI |
-| 11th  | Phase 7: Daemon/Client Architecture | ~950 lines | TUI decoupling — workers survive TUI crash |
-| Evidence-gated | Phase 8: MCP Server | ~6-8 stories | Real-time parallel coordination — gate on worker count data |
-| Evidence-gated | Phase 9: Knowledge Graph | ~8-10 stories | Structural intelligence — gate on evidence |
-| Evidence-gated | Phase 11: Auto-Split Stuck Stories | ~5-7 stories | Gate on stuck counts over next 5-10 runs |
-| Stretch | Phase 9.5: Deep Code Review Mode | ~4-5 stories | Read-only code review via Ralph loop |
-| Stretch | Phase 10: Improved DAG Accuracy | ~3-4 stories | Prompt engineering, do incrementally |
+| 11th  | Phase 7: Claude Code Deep Integration | ~400-500 lines | Interactive workers, session resume, prompt caching, tool restrictions |
+| 12th  | Phase 8: Daemon/Client Architecture | ~950 lines | TUI decoupling — workers survive TUI crash |
+| Evidence-gated | Phase 9: MCP Server | ~6-8 stories | Real-time parallel coordination — gate on worker count data |
+| Evidence-gated | Phase 10: Knowledge Graph | ~8-10 stories | Structural intelligence — gate on evidence |
+| Evidence-gated | Phase 12: Auto-Split Stuck Stories | ~5-7 stories | Gate on stuck counts over next 5-10 runs |
+| Stretch | Phase 10.5: Deep Code Review Mode | ~4-5 stories | Read-only code review via Ralph loop |
+| Stretch | Phase 11: Improved DAG Accuracy | ~3-4 stories | Prompt engineering, do incrementally |
 | Stretch | Web Dashboard | — | Team visibility (if needed) |
 
-**Roadmap status (2026-03-28):** Phases 1-6 (plus sub-phases) are complete.
-Phase 7 (Daemon/Client Architecture) is the next implementation target.
-Remaining items are either evidence-gated (build only when data shows the
-need) or stretch goals (build when the workflow demands it).
+**Roadmap status (2026-04-01):** Phases 1-6 (plus sub-phases) are complete.
+Phase 7 (Claude Code Deep Integration) is the next implementation target,
+followed by Phase 8 (Daemon/Client Architecture). Remaining items are
+either evidence-gated (build only when data shows the need) or stretch
+goals (build when the workflow demands it).
 
 Core loop hardening improvements have been applied directly rather than
 as a separate phase:
@@ -2653,8 +2943,8 @@ as a separate phase:
 - **Worker count tracking** — run history records `Workers` field per run
   for future parallel coordination analysis
 
-Run history now records worker count per run. Phase 8 (MCP Server),
-Phase 9 (Knowledge Graph), and Phase 11 (Auto-Split) are evidence-gated:
+Run history now records worker count per run. Phase 9 (MCP Server),
+Phase 10 (Knowledge Graph), and Phase 12 (Auto-Split) are evidence-gated:
 analyse run history for stale-context failures, DAG-miss retries, and
 stuck counts to determine whether they're worth the investment.
 
