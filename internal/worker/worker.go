@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ohjann/ralphplusplus/internal/config"
 	"github.com/ohjann/ralphplusplus/internal/costs"
@@ -69,6 +70,7 @@ type Worker struct {
 	ArchitectSessionID string // if set, skip architect and fork from this session
 	ResumeHint         string // if set after cancel, resume with this hint instead of treating as failure
 	IsResumed          bool   // true when current run is a resume (for logging/diagnostics)
+	JJMu           *sync.Mutex // serialises jj operations against the main repo (shared with coordinator)
 	Ctx            context.Context
 	Cancel         context.CancelFunc
 }
@@ -208,9 +210,15 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 		}
 	}
 
-	// 1. Create workspace
+	// 1. Create workspace (serialised via JJMu to prevent concurrent jj sibling operations)
 	send(WorkerSetup, "", nil, false, "")
+	if w.JJMu != nil {
+		w.JJMu.Lock()
+	}
 	ws, err := workspace.Create(w.Ctx, cfg.ProjectDir, w.StoryID, cfg.WorkspaceBase, w.FusionSuffix)
+	if w.JJMu != nil {
+		w.JJMu.Unlock()
+	}
 	if err != nil {
 		send(WorkerFailed, "", fmt.Errorf("workspace create: %w", err), false, "")
 		return

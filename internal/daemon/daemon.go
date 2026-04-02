@@ -22,7 +22,6 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/notify"
 	"github.com/ohjann/ralphplusplus/internal/statuspage"
 	"github.com/ohjann/ralphplusplus/internal/worker"
-	"github.com/ohjann/ralphplusplus/internal/workspace"
 )
 
 // Daemon owns the coordinator and runs the coordination event loop,
@@ -236,7 +235,7 @@ func (d *Daemon) handleWorkerUpdate(u worker.WorkerUpdate, mergeCh chan coordina
 			go d.mergeBack(u, mergeCh)
 		} else {
 			if u.ChangeID != "" {
-				_ = workspace.AbandonChange(d.ctx, d.Cfg.ProjectDir, u.ChangeID)
+				d.Coord.AbandonChange(d.ctx, u.ChangeID)
 			}
 			d.Coord.PreserveFailedLogs(u.StoryID, u.WorkerID)
 			go d.Coord.CleanupWorker(d.ctx, u.WorkerID)
@@ -283,7 +282,7 @@ func (d *Daemon) handleMergeComplete(msg coordinator.MergeCompleteMsg) {
 
 	if msg.Err != nil {
 		if msg.ChangeID != "" {
-			_ = workspace.AbandonChange(d.ctx, d.Cfg.ProjectDir, msg.ChangeID)
+			d.Coord.AbandonChange(d.ctx, msg.ChangeID)
 		}
 		debuglog.Log("daemon: merge failed (%s): %v", msg.StoryID, msg.Err)
 		d.broadcastLogLine(fmt.Sprintf("Merge failed (%s): %v", msg.StoryID, msg.Err))
@@ -318,10 +317,10 @@ func (d *Daemon) handleFusionComplete(msg coordinator.FusionCompareDoneMsg, merg
 		d.broadcastLogLine(fmt.Sprintf("Fusion %s failed: %s", msg.StoryID, reason))
 
 		for _, cid := range msg.LoserChangeIDs {
-			_ = workspace.AbandonChange(d.ctx, d.Cfg.ProjectDir, cid)
+			d.Coord.AbandonChange(d.ctx, cid)
 		}
 		if msg.WinnerChangeID != "" {
-			_ = workspace.AbandonChange(d.ctx, d.Cfg.ProjectDir, msg.WinnerChangeID)
+			d.Coord.AbandonChange(d.ctx, msg.WinnerChangeID)
 		}
 		for _, wid := range msg.LoserWorkerIDs {
 			go d.Coord.CleanupWorker(d.ctx, wid)
@@ -333,7 +332,7 @@ func (d *Daemon) handleFusionComplete(msg coordinator.FusionCompareDoneMsg, merg
 		d.broadcastLogLine(fmt.Sprintf("Fusion %s: winner worker %d — %s", msg.StoryID, msg.WinnerWorkerID, msg.Reason))
 
 		for i, cid := range msg.LoserChangeIDs {
-			_ = workspace.AbandonChange(d.ctx, d.Cfg.ProjectDir, cid)
+			d.Coord.AbandonChange(d.ctx, cid)
 			go d.Coord.CleanupWorker(d.ctx, msg.LoserWorkerIDs[i])
 		}
 		d.Coord.CompleteFusion(msg.StoryID, true)

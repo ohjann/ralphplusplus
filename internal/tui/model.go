@@ -35,7 +35,6 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/runner"
 	"github.com/ohjann/ralphplusplus/internal/storystate"
 	"github.com/ohjann/ralphplusplus/internal/worker"
-	"github.com/ohjann/ralphplusplus/internal/workspace"
 )
 
 const (
@@ -1956,7 +1955,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Abandon the committed change so it doesn't leave an orphaned
 				// side branch in the jj history.
 				if u.ChangeID != "" {
-					_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, u.ChangeID)
+					m.coord.AbandonChange(m.ctx, u.ChangeID)
 				}
 				// Preserve activity log for debugging before workspace is destroyed
 				m.coord.PreserveFailedLogs(u.StoryID, u.WorkerID)
@@ -2031,10 +2030,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prevClaudeLen = len(m.claudeContent)
 			// Abandon all change IDs
 			for _, cid := range msg.LoserChangeIDs {
-				_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, cid)
+				m.coord.AbandonChange(m.ctx, cid)
 			}
 			if msg.WinnerChangeID != "" {
-				_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, msg.WinnerChangeID)
+				m.coord.AbandonChange(m.ctx, msg.WinnerChangeID)
 			}
 			// Clean up all fusion workers
 			for _, wid := range msg.LoserWorkerIDs {
@@ -2049,7 +2048,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prevClaudeLen = len(m.claudeContent)
 			// Abandon losers
 			for i, cid := range msg.LoserChangeIDs {
-				_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, cid)
+				m.coord.AbandonChange(m.ctx, cid)
 				go m.coord.CleanupWorker(m.ctx, msg.LoserWorkerIDs[i])
 			}
 			// Merge winner
@@ -2072,7 +2071,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			// Abandon the change so it doesn't leave an orphaned side branch.
 			if msg.ChangeID != "" {
-				_ = workspace.AbandonChange(m.ctx, m.cfg.ProjectDir, msg.ChangeID)
+				m.coord.AbandonChange(m.ctx, msg.ChangeID)
 			}
 			m.claudeContent += "\n" + tsLog("── Merge failed (%s): %v ──\n", msg.StoryID, msg.Err)
 			m.claudeVP.SetContent(m.claudeContent)

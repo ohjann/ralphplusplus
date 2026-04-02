@@ -53,7 +53,7 @@ type Coordinator struct {
 	updateCh   chan worker.WorkerUpdate
 
 	mu              sync.Mutex
-	mergeMu         sync.Mutex // serialises MergeAndSync so jj rebase operations never overlap
+	jjMu            sync.Mutex // serialises all jj operations against the main repo (workspace create/destroy, merge)
 	paused          bool       // true when paused due to usage limit
 	workers         map[worker.WorkerID]*worker.Worker
 	completed       map[string]bool
@@ -235,6 +235,7 @@ func (c *Coordinator) spawnWorkerLocked(ctx context.Context, storyID string, sto
 		State:        worker.WorkerIdle,
 		Iteration:    int(c.nextID),
 		FusionSuffix: fusionSuffix,
+		JJMu:         &c.jjMu,
 		Ctx:          wCtx,
 		Cancel:       wCancel,
 	}
@@ -301,14 +302,18 @@ func (c *Coordinator) runFusionArchitectThenSpawn(ctx context.Context, storyID s
 // runSharedArchitect creates a temporary workspace, runs the architect phase,
 // and returns the captured session ID. Returns empty string on any failure.
 func (c *Coordinator) runSharedArchitect(ctx context.Context, storyID string) string {
+	c.jjMu.Lock()
 	ws, err := workspace.Create(ctx, c.cfg.ProjectDir, storyID, c.cfg.WorkspaceBase, "-arch")
+	c.jjMu.Unlock()
 	if err != nil {
 		debuglog.Log("fusion: architect workspace create failed for %s: %v", storyID, err)
 		return ""
 	}
 	defer func() {
 		wsName := workspace.WorkspaceName(storyID) + "-arch"
+		c.jjMu.Lock()
 		_ = workspace.Destroy(ctx, c.cfg.ProjectDir, wsName, ws.Dir)
+		c.jjMu.Unlock()
 	}()
 
 	if err := workspace.CopyState(c.cfg.ProjectDir, ws.Dir, storyID); err != nil {
@@ -493,16 +498,16 @@ func (c *Coordinator) writeCheckpointLocked() {
 // If the rebase produces conflicts, it runs Claude to resolve them before advancing.
 // Returns true if conflicts were resolved during the merge.
 //
-// This method is serialised via mergeMu so that concurrent goroutines
-// cannot run overlapping jj rebase operations, which would create divergent
-// commits and conflicts in the history.
+// This method is serialised via jjMu so that concurrent goroutines
+// cannot run overlapping jj operations, which would create divergent
+// sibling operations and corrupt the working copy state.
 func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (conflictsResolved bool, err error) {
 	// Serialise all merge-back operations. Multiple workers can finish around
 	// the same time and the caller dispatches each merge as a concurrent
 	// goroutine. Without this lock, two rebases would both target the
 	// same @- and create divergent sibling commits instead of a linear chain.
-	c.mergeMu.Lock()
-	defer c.mergeMu.Unlock()
+	c.jjMu.Lock()
+	defer c.jjMu.Unlock()
 
 	c.mu.Lock()
 	w, ok := c.workers[u.WorkerID]
@@ -701,7 +706,17 @@ func (c *Coordinator) CleanupWorker(ctx context.Context, workerID worker.WorkerI
 		return
 	}
 
+	c.jjMu.Lock()
 	_ = workspace.Destroy(ctx, c.cfg.ProjectDir, w.WorkspaceName, w.Workspace)
+	c.jjMu.Unlock()
+}
+
+// AbandonChange serialises jj abandon through jjMu to prevent concurrent
+// jj operations from creating sibling operations.
+func (c *Coordinator) AbandonChange(ctx context.Context, changeID string) {
+	c.jjMu.Lock()
+	_ = workspace.AbandonChange(ctx, c.cfg.ProjectDir, changeID)
+	c.jjMu.Unlock()
 }
 
 // PreserveFailedLogs copies the worker's activity log to the main project's
@@ -865,7 +880,9 @@ func (c *Coordinator) CleanupAll(ctx context.Context) {
 
 	for _, w := range workers {
 		if w.Workspace != "" {
+			c.jjMu.Lock()
 			_ = workspace.Destroy(ctx, c.cfg.ProjectDir, w.WorkspaceName, w.Workspace)
+			c.jjMu.Unlock()
 		}
 	}
 }
