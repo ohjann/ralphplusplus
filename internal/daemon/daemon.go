@@ -42,8 +42,8 @@ type Daemon struct {
 	sseMu      sync.Mutex
 	sseClients []chan DaemonEvent
 
-	// HTTP mux for the Unix socket API (registered by the HTTP layer in P8-004)
-	Mux *HTTPMux
+	// HTTP API server over Unix socket
+	apiServer *APIServer
 
 	// Lifecycle
 	ctx        context.Context
@@ -56,9 +56,6 @@ type Daemon struct {
 	totalStories     int
 	completedStories int
 }
-
-// HTTPMux is a placeholder for the HTTP mux that will be implemented in P8-004.
-type HTTPMux struct{}
 
 // DaemonOpts holds optional configuration for the daemon.
 type DaemonOpts struct {
@@ -98,6 +95,15 @@ func (d *Daemon) Run() error {
 
 	d.installSignalHandler()
 	d.startStatusPage()
+
+	// Start the HTTP API over Unix socket
+	apiServer, err := d.StartAPI()
+	if err != nil {
+		debuglog.Log("daemon: failed to start API server: %v", err)
+		// Non-fatal — daemon can still operate without the API
+	} else {
+		d.apiServer = apiServer
+	}
 
 	// Initial scheduling
 	d.Coord.ScheduleReady(d.ctx)
@@ -561,6 +567,11 @@ func (d *Daemon) cleanup() {
 	if d.Coord != nil {
 		d.Coord.CancelAll()
 		d.Coord.CleanupAll(context.Background())
+	}
+
+	// Stop API server
+	if d.apiServer != nil {
+		_ = d.apiServer.Stop(context.Background())
 	}
 
 	// Stop status page
