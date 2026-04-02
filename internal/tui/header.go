@@ -46,7 +46,7 @@ func renderHeader(m *Model, width int) string {
 	progressBlock := fmt.Sprintf("  %s %s", bar, styleMuted.Render(storiesLabel))
 
 	elapsed := time.Since(m.startTime).Truncate(time.Second)
-	elapsedBlock := fmt.Sprintf("⏱ %s", formatDuration(elapsed))
+	elapsedBlock := fmt.Sprintf("⏱ %s", costs.FormatDuration(elapsed))
 
 	// Show rate limit reset time if available, otherwise show cost or iteration count
 	var costBlock string
@@ -377,18 +377,6 @@ func renderPulseLine(width int, fadeRight bool, p float64) string {
 	return sb.String()
 }
 
-func formatDuration(d time.Duration) string {
-	h := int(d.Hours())
-	m := int(d.Minutes()) % 60
-	s := int(d.Seconds()) % 60
-	if h > 0 {
-		return fmt.Sprintf("%dh %02dm %02ds", h, m, s)
-	}
-	if m > 0 {
-		return fmt.Sprintf("%dm %02ds", m, s)
-	}
-	return fmt.Sprintf("%ds", s)
-}
 
 // rateLimitUsagePercent computes what percentage of the rate limit window has elapsed.
 func rateLimitUsagePercent(info *costs.RateLimitInfo) int {

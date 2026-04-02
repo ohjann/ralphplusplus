@@ -128,7 +128,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Reconnecting to running session...")
 	case daemonStale:
 		// Clean up stale files and start fresh
-		_ = os.Remove(sockPath)
+		if err := os.Remove(sockPath); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "Warning: could not remove stale socket: %v\n", err)
+		}
 		_ = os.Remove(pidPath)
 		if err := forkDaemon(cfg, sockPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Error starting daemon: %v\n", err)
@@ -252,20 +254,19 @@ func forkDaemon(cfg *config.Config, sockPath string) error {
 	}()
 
 	// Wait up to 5 seconds for the socket to appear and respond
+	pollClient := &http.Client{
+		Timeout: 1 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", sockPath)
+			},
+		},
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
 		if _, err := os.Stat(sockPath); err == nil {
-			// Socket file exists — try connecting
-			client := &http.Client{
-				Timeout: 1 * time.Second,
-				Transport: &http.Transport{
-					DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-						return net.Dial("unix", sockPath)
-					},
-				},
-			}
-			resp, err := client.Get("http://daemon/api/state")
+			resp, err := pollClient.Get("http://daemon/api/state")
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode == http.StatusOK {
@@ -328,33 +329,7 @@ func runDaemonMode(cfg *config.Config) {
 	}
 
 	// Build DAG — use PRD-provided deps if available, else analyze
-	var storyDAG *dag.DAG
-	if p.HasExplicitDependencies() {
-		storyDAG = dag.FromPRD(incomplete)
-		ids := make([]string, len(incomplete))
-		for i, s := range incomplete {
-			ids[i] = s.ID
-		}
-		if err := storyDAG.Validate(ids); err != nil {
-			debuglog.Log("daemon: PRD deps invalid (%v), using linear fallback", err)
-			storyDAG = dag.LinearFallback(incomplete)
-		}
-	} else {
-		ctx := context.Background()
-		var analyzeErr error
-		storyDAG, analyzeErr = dag.Analyze(ctx, cfg.ProjectDir, incomplete, cfg.UtilityModel)
-		if analyzeErr != nil {
-			storyDAG = dag.LinearFallback(incomplete)
-		} else {
-			ids := make([]string, len(incomplete))
-			for i, s := range incomplete {
-				ids[i] = s.ID
-			}
-			if err := storyDAG.Validate(ids); err != nil {
-				storyDAG = dag.LinearFallback(incomplete)
-			}
-		}
-	}
+	storyDAG := dag.BuildDAG(context.Background(), cfg.ProjectDir, p, incomplete, cfg.UtilityModel)
 
 	cfg.ResolveAutoWorkers(len(incomplete))
 

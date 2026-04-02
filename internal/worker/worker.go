@@ -126,11 +126,6 @@ func shouldRunArchitect(storyID string, iteration int, workspaceDir string, p *p
 	return true
 }
 
-// accumulateUsage merges token usage from two runs, summing token counts.
-func accumulateUsage(a, b *costs.TokenUsage) *costs.TokenUsage {
-	return costs.CombineUsage(a, b)
-}
-
 // ResolveModel determines the model to use for a given role by applying the
 // override precedence: config role-specific override > config global override > role default.
 func ResolveModel(role roles.Role, cfg *config.Config) string {
@@ -344,7 +339,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	}
 	implResult, err := runner.RunClaude(w.Ctx, ws.Dir, implParts.UserMessage, logPath, implOpts)
 	if implResult != nil {
-		claudeUsage = accumulateUsage(claudeUsage, implResult.TokenUsage)
+		claudeUsage = costs.CombineUsage(claudeUsage, implResult.TokenUsage)
 		if implResult.RateLimitInfo != nil {
 			latestRateLimit = implResult.RateLimitInfo
 		}
@@ -398,7 +393,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 						ResumeSessionID: w.SessionID,
 					})
 					if resumeResult != nil {
-						claudeUsage = accumulateUsage(claudeUsage, resumeResult.TokenUsage)
+						claudeUsage = costs.CombineUsage(claudeUsage, resumeResult.TokenUsage)
 						if resumeResult.RateLimitInfo != nil {
 							latestRateLimit = resumeResult.RateLimitInfo
 						}
@@ -467,7 +462,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 				SystemAppend: simplifyParts.SystemAppend,
 			})
 			if simplifyResult != nil {
-				claudeUsage = accumulateUsage(claudeUsage, simplifyResult.TokenUsage)
+				claudeUsage = costs.CombineUsage(claudeUsage, simplifyResult.TokenUsage)
 				if simplifyResult.RateLimitInfo != nil {
 					latestRateLimit = simplifyResult.RateLimitInfo
 				}

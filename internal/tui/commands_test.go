@@ -104,7 +104,7 @@ func TestCombineTokenUsage(t *testing.T) {
 		DurationMS:   2000,
 	}
 
-	result := combineTokenUsage(a, b)
+	result := costs.CombineUsage(a, b)
 	if result.InputTokens != 400 {
 		t.Errorf("InputTokens = %d, want 400", result.InputTokens)
 	}
@@ -122,14 +122,14 @@ func TestCombineTokenUsage(t *testing.T) {
 	}
 
 	// Test nil handling
-	if combineTokenUsage(nil, b) != b {
-		t.Error("combineTokenUsage(nil, b) should return b")
+	if costs.CombineUsage(nil, b) != b {
+		t.Error("costs.CombineUsage(nil, b) should return b")
 	}
-	if combineTokenUsage(a, nil) != a {
-		t.Error("combineTokenUsage(a, nil) should return a")
+	if costs.CombineUsage(a, nil) != a {
+		t.Error("costs.CombineUsage(a, nil) should return a")
 	}
-	if combineTokenUsage(nil, nil) != nil {
-		t.Error("combineTokenUsage(nil, nil) should return nil")
+	if costs.CombineUsage(nil, nil) != nil {
+		t.Error("costs.CombineUsage(nil, nil) should return nil")
 	}
 }
 

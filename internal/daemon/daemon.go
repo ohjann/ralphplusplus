@@ -331,9 +331,11 @@ func (d *Daemon) handleFusionComplete(msg coordinator.FusionCompareDoneMsg, merg
 		debuglog.Log("daemon: fusion %s: winner selected (worker %d) — %s", msg.StoryID, msg.WinnerWorkerID, msg.Reason)
 		d.broadcastLogLine(fmt.Sprintf("Fusion %s: winner worker %d — %s", msg.StoryID, msg.WinnerWorkerID, msg.Reason))
 
-		for i, cid := range msg.LoserChangeIDs {
+		for _, cid := range msg.LoserChangeIDs {
 			d.Coord.AbandonChange(d.ctx, cid)
-			go d.Coord.CleanupWorker(d.ctx, msg.LoserWorkerIDs[i])
+		}
+		for _, wid := range msg.LoserWorkerIDs {
+			go d.Coord.CleanupWorker(d.ctx, wid)
 		}
 		d.Coord.CompleteFusion(msg.StoryID, true)
 		d.notifyStoryComplete(msg.StoryID)
@@ -395,103 +397,32 @@ func (d *Daemon) mergeBack(u worker.WorkerUpdate, mergeCh chan coordinator.Merge
 // fusionCompare runs the fusion comparison and sends the result to fusionCh.
 func (d *Daemon) fusionCompare(storyID string, fg *fusion.FusionGroup, fusionCh chan coordinator.FusionCompareDoneMsg) {
 	story := d.Coord.GetStory(storyID)
-	if story == nil {
-		fusionCh <- coordinator.FusionCompareDoneMsg{
-			StoryID: storyID,
-			Err:     fmt.Errorf("story %s not found", storyID),
-		}
-		return
-	}
-
-	passing := fg.PassingResults()
-	if len(passing) == 0 {
-		fusionCh <- coordinator.FusionCompareDoneMsg{
-			StoryID: storyID,
-			Passed:  false,
-		}
-		return
-	}
-
-	// Single winner — no comparison needed
-	if len(passing) == 1 {
-		var loserIDs []worker.WorkerID
-		var loserChangeIDs []string
-		for _, r := range fg.Results {
-			if r.WorkerID != passing[0].WorkerID {
-				loserIDs = append(loserIDs, r.WorkerID)
-				if r.ChangeID != "" {
-					loserChangeIDs = append(loserChangeIDs, r.ChangeID)
-				}
-			}
-		}
-		fusionCh <- coordinator.FusionCompareDoneMsg{
-			StoryID:        storyID,
-			WinnerWorkerID: passing[0].WorkerID,
-			WinnerChangeID: passing[0].ChangeID,
-			LoserWorkerIDs: loserIDs,
-			LoserChangeIDs: loserChangeIDs,
-			Reason:         "only passing implementation",
-			Passed:         true,
-		}
-		return
-	}
-
-	// Multiple passed — get diffs and run comparison judge
-	var candidates []judge.CompareCandidate
 	workers := d.Coord.Workers()
-	for i, r := range passing {
-		w := workers[r.WorkerID]
+
+	getDiff := func(wID worker.WorkerID) (string, error) {
+		w := workers[wID]
 		if w == nil || w.Workspace == "" {
-			continue
+			return "", fmt.Errorf("worker %d has no workspace", wID)
 		}
-		diff, err := rexec.JJDiff(d.ctx, w.Workspace, w.BaseChangeID, r.ChangeID)
-		if err != nil {
-			debuglog.Log("daemon: fusion diff failed for worker %d: %v", r.WorkerID, err)
-			continue
-		}
-		candidates = append(candidates, judge.CompareCandidate{
-			Index:    i,
-			ChangeID: r.ChangeID,
-			Diff:     diff,
-		})
-	}
-
-	if len(candidates) == 0 {
-		fusionCh <- coordinator.FusionCompareDoneMsg{
-			StoryID: storyID,
-			Err:     fmt.Errorf("could not extract diffs from any candidate"),
-		}
-		return
-	}
-
-	result, err := judge.RunComparison(d.ctx, story, candidates)
-	if err != nil {
-		fusionCh <- coordinator.FusionCompareDoneMsg{
-			StoryID: storyID,
-			Err:     err,
-		}
-		return
-	}
-
-	winnerPassing := passing[result.WinnerIndex]
-	var loserIDs []worker.WorkerID
-	var loserChangeIDs []string
-	for _, r := range fg.Results {
-		if r.WorkerID != winnerPassing.WorkerID {
-			loserIDs = append(loserIDs, r.WorkerID)
-			if r.ChangeID != "" {
-				loserChangeIDs = append(loserChangeIDs, r.ChangeID)
+		// Find the change ID from the fusion result
+		for _, r := range fg.Results {
+			if r.WorkerID == wID {
+				return rexec.JJDiff(d.ctx, w.Workspace, w.BaseChangeID, r.ChangeID)
 			}
 		}
+		return "", fmt.Errorf("worker %d not in fusion group", wID)
 	}
+
+	cr := fusion.RunCompare(d.ctx, story, fg, getDiff)
 	fusionCh <- coordinator.FusionCompareDoneMsg{
 		StoryID:        storyID,
-		WinnerWorkerID: winnerPassing.WorkerID,
-		WinnerChangeID: winnerPassing.ChangeID,
-		LoserWorkerIDs: loserIDs,
-		LoserChangeIDs: loserChangeIDs,
-		Reason:         result.Reason,
-		Passed:         true,
+		WinnerWorkerID: cr.WinnerWorkerID,
+		WinnerChangeID: cr.WinnerChangeID,
+		LoserWorkerIDs: cr.LoserWorkerIDs,
+		LoserChangeIDs: cr.LoserChangeIDs,
+		Reason:         cr.Reason,
+		Passed:         cr.Passed,
+		Err:            cr.Err,
 	}
 }
 
@@ -512,10 +443,14 @@ func (d *Daemon) notifyStoryComplete(storyID string) {
 
 // broadcastLogLine sends a log line event to all SSE subscribers.
 func (d *Daemon) broadcastLogLine(line string) {
-	data, _ := json.Marshal(LogLineEvent{
+	data, err := json.Marshal(LogLineEvent{
 		Line:      line,
 		Timestamp: time.Now(),
 	})
+	if err != nil {
+		debuglog.Log("daemon: broadcastLogLine marshal error: %v", err)
+		return
+	}
 	d.broadcast(DaemonEvent{
 		Type: EventLogLine,
 		Data: data,
@@ -524,11 +459,15 @@ func (d *Daemon) broadcastLogLine(line string) {
 
 // broadcastMergeResult sends a merge result event to all SSE subscribers.
 func (d *Daemon) broadcastMergeResult(storyID string, success bool, errMsg string) {
-	data, _ := json.Marshal(MergeResultEvent{
+	data, err := json.Marshal(MergeResultEvent{
 		StoryID: storyID,
 		Success: success,
 		Error:   errMsg,
 	})
+	if err != nil {
+		debuglog.Log("daemon: broadcastMergeResult marshal error: %v", err)
+		return
+	}
 	d.broadcast(DaemonEvent{
 		Type: EventMergeResult,
 		Data: data,
@@ -543,7 +482,7 @@ func (d *Daemon) writePIDFile() error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(d.pidFile, []byte(strconv.Itoa(os.Getpid())), 0o644)
+	return os.WriteFile(d.pidFile, []byte(strconv.Itoa(os.Getpid())), 0o600)
 }
 
 // installSignalHandler installs SIGTERM/SIGINT handlers for graceful shutdown.
@@ -634,7 +573,7 @@ func (d *Daemon) buildStatusState() statuspage.StatusState {
 	state := statuspage.StatusState{
 		Phase:       "parallel",
 		PhaseIcon:   "⫘",
-		RunDuration: formatDuration(elapsed),
+		RunDuration: costs.FormatDuration(elapsed),
 		Running:     d.Coord.ActiveCount() > 0,
 		Version:     d.Version,
 		Completed:   d.Coord.CompletedCount(),
@@ -660,16 +599,3 @@ func (d *Daemon) buildStatusState() statuspage.StatusState {
 	return state
 }
 
-// formatDuration formats a duration as "Xh Ym Zs" or shorter forms.
-func formatDuration(dur time.Duration) string {
-	h := int(dur.Hours())
-	m := int(dur.Minutes()) % 60
-	s := int(dur.Seconds()) % 60
-	if h > 0 {
-		return fmt.Sprintf("%dh %dm %ds", h, m, s)
-	}
-	if m > 0 {
-		return fmt.Sprintf("%dm %ds", m, s)
-	}
-	return fmt.Sprintf("%ds", s)
-}

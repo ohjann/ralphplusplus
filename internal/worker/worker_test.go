@@ -126,7 +126,7 @@ func TestAccumulateUsage(t *testing.T) {
 			DurationMS:   2000,
 		}
 
-		result := accumulateUsage(a, b)
+		result := costs.CombineUsage(a, b)
 		if result.InputTokens != 300 {
 			t.Errorf("InputTokens = %d, want 300", result.InputTokens)
 		}
@@ -152,7 +152,7 @@ func TestAccumulateUsage(t *testing.T) {
 
 	t.Run("first nil", func(t *testing.T) {
 		b := &costs.TokenUsage{InputTokens: 100}
-		result := accumulateUsage(nil, b)
+		result := costs.CombineUsage(nil, b)
 		if result != b {
 			t.Error("expected b returned when a is nil")
 		}
@@ -160,14 +160,14 @@ func TestAccumulateUsage(t *testing.T) {
 
 	t.Run("second nil", func(t *testing.T) {
 		a := &costs.TokenUsage{InputTokens: 100}
-		result := accumulateUsage(a, nil)
+		result := costs.CombineUsage(a, nil)
 		if result != a {
 			t.Error("expected a returned when b is nil")
 		}
 	})
 
 	t.Run("both nil", func(t *testing.T) {
-		result := accumulateUsage(nil, nil)
+		result := costs.CombineUsage(nil, nil)
 		if result != nil {
 			t.Error("expected nil when both are nil")
 		}
@@ -198,7 +198,7 @@ func TestAccumulateUsageDifferentModels(t *testing.T) {
 		Model:       "claude-sonnet",
 		Provider:    "claude",
 	}
-	result := accumulateUsage(a, b)
+	result := costs.CombineUsage(a, b)
 	if result.Model != "claude-sonnet" {
 		t.Errorf("Model = %s, want claude-sonnet (latest phase model)", result.Model)
 	}
@@ -213,7 +213,7 @@ func TestAccumulateUsageEmptyModelB(t *testing.T) {
 		InputTokens: 200,
 		Model:       "",
 	}
-	result := accumulateUsage(a, b)
+	result := costs.CombineUsage(a, b)
 	if result.Model != "claude-opus" {
 		t.Errorf("Model = %s, want claude-opus (fallback to a when b is empty)", result.Model)
 	}

@@ -325,11 +325,6 @@ func needsArchitect(projectDir, storyID string, story *prd.UserStory) bool {
 	return !roles.ShouldSkipArchitect(storyID, wordCount)
 }
 
-// combineTokenUsage merges two token usage values, summing all fields.
-func combineTokenUsage(a, b *costs.TokenUsage) *costs.TokenUsage {
-	return costs.CombineUsage(a, b)
-}
-
 func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, iteration int) tea.Cmd {
 	return safeCmd(func() tea.Msg {
 		p, err := prd.Load(cfg.PRDFile)
@@ -407,7 +402,7 @@ func runClaudeCmd(ctx context.Context, cfg *config.Config, storyID string, itera
 		})
 
 		if result != nil {
-			totalUsage = combineTokenUsage(totalUsage, result.TokenUsage)
+			totalUsage = costs.CombineUsage(totalUsage, result.TokenUsage)
 			if result.RateLimitInfo != nil {
 				latestRateLimit = result.RateLimitInfo
 			}
@@ -513,7 +508,6 @@ func dagAnalyzeCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
 			return coordinator.DAGAnalyzedMsg{Err: err}
 		}
 
-		// Only analyze incomplete stories
 		var incomplete []prd.UserStory
 		for _, s := range p.UserStories {
 			if !s.Passes {
@@ -525,38 +519,7 @@ func dagAnalyzeCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
 			return coordinator.DAGAnalyzedMsg{Err: fmt.Errorf("no incomplete stories")}
 		}
 
-		// Use PRD-provided dependencies if available, skipping the Claude analysis call
-		if p.HasExplicitDependencies() {
-			debuglog.Log("dagAnalyze: using PRD-provided dependsOn fields (skipping Claude analysis)")
-			d := dag.FromPRD(incomplete)
-
-			ids := make([]string, len(incomplete))
-			for i, s := range incomplete {
-				ids[i] = s.ID
-			}
-			if err := d.Validate(ids); err != nil {
-				debuglog.Log("dagAnalyze: PRD dependencies invalid (%v), falling back to Claude analysis", err)
-			} else {
-				return coordinator.DAGAnalyzedMsg{DAG: d}
-			}
-		}
-
-		d, err := dag.Analyze(ctx, cfg.ProjectDir, incomplete, cfg.UtilityModel)
-		if err != nil {
-			// Fallback to linear
-			d = dag.LinearFallback(incomplete)
-			return coordinator.DAGAnalyzedMsg{DAG: d}
-		}
-
-		// Validate
-		ids := make([]string, len(incomplete))
-		for i, s := range incomplete {
-			ids[i] = s.ID
-		}
-		if err := d.Validate(ids); err != nil {
-			d = dag.LinearFallback(incomplete)
-		}
-
+		d := dag.BuildDAG(ctx, cfg.ProjectDir, p, incomplete, cfg.UtilityModel)
 		return coordinator.DAGAnalyzedMsg{DAG: d}
 	})
 }
@@ -567,101 +530,31 @@ func dagAnalyzeCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
 func fusionCompareCmd(ctx context.Context, coord *coordinator.Coordinator, storyID string, fg *fusion.FusionGroup) tea.Cmd {
 	return safeCmd(func() tea.Msg {
 		story := coord.GetStory(storyID)
-		if story == nil {
-			return coordinator.FusionCompareDoneMsg{
-				StoryID: storyID,
-				Err:     fmt.Errorf("story %s not found", storyID),
-			}
-		}
+		workers := coord.Workers()
 
-		passing := fg.PassingResults()
-		if len(passing) == 0 {
-			return coordinator.FusionCompareDoneMsg{
-				StoryID: storyID,
-				Passed:  false,
-			}
-		}
-
-		// If only one passed, it wins automatically
-		if len(passing) == 1 {
-			var loserIDs []worker.WorkerID
-			var loserChangeIDs []string
-			for _, r := range fg.Results {
-				if r.WorkerID != passing[0].WorkerID {
-					loserIDs = append(loserIDs, r.WorkerID)
-					if r.ChangeID != "" {
-						loserChangeIDs = append(loserChangeIDs, r.ChangeID)
-					}
-				}
-			}
-			return coordinator.FusionCompareDoneMsg{
-				StoryID:        storyID,
-				WinnerWorkerID: passing[0].WorkerID,
-				WinnerChangeID: passing[0].ChangeID,
-				LoserWorkerIDs: loserIDs,
-				LoserChangeIDs: loserChangeIDs,
-				Reason:         "only passing implementation",
-				Passed:         true,
-			}
-		}
-
-		// Multiple passed — get diffs and run comparison judge
-		var candidates []judge.CompareCandidate
-		for i, r := range passing {
-			// Get diff from the worker's workspace
-			w := coord.Workers()[r.WorkerID]
+		getDiff := func(wID worker.WorkerID) (string, error) {
+			w := workers[wID]
 			if w == nil || w.Workspace == "" {
-				continue
+				return "", fmt.Errorf("worker %d has no workspace", wID)
 			}
-			diff, err := rexec.JJDiff(ctx, w.Workspace, w.BaseChangeID, r.ChangeID)
-			if err != nil {
-				debuglog.Log("fusion: failed to get diff for worker %d: %v", r.WorkerID, err)
-				continue
-			}
-			candidates = append(candidates, judge.CompareCandidate{
-				Index:    i,
-				ChangeID: r.ChangeID,
-				Diff:     diff,
-			})
-		}
-
-		if len(candidates) == 0 {
-			return coordinator.FusionCompareDoneMsg{
-				StoryID: storyID,
-				Err:     fmt.Errorf("could not extract diffs from any candidate"),
-			}
-		}
-
-		result, err := judge.RunComparison(ctx, story, candidates)
-		if err != nil {
-			return coordinator.FusionCompareDoneMsg{
-				StoryID: storyID,
-				Err:     err,
-			}
-		}
-
-		// Map winner index back to the passing result
-		winnerPassing := passing[result.WinnerIndex]
-
-		var loserIDs []worker.WorkerID
-		var loserChangeIDs []string
-		for _, r := range fg.Results {
-			if r.WorkerID != winnerPassing.WorkerID {
-				loserIDs = append(loserIDs, r.WorkerID)
-				if r.ChangeID != "" {
-					loserChangeIDs = append(loserChangeIDs, r.ChangeID)
+			for _, r := range fg.Results {
+				if r.WorkerID == wID {
+					return rexec.JJDiff(ctx, w.Workspace, w.BaseChangeID, r.ChangeID)
 				}
 			}
+			return "", fmt.Errorf("worker %d not in fusion group", wID)
 		}
 
+		cr := fusion.RunCompare(ctx, story, fg, getDiff)
 		return coordinator.FusionCompareDoneMsg{
 			StoryID:        storyID,
-			WinnerWorkerID: winnerPassing.WorkerID,
-			WinnerChangeID: winnerPassing.ChangeID,
-			LoserWorkerIDs: loserIDs,
-			LoserChangeIDs: loserChangeIDs,
-			Reason:         result.Reason,
-			Passed:         true,
+			WinnerWorkerID: cr.WinnerWorkerID,
+			WinnerChangeID: cr.WinnerChangeID,
+			LoserWorkerIDs: cr.LoserWorkerIDs,
+			LoserChangeIDs: cr.LoserChangeIDs,
+			Reason:         cr.Reason,
+			Passed:         cr.Passed,
+			Err:            cr.Err,
 		}
 	})
 }
@@ -837,7 +730,9 @@ func daemonQuitCmd(client *daemon.DaemonClient) tea.Cmd {
 // daemonResumeCmd sends POST /api/resume to the daemon.
 func daemonResumeCmd(client *daemon.DaemonClient) tea.Cmd {
 	return safeCmd(func() tea.Msg {
-		_ = client.Resume()
+		if err := client.Resume(); err != nil {
+			return statusMsg{Text: fmt.Sprintf("Resume failed: %v", err), Level: statusError}
+		}
 		return statusMsg{Text: "Resumed", Level: statusInfo}
 	})
 }
@@ -845,7 +740,9 @@ func daemonResumeCmd(client *daemon.DaemonClient) tea.Cmd {
 // daemonPauseCmd sends POST /api/pause to the daemon.
 func daemonPauseCmd(client *daemon.DaemonClient) tea.Cmd {
 	return safeCmd(func() tea.Msg {
-		_ = client.Pause()
+		if err := client.Pause(); err != nil {
+			return statusMsg{Text: fmt.Sprintf("Pause failed: %v", err), Level: statusError}
+		}
 		return statusMsg{Text: "Paused", Level: statusInfo}
 	})
 }

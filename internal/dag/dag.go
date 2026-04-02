@@ -226,6 +226,33 @@ func (d *DAG) Validate(storyIDs []string) error {
 	return nil
 }
 
+// BuildDAG encapsulates the full DAG construction flow: use PRD-provided deps if
+// available, otherwise run Claude analysis, validate, and fall back to linear on error.
+// This is used by both the daemon and TUI code paths.
+func BuildDAG(ctx context.Context, projectDir string, p *prd.PRD, incomplete []prd.UserStory, utilityModel string) *DAG {
+	ids := make([]string, len(incomplete))
+	for i, s := range incomplete {
+		ids[i] = s.ID
+	}
+
+	if p.HasExplicitDependencies() {
+		d := FromPRD(incomplete)
+		if err := d.Validate(ids); err == nil {
+			return d
+		}
+		// PRD deps invalid, fall through to analysis
+	}
+
+	d, err := Analyze(ctx, projectDir, incomplete, utilityModel)
+	if err != nil {
+		return LinearFallback(incomplete)
+	}
+	if err := d.Validate(ids); err != nil {
+		return LinearFallback(incomplete)
+	}
+	return d
+}
+
 // LinearFallback creates a DAG where stories are chained by priority (serial execution).
 func LinearFallback(stories []prd.UserStory) *DAG {
 	sorted := make([]prd.UserStory, len(stories))

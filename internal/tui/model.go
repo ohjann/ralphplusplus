@@ -482,7 +482,7 @@ func (m *Model) buildStatusState() statuspage.StatusState {
 	}
 
 	elapsed := time.Since(m.startTime).Truncate(time.Second)
-	state.RunDuration = formatDuration(elapsed)
+	state.RunDuration = costs.FormatDuration(elapsed)
 
 	// Cost display (mirrors header logic)
 	if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
@@ -632,7 +632,7 @@ func (m *Model) buildStatusState() statuspage.StatusState {
 			HasLimit: true,
 			Window:   windowLabel,
 			Status:   m.rateLimitInfo.Status,
-			ResetsIn: formatDuration(remaining.Truncate(time.Second)),
+			ResetsIn: costs.FormatDuration(remaining.Truncate(time.Second)),
 		}
 	}
 
@@ -750,7 +750,7 @@ func (m *Model) buildCurrentTaskText() string {
 			if remaining <= 0 {
 				return "Usage limit — resuming shortly..."
 			}
-			return fmt.Sprintf("Usage limit — auto-resuming in %s", formatDuration(remaining.Truncate(time.Second)))
+			return fmt.Sprintf("Usage limit — auto-resuming in %s", costs.FormatDuration(remaining.Truncate(time.Second)))
 		}
 		return "Usage limit — press Enter to resume"
 	case phaseDone:
@@ -1727,7 +1727,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var autoResumeCmd tea.Cmd
 				if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
 					remaining := time.Until(m.rateLimitInfo.ResetsAt)
-					resumeMsg = fmt.Sprintf("Will auto-resume in %s (or press Enter to resume manually).", formatDuration(remaining.Truncate(time.Second)))
+					resumeMsg = fmt.Sprintf("Will auto-resume in %s (or press Enter to resume manually).", costs.FormatDuration(remaining.Truncate(time.Second)))
 					autoResumeCmd = usageLimitResumeCmd(m.rateLimitInfo.ResetsAt)
 				}
 				m.claudeContent += "\n" + tsLog("── Usage Limit Hit ──\n") + fmt.Sprintf("Claude API usage limit reached during planning.\n%s\n", resumeMsg)
@@ -1942,7 +1942,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var autoResumeCmd tea.Cmd
 				if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
 					remaining := time.Until(m.rateLimitInfo.ResetsAt)
-					resumeMsg = fmt.Sprintf("Will auto-resume in %s (or press Enter to resume manually).", formatDuration(remaining.Truncate(time.Second)))
+					resumeMsg = fmt.Sprintf("Will auto-resume in %s (or press Enter to resume manually).", costs.FormatDuration(remaining.Truncate(time.Second)))
 					autoResumeCmd = usageLimitResumeCmd(m.rateLimitInfo.ResetsAt)
 				}
 				m.claudeContent += "\n" + tsLog("── Usage Limit Hit ──\n") + fmt.Sprintf("Claude API usage limit reached.\n%s\n", resumeMsg)
@@ -2171,7 +2171,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var autoResumeCmd tea.Cmd
 			if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
 				remaining := time.Until(m.rateLimitInfo.ResetsAt)
-				resumeMsg = fmt.Sprintf("Will auto-resume in %s (or press Enter to resume manually).", formatDuration(remaining.Truncate(time.Second)))
+				resumeMsg = fmt.Sprintf("Will auto-resume in %s (or press Enter to resume manually).", costs.FormatDuration(remaining.Truncate(time.Second)))
 				autoResumeCmd = usageLimitResumeCmd(m.rateLimitInfo.ResetsAt)
 			}
 			m.claudeContent += "\n" + tsLog("── Usage Limit Hit (%s) ──\n", u.StoryID) + fmt.Sprintf("Claude API usage limit reached. All workers paused.\n%s\n", resumeMsg)

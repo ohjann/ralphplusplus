@@ -527,7 +527,7 @@ func renderRateLimitContent(info *costs.RateLimitInfo) string {
 
 	sb.WriteString(fmt.Sprintf("  Window: %s\n", windowLabel))
 	sb.WriteString(fmt.Sprintf("  Status: %s\n", info.Status))
-	sb.WriteString(fmt.Sprintf("  Resets in: %s\n", formatDuration(remaining.Truncate(time.Second))))
+	sb.WriteString(fmt.Sprintf("  Resets in: %s\n", costs.FormatDuration(remaining.Truncate(time.Second))))
 	sb.WriteString("  " + strings.Repeat("─", 40) + "\n")
 
 	return sb.String()

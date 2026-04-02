@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ohjann/ralphplusplus/internal/dag"
 	"github.com/ohjann/ralphplusplus/internal/prd"
@@ -296,7 +297,7 @@ func renderStoryList(stories []StoryDisplayInfo, width int, animFrame int, panel
 		// Elapsed time for running stories
 		if s.Running && !s.StartTime.IsZero() {
 			elapsed := time.Since(s.StartTime).Truncate(time.Second)
-			line += " " + styleMuted.Render(formatDuration(elapsed))
+			line += " " + styleMuted.Render(costs.FormatDuration(elapsed))
 		}
 
 		// Highlight selected row when panel is active

@@ -1,9 +1,24 @@
 package costs
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
+
+// FormatDuration formats a duration as "Xh Ym Zs" or shorter forms.
+func FormatDuration(dur time.Duration) string {
+	h := int(dur.Hours())
+	m := int(dur.Minutes()) % 60
+	s := int(dur.Seconds()) % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %02dm %02ds", h, m, s)
+	}
+	if m > 0 {
+		return fmt.Sprintf("%dm %02ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
+}
 
 // TokenUsage tracks token counts for a single API call or aggregation.
 type TokenUsage struct {

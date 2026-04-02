@@ -84,8 +84,7 @@ func (a *APIServer) Stop(ctx context.Context) error {
 // --- SSE endpoint ---
 
 func (a *APIServer) handleSSE(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -133,8 +132,7 @@ func (a *APIServer) writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, e
 // --- Query endpoints ---
 
 func (a *APIServer) handleState(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -143,8 +141,7 @@ func (a *APIServer) handleState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *APIServer) handleWorkerActivity(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -180,8 +177,7 @@ func (a *APIServer) handleWorkerActivity(w http.ResponseWriter, r *http.Request)
 // --- Command endpoints ---
 
 func (a *APIServer) handleQuit(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	a.daemon.Shutdown()
@@ -189,8 +185,7 @@ func (a *APIServer) handleQuit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *APIServer) handlePause(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	// Coordinator uses paused flag checked by ScheduleReady; cancel active workers
@@ -199,8 +194,7 @@ func (a *APIServer) handlePause(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *APIServer) handleResume(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	a.daemon.Coord.Resume()
@@ -209,12 +203,12 @@ func (a *APIServer) handleResume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *APIServer) handleHint(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	var req HintRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
@@ -238,12 +232,12 @@ func (a *APIServer) handleHint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *APIServer) handleTask(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	var req TaskRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
@@ -259,8 +253,7 @@ func (a *APIServer) handleTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *APIServer) handleSettings(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	// Settings update is a placeholder for future expansion.
@@ -268,12 +261,12 @@ func (a *APIServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *APIServer) handleClarify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	var req ClarifyRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
@@ -302,8 +295,9 @@ func (d *Daemon) BuildStateSnapshot() DaemonStateEvent {
 	}
 
 	// Build story statuses from coordinator state
+	activeStoryIDs := d.Coord.ActiveStoryIDs()
 	storyStatuses := make(map[string]StoryStatus)
-	for _, sid := range d.Coord.ActiveStoryIDs() {
+	for _, sid := range activeStoryIDs {
 		storyStatuses[sid] = StoryStatus{
 			ID:         sid,
 			Title:      d.Coord.StoryTitle(sid),
@@ -350,7 +344,7 @@ func (d *Daemon) BuildStateSnapshot() DaemonStateEvent {
 	return DaemonStateEvent{
 		Workers:        workerStatuses,
 		Stories:        storyStatuses,
-		ActiveStoryIDs: d.Coord.ActiveStoryIDs(),
+		ActiveStoryIDs: activeStoryIDs,
 		Phase:          "parallel",
 		Paused:         d.Coord.IsPaused(),
 		TotalStories:   d.totalStories,
@@ -373,7 +367,10 @@ func (d *Daemon) BuildStateSnapshot() DaemonStateEvent {
 // buildStateEvent wraps BuildStateSnapshot in a DaemonEvent envelope.
 func (d *Daemon) buildStateEvent() DaemonEvent {
 	state := d.BuildStateSnapshot()
-	data, _ := json.Marshal(state)
+	data, err := json.Marshal(state)
+	if err != nil {
+		debuglog.Log("daemon: buildStateEvent marshal error: %v", err)
+	}
 	return DaemonEvent{
 		Type: EventDaemonState,
 		Data: data,
@@ -382,8 +379,20 @@ func (d *Daemon) buildStateEvent() DaemonEvent {
 
 // --- Helpers ---
 
+// requireMethod checks that the request uses the expected HTTP method.
+// Returns true if the method matches, false (and writes 405) otherwise.
+func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	if r.Method != method {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return false
+	}
+	return true
+}
+
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		debuglog.Log("daemon: writeJSON encode error: %v", err)
+	}
 }
