@@ -1860,7 +1860,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, scheduleReadyCmd(m.ctx, m.coord))
 		}
 
-	case coordinator.WorkerUpdateMsg:
+	case workerUpdateMsg:
 		u := msg.Update
 		willRetry := m.coord.HandleUpdate(u)
 		m.updateStatusPage()
@@ -1999,7 +1999,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Only keep listening if there are active workers; otherwise we'd
 		// block forever on the update channel with no one sending.
 		if m.coord.ActiveCount() > 0 {
-			cmds = append(cmds, m.coord.ListenCmd())
+			cmds = append(cmds, listenUpdateCmd(m.coord))
 		} else if len(cmds) > 0 {
 			// There are pending commands (e.g. mergeBackCmd) — don't enter
 			// phaseDone yet; let them run and check completion afterwards.
@@ -2064,7 +2064,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notifyStoryComplete(msg.StoryID, m.coord.StoryTitle(msg.StoryID))
 		}
 		if m.coord.ActiveCount() > 0 {
-			cmds = append(cmds, m.coord.ListenCmd())
+			cmds = append(cmds, listenUpdateCmd(m.coord))
 		}
 
 	case coordinator.MergeCompleteMsg:
@@ -2094,14 +2094,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Also re-register listener for any already-active workers.
 		cmds = append(cmds, scheduleReadyCmd(m.ctx, m.coord))
 		if m.coord.ActiveCount() > 0 {
-			cmds = append(cmds, m.coord.ListenCmd())
+			cmds = append(cmds, listenUpdateCmd(m.coord))
 		}
 
 	case scheduleReadyDoneMsg:
 		// ScheduleReady completed asynchronously — register listener for any
 		// active workers and check if all work is done.
 		if m.coord.ActiveCount() > 0 {
-			cmds = append(cmds, m.coord.ListenCmd())
+			cmds = append(cmds, listenUpdateCmd(m.coord))
 		} else if m.coord.AllDone() && m.phase != phaseInteractive {
 			m.completedStories = m.coord.CompletedCount()
 			if m.completedStories == m.totalStories || m.checkPRDAllComplete() {
@@ -2124,9 +2124,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
 		// Re-register listener to prevent deadlock if the panicked command
-		// was expected to produce a message that re-registers ListenCmd.
+		// was expected to produce a message that re-registers listenUpdateCmd.
 		if m.coord != nil && m.coord.ActiveCount() > 0 {
-			cmds = append(cmds, m.coord.ListenCmd())
+			cmds = append(cmds, listenUpdateCmd(m.coord))
 		}
 
 	case coordinator.WorkerActivityMsg:

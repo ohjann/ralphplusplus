@@ -12,7 +12,6 @@ import (
 
 	"github.com/ohjann/ralphplusplus/internal/debuglog"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ohjann/ralphplusplus/internal/checkpoint"
 	"github.com/ohjann/ralphplusplus/internal/config"
 	"github.com/ohjann/ralphplusplus/internal/costs"
@@ -494,13 +493,13 @@ func (c *Coordinator) writeCheckpointLocked() {
 // If the rebase produces conflicts, it runs Claude to resolve them before advancing.
 // Returns true if conflicts were resolved during the merge.
 //
-// This method is serialised via mergeMu so that concurrent tea.Cmd goroutines
+// This method is serialised via mergeMu so that concurrent goroutines
 // cannot run overlapping jj rebase operations, which would create divergent
 // commits and conflicts in the history.
 func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (conflictsResolved bool, err error) {
 	// Serialise all merge-back operations. Multiple workers can finish around
-	// the same time and the TUI dispatches each mergeBackCmd as a concurrent
-	// tea.Cmd goroutine. Without this lock, two rebases would both target the
+	// the same time and the caller dispatches each merge as a concurrent
+	// goroutine. Without this lock, two rebases would both target the
 	// same @- and create divergent sibling commits instead of a linear chain.
 	c.mergeMu.Lock()
 	defer c.mergeMu.Unlock()
@@ -740,12 +739,10 @@ func (c *Coordinator) preserveWorkerLogs(storyID string, workerID worker.WorkerI
 	_ = os.WriteFile(filepath.Join(dstDir, filename), data, 0o644)
 }
 
-// ListenCmd returns a tea.Cmd that waits for the next worker update.
-func (c *Coordinator) ListenCmd() tea.Cmd {
-	return func() tea.Msg {
-		u := <-c.updateCh
-		return WorkerUpdateMsg{Update: u}
-	}
+// UpdateCh returns a receive-only channel of worker updates. Callers (the
+// daemon event loop or the TUI) read from this channel to drive coordination.
+func (c *Coordinator) UpdateCh() <-chan worker.WorkerUpdate {
+	return c.updateCh
 }
 
 // DrainUpdates non-blockingly reads all pending updates from the update channel
@@ -905,11 +902,6 @@ func (c *Coordinator) ActiveStoryIDs() []string {
 	}
 	sort.Strings(ids)
 	return ids
-}
-
-// WorkerUpdateMsg wraps a worker update for the TUI message system.
-type WorkerUpdateMsg struct {
-	Update worker.WorkerUpdate
 }
 
 // MergeCompleteMsg signals that a merge-back operation completed.

@@ -8,6 +8,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/quality"
 	"github.com/ohjann/ralphplusplus/internal/roles"
 	"github.com/ohjann/ralphplusplus/internal/runner"
+	"github.com/ohjann/ralphplusplus/internal/worker"
 )
 
 // Phase transitions
@@ -32,6 +33,11 @@ const (
 	phasePaused         // paused due to Claude usage limit — waiting for user
 	phaseInteractive    // idle-but-accepting-input; coexists with running workers
 )
+
+// workerUpdateMsg wraps a worker update for the TUI message system.
+type workerUpdateMsg struct {
+	Update worker.WorkerUpdate
+}
 
 // Tick messages
 type fastTickMsg struct{}          // 500ms — poll activity/progress

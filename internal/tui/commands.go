@@ -66,6 +66,13 @@ func scheduleReadyCmd(ctx context.Context, coord *coordinator.Coordinator) tea.C
 	})
 }
 
+func listenUpdateCmd(coord *coordinator.Coordinator) tea.Cmd {
+	return func() tea.Msg {
+		u := <-coord.UpdateCh()
+		return workerUpdateMsg{Update: u}
+	}
+}
+
 func fastTickCmd() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
 		return fastTickMsg{}
