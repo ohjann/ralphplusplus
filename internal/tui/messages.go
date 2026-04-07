@@ -7,6 +7,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/memory"
 	"github.com/ohjann/ralphplusplus/internal/prd"
 	"github.com/ohjann/ralphplusplus/internal/quality"
+	"github.com/ohjann/ralphplusplus/internal/retro"
 	"github.com/ohjann/ralphplusplus/internal/roles"
 	"github.com/ohjann/ralphplusplus/internal/runner"
 	"github.com/ohjann/ralphplusplus/internal/worker"
@@ -33,6 +34,7 @@ const (
 	phaseResumePrompt   // asking user whether to resume from checkpoint
 	phasePaused         // paused due to Claude usage limit — waiting for user
 	phaseInteractive    // idle-but-accepting-input; coexists with running workers
+	phaseRetrospective  // running post-completion design retrospective
 )
 
 // workerUpdateMsg wraps a worker update for the TUI message system.
@@ -96,6 +98,10 @@ type qualityFixDoneMsg struct {
 type summaryDoneMsg struct {
 	Content string
 	Err     error
+}
+type retroDoneMsg struct {
+	Result *retro.RetroResult
+	Err    error
 }
 type synthesisDoneMsg struct {
 	Err error

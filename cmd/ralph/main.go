@@ -28,6 +28,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/memory"
 	"github.com/ohjann/ralphplusplus/internal/notify"
 	"github.com/ohjann/ralphplusplus/internal/prd"
+	"github.com/ohjann/ralphplusplus/internal/retro"
 	"github.com/ohjann/ralphplusplus/internal/runner"
 	"github.com/ohjann/ralphplusplus/internal/tui"
 	"github.com/ohjann/ralphplusplus/internal/worker"
@@ -81,6 +82,11 @@ func main() {
 	// Handle --kill early (no prd.json or validation needed).
 	if cfg.KillDaemon {
 		os.Exit(killDaemon(cfg.ProjectDir))
+	}
+
+	// Handle retro subcommand (local analysis, no daemon needed).
+	if cfg.SubCommand == "retro" {
+		os.Exit(runRetro(cfg))
 	}
 
 	// Handle client subcommands (connect to running daemon).
@@ -361,6 +367,35 @@ func runDaemonMode(cfg *config.Config) {
 		fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runRetro runs a design retrospective on the completed work.
+func runRetro(cfg *config.Config) int {
+	prdFile := filepath.Join(cfg.ProjectDir, "prd.json")
+	if _, err := os.Stat(prdFile); os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, "No prd.json found. Run a Ralph loop first.")
+		return 1
+	}
+
+	logDir := filepath.Join(cfg.ProjectDir, ".ralph", "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating log dir: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintln(os.Stderr, "Running design retrospective...")
+	result, err := retro.RunRetrospective(context.Background(), cfg.ProjectDir, logDir, prdFile, cfg.UtilityModel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+
+	fmt.Print(retro.FormatSummary(result))
+
+	// Print path to saved result
+	retroDir := filepath.Join(cfg.ProjectDir, ".ralph", "retro")
+	fmt.Fprintf(os.Stderr, "\nSaved to %s/\n", retroDir)
+	return 0
 }
 
 // runSubCommand handles CLI client subcommands that connect to a running daemon.

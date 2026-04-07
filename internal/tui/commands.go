@@ -25,6 +25,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/memory"
 	"github.com/ohjann/ralphplusplus/internal/prd"
 	"github.com/ohjann/ralphplusplus/internal/quality"
+	"github.com/ohjann/ralphplusplus/internal/retro"
 	"github.com/ohjann/ralphplusplus/internal/roles"
 	"github.com/ohjann/ralphplusplus/internal/runner"
 	"github.com/ohjann/ralphplusplus/internal/storystate"
@@ -638,6 +639,13 @@ Be concise but thorough. Focus on actionable information the developer needs to 
 		content, _ := os.ReadFile(summaryPath)
 
 		return summaryDoneMsg{Content: string(content), Err: err}
+	})
+}
+
+func retroCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
+	return safeCmd(func() tea.Msg {
+		result, err := retro.RunRetrospective(ctx, cfg.ProjectDir, cfg.LogDir, cfg.PRDFile, cfg.UtilityModel)
+		return retroDoneMsg{Result: result, Err: err}
 	})
 }
 

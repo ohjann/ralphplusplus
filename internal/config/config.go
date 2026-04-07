@@ -66,7 +66,8 @@ type Config struct {
 	DaemonMode         bool          // --daemon: run as background daemon (no TUI)
 	KillDaemon         bool          // --kill: send SIGTERM to running daemon and exit
 	IdleTimeout        time.Duration // --idle-timeout: auto-shutdown after this duration idle (default: 5m, 0 = disabled)
-	SubCommand         string        // client subcommand: "status", "logs", "hint", "pause", "resume"
+	RetroEnabled       bool          // --retro: run retrospective after summary generation
+	SubCommand         string        // client subcommand: "status", "logs", "hint", "pause", "resume", "retro"
 	HintWorkerID       int           // worker ID for "hint" subcommand
 	HintText           string        // hint text for "hint" subcommand
 
@@ -98,7 +99,7 @@ func Parse(args []string) (*Config, error) {
 	// Check for client subcommands (connect to running daemon).
 	if len(args) > 0 {
 		switch args[0] {
-		case "status", "logs", "pause", "resume", "hint":
+		case "status", "logs", "pause", "resume", "hint", "retro":
 			cfg.SubCommand = args[0]
 			// Parse optional --dir and subcommand-specific args
 			for j := 1; j < len(args); j++ {
@@ -382,6 +383,9 @@ func Parse(args []string) (*Config, error) {
 			i++
 		case "--daemon":
 			cfg.DaemonMode = true
+			i++
+		case "--retro":
+			cfg.RetroEnabled = true
 			i++
 		case "--kill":
 			cfg.KillDaemon = true
@@ -829,6 +833,7 @@ Daemon:
   --daemon                        Run as a background daemon (no TUI, coordination loop + API only)
   --kill                          Send SIGTERM to a running daemon and wait for exit
   --idle-timeout <duration>       Auto-shutdown after idle (no work + no clients) for duration (default: 5m, 0 = disabled)
+  --retro                         Run design retrospective automatically after completion
 
 Client Commands (connect to running daemon):
   ralph status                    Show current daemon state
@@ -836,6 +841,7 @@ Client Commands (connect to running daemon):
   ralph hint <worker-id> "text"   Send a hint to a worker
   ralph pause                     Pause all workers
   ralph resume                    Resume paused workers
+  ralph retro                     Run design retrospective on completed work
 
 Display:
   --no-guy                        Disable sprite mascot overlay

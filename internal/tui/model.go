@@ -32,6 +32,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/memory"
 	"github.com/ohjann/ralphplusplus/internal/prd"
 	"github.com/ohjann/ralphplusplus/internal/quality"
+	"github.com/ohjann/ralphplusplus/internal/retro"
 	"github.com/ohjann/ralphplusplus/internal/roles"
 	"github.com/ohjann/ralphplusplus/internal/runner"
 	"github.com/ohjann/ralphplusplus/internal/storystate"
@@ -2577,6 +2578,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.claudeVP.SetContent(m.claudeContent)
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
+
+		// Run design retrospective if enabled
+		if m.cfg.RetroEnabled {
+			m.phase = phaseRetrospective
+			m.claudeContent += "\n" + tsLog("── Running design retrospective... ──\n")
+			m.claudeVP.SetContent(m.claudeContent)
+			m.claudeVP.GotoBottom()
+			m.prevClaudeLen = len(m.claudeContent)
+			return m, retroCmd(m.ctx, m.cfg)
+		}
+
 		// Best-effort checkpoint cleanup on clean completion
 		_ = checkpoint.Delete(m.cfg.ProjectDir)
 		m.persistRunHistory()
@@ -2587,6 +2599,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
 		debuglog.Log("entering phaseInteractive after PRD completion")
+		m.updateStatusPage()
+
+	case retroDoneMsg:
+		if msg.Err != nil {
+			m.claudeContent += "\n" + tsLog("── Retrospective error: %v ──\n", msg.Err)
+		} else if msg.Result != nil {
+			m.claudeContent += "\n" + retro.FormatSummary(msg.Result)
+		}
+		m.claudeVP.SetContent(m.claudeContent)
+		m.claudeVP.GotoBottom()
+		m.prevClaudeLen = len(m.claudeContent)
+		// Now transition to interactive (same as normal post-summary flow)
+		_ = checkpoint.Delete(m.cfg.ProjectDir)
+		m.persistRunHistory()
+		m.phase = phaseInteractive
+		m.allComplete = true
+		m.claudeContent += "\n" + tsLog("── Interactive mode — all PRD stories complete, accepting follow-up tasks ──\n")
+		m.claudeVP.SetContent(m.claudeContent)
+		m.claudeVP.GotoBottom()
+		m.prevClaudeLen = len(m.claudeContent)
+		debuglog.Log("entering phaseInteractive after retrospective")
 		m.updateStatusPage()
 
 	// --- Daemon SSE event handlers ---

@@ -165,6 +165,8 @@ func renderCurrentTask(m *Model) string {
 		return styleMuted.Render("Initializing...")
 	case phaseSummary:
 		return lipgloss.NewStyle().Foreground(colorTeal).Render("✎ Generating summary...")
+	case phaseRetrospective:
+		return lipgloss.NewStyle().Foreground(colorTeal).Render("⚡ Design retrospective...")
 	case phaseResumePrompt:
 		return lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("◇ Resume from checkpoint? Press Enter to continue, q to restart")
 	case phaseInteractive:
@@ -292,6 +294,8 @@ func renderPhase(p phase) string {
 		return stylePhaseActive.Render("◇ Review Prompt")
 	case phasePaused:
 		return styleDanger.Render("⏸ Paused")
+	case phaseRetrospective:
+		return stylePhaseActive.Render("⚡ Retrospective")
 	default:
 		return ""
 	}
