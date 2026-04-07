@@ -153,7 +153,7 @@ func (c *Coordinator) ScheduleReady(ctx context.Context) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.paused {
+	if c.paused || c.dag == nil {
 		return 0
 	}
 
@@ -793,6 +793,9 @@ func (c *Coordinator) AllDone() bool {
 	// Fusion groups still collecting results are not done
 	if len(c.fusionGroups) > 0 {
 		return false
+	}
+	if c.dag == nil {
+		return true
 	}
 	for id := range c.dag.Nodes {
 		if !c.completed[id] && !c.failed[id] {

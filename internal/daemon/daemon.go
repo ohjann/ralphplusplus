@@ -110,8 +110,10 @@ func (d *Daemon) Run() error {
 		d.apiServer = apiServer
 	}
 
-	// Initial scheduling
-	d.Coord.ScheduleReady(d.ctx)
+	// Initial scheduling (skip if no stories, e.g. --idle with all complete)
+	if d.totalStories > 0 {
+		d.Coord.ScheduleReady(d.ctx)
+	}
 	d.updateStatusPage()
 
 	// Enter the coordination event loop
