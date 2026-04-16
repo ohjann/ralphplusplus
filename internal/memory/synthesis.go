@@ -3,10 +3,10 @@ package memory
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/ohjann/ralphplusplus/internal/assets"
 	"github.com/ohjann/ralphplusplus/internal/debuglog"
 	"github.com/ohjann/ralphplusplus/internal/events"
 	"github.com/ohjann/ralphplusplus/internal/prd"
@@ -52,7 +52,7 @@ func SynthesizeRun(ctx context.Context, projectDir, ralphHome, logDir string, p 
 }
 
 func buildSynthesisPrompt(projectDir, ralphHome string, p *prd.PRD) (string, error) {
-	tmpl, err := os.ReadFile(filepath.Join(ralphHome, "prompts", "synthesis.md"))
+	tmpl, err := assets.ReadPrompt("prompts/synthesis.md")
 	if err != nil {
 		return "", fmt.Errorf("reading synthesis prompt: %w", err)
 	}

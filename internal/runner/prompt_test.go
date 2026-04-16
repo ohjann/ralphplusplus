@@ -161,6 +161,7 @@ func TestBuildPromptNilPRDNoCrash(t *testing.T) {
 func TestBuildPromptWithArchitectRoleLoadsRolePrompt(t *testing.T) {
 	ralphHome := t.TempDir()
 	dir := t.TempDir()
+	t.Setenv("RALPH_HOME", ralphHome)
 
 	// Create prompts directory and architect.md
 	promptsDir := filepath.Join(ralphHome, "prompts")
@@ -215,6 +216,7 @@ func TestBuildPromptArchitectSkipsIterationConstraint(t *testing.T) {
 func TestBuildPromptEmptyRoleUsesDefault(t *testing.T) {
 	ralphHome := t.TempDir()
 	dir := t.TempDir()
+	t.Setenv("RALPH_HOME", ralphHome)
 
 	if err := os.WriteFile(filepath.Join(ralphHome, "ralph-prompt.md"), []byte("default prompt"), 0o644); err != nil {
 		t.Fatal(err)

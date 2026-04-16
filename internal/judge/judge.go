@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ohjann/ralphplusplus/internal/assets"
 	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/debuglog"
 	rexec "github.com/ohjann/ralphplusplus/internal/exec"
@@ -95,7 +96,7 @@ func RunJudge(ctx context.Context, ralphHome, projectDir, prdFile, storyID strin
 	}
 
 	// Build prompt from template
-	template, err := os.ReadFile(filepath.Join(ralphHome, "judge-prompt.md"))
+	template, err := assets.ReadPrompt("judge-prompt.md")
 	if err != nil {
 		return Result{Passed: true, Warning: fmt.Sprintf("could not read judge-prompt.md: %v", err)}
 	}

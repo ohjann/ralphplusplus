@@ -173,7 +173,7 @@ func Parse(args []string) (*Config, error) {
 				}
 			}
 		}
-		cfg.RalphHome = resolveRalphHome()
+		cfg.RalphHome = os.Getenv("RALPH_HOME")
 		if cfg.ProjectDir == "" {
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -205,7 +205,7 @@ func Parse(args []string) (*Config, error) {
 			return nil, fmt.Errorf("unknown memory command %q. Use: stats, consolidate, reset", args[1])
 		}
 		// Resolve paths needed for memory commands.
-		cfg.RalphHome = resolveRalphHome()
+		cfg.RalphHome = os.Getenv("RALPH_HOME")
 		if cfg.ProjectDir == "" {
 			cwd, err := os.Getwd()
 			if err != nil {
@@ -599,8 +599,7 @@ func Parse(args []string) (*Config, error) {
 		}
 	}
 
-	// Resolve RALPH_HOME: directory of the binary, or parent of binary dir, or $RALPH_HOME
-	cfg.RalphHome = resolveRalphHome()
+	cfg.RalphHome = os.Getenv("RALPH_HOME")
 
 	// Re-resolve PROJECT_DIR in case --dir was set in the flag loop.
 	if cfg.ProjectDir == "" {
@@ -737,16 +736,6 @@ func (c *Config) Validate() error {
 		c.NoPRD = true
 	}
 
-	if c.JudgeEnabled {
-		if c.RalphHome == "" {
-			return fmt.Errorf("cannot locate ralph home directory (for judge-prompt.md)")
-		}
-		judgePath := filepath.Join(c.RalphHome, "judge-prompt.md")
-		if _, err := os.Stat(judgePath); os.IsNotExist(err) {
-			return fmt.Errorf("judge-prompt.md not found at %s", judgePath)
-		}
-	}
-
 	return nil
 }
 
@@ -760,37 +749,6 @@ func (c *Config) EnsureDirs() error {
 	return os.MkdirAll(c.LogDir, 0o755)
 }
 
-func resolveRalphHome() string {
-	exe, err := os.Executable()
-	if err == nil {
-		exe, _ = filepath.EvalSymlinks(exe)
-		dir := filepath.Dir(exe)
-
-		// Check binary's own directory
-		if hasPromptFiles(dir) {
-			return dir
-		}
-		// Check parent (handles build/ralph)
-		parent := filepath.Dir(dir)
-		if hasPromptFiles(parent) {
-			return parent
-		}
-	}
-
-	// Fall back to RALPH_HOME env var
-	if env := os.Getenv("RALPH_HOME"); env != "" {
-		if hasPromptFiles(env) {
-			return env
-		}
-	}
-
-	return ""
-}
-
-func hasPromptFiles(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "ralph-prompt.md"))
-	return err == nil
-}
 
 func printUsage() {
 	fmt.Print(`Usage: ralph [options]

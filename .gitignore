@@ -10,7 +10,12 @@ progress.md
 
 # Build output
 build/
-ralph
+/ralph
+
+# Assets embedded into the binary; `ralph/` in the user's global ignore
+# would otherwise skip these.
+!/internal/assets/files/skills/
+!/internal/assets/files/skills/**
 
 #Claude
 .claude/

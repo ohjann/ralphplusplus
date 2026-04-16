@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ohjann/ralphplusplus/internal/assets"
 	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/debuglog"
 )
@@ -105,7 +106,7 @@ func RunDream(ctx context.Context, projectDir, ralphHome, logDir string, maxEntr
 }
 
 func buildDreamPrompt(projectDir, ralphHome string, maxEntries, lastNRuns int) (string, error) {
-	tmpl, err := os.ReadFile(filepath.Join(ralphHome, "prompts", "dream.md"))
+	tmpl, err := assets.ReadPrompt("prompts/dream.md")
 	if err != nil {
 		return "", fmt.Errorf("reading dream prompt: %w", err)
 	}

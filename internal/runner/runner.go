@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ohjann/ralphplusplus/internal/assets"
 	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/events"
 	"github.com/ohjann/ralphplusplus/internal/memory"
@@ -54,7 +55,7 @@ func BuildPrompt(ralphHome, projectDir, storyID string, p *prd.PRD, opts ...Buil
 		promptFile = roles.DefaultConfig(role).PromptFile
 	}
 
-	base, err := os.ReadFile(filepath.Join(ralphHome, promptFile))
+	base, err := assets.ReadPrompt(promptFile)
 	if err != nil {
 		return PromptParts{}, fmt.Errorf("reading %s: %w", promptFile, err)
 	}

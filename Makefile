@@ -8,8 +8,7 @@ build:
 install: build
 	@mkdir -p $(firstword $(GOPATH) $(HOME)/go)/bin
 	cp build/ralph $(firstword $(GOPATH) $(HOME)/go)/bin/ralph
-	@mkdir -p $(HOME)/.claude/skills
-	cp -r skills/ralph $(HOME)/.claude/skills/ralph
+	./build/ralph install-skill
 
 clean:
 	rm -rf build/

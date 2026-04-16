@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"math/rand"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/ohjann/ralphplusplus/internal/assets"
 	"github.com/ohjann/ralphplusplus/internal/config"
 	"github.com/ohjann/ralphplusplus/internal/coordinator"
 	"github.com/ohjann/ralphplusplus/internal/costs"
@@ -39,6 +41,16 @@ import (
 var Version = "dev"
 
 func main() {
+	// install-skill runs without a config (no prd.json needed); handle it
+	// before Parse so it works in any cwd.
+	if len(os.Args) > 1 && os.Args[1] == "install-skill" {
+		if err := runInstallSkill(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	cfg, err := config.Parse(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -1174,6 +1186,41 @@ func runMemoryReset(projectDir, ralphHome string) error {
 	}
 
 	fmt.Println("Memory reset complete.")
+	return nil
+}
+
+// runInstallSkill writes the embedded skills/ralph/ tree to
+// ~/.claude/skills/ralph/. It is idempotent: existing files are overwritten
+// with current embedded contents, additional local files are left untouched.
+func runInstallSkill() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolving home directory: %w", err)
+	}
+	dest := filepath.Join(home, ".claude", "skills", "ralph")
+
+	skillFS := assets.SkillFS()
+	walkErr := fs.WalkDir(skillFS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dest, filepath.FromSlash(p))
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, readErr := fs.ReadFile(skillFS, p)
+		if readErr != nil {
+			return fmt.Errorf("reading embedded %s: %w", p, readErr)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if walkErr != nil {
+		return fmt.Errorf("installing skill to %s: %w", dest, walkErr)
+	}
+	fmt.Printf("Installed ralph skill to %s\n", dest)
 	return nil
 }
 
