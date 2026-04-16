@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/daemon"
 	"github.com/ohjann/ralphplusplus/internal/dag"
 	"github.com/ohjann/ralphplusplus/internal/debuglog"
+	"github.com/ohjann/ralphplusplus/internal/history"
 	"github.com/ohjann/ralphplusplus/internal/memory"
 	"github.com/ohjann/ralphplusplus/internal/notify"
 	"github.com/ohjann/ralphplusplus/internal/prd"
@@ -99,6 +101,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Record this repo in the user-level metadata dir. Failures are
+	// non-fatal — history tracking must not block a run.
+	repoFP, _, err := history.TouchRepo(cfg.ProjectDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: history.TouchRepo: %v\n", err)
+	}
+	runID := time.Now().UTC().Format("20060102T150405Z")
+	defer func() { mainDeferOnce.Do(func() { runMainDeferred(repoFP, runID) }) }()
+
 	if err := cfg.EnsureDirs(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating directories: %v\n", err)
 		os.Exit(1)
@@ -167,7 +178,20 @@ func main() {
 	}
 
 	if m, ok := finalModel.(*tui.Model); ok {
-		os.Exit(m.ExitCode())
+		exit := m.ExitCode()
+		mainDeferOnce.Do(func() { runMainDeferred(repoFP, runID) })
+		os.Exit(exit)
+	}
+}
+
+var mainDeferOnce sync.Once
+
+func runMainDeferred(repoFP, runID string) {
+	if repoFP == "" {
+		return
+	}
+	if err := history.UpdateLastRunID(repoFP, runID); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: history.UpdateLastRunID: %v\n", err)
 	}
 }
 
