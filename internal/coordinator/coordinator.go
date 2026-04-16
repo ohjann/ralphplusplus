@@ -17,6 +17,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/dag"
 	"github.com/ohjann/ralphplusplus/internal/fusion"
+	"github.com/ohjann/ralphplusplus/internal/memory"
 	"github.com/ohjann/ralphplusplus/internal/notify"
 	"github.com/ohjann/ralphplusplus/internal/prd"
 	"github.com/ohjann/ralphplusplus/internal/roles"
@@ -71,6 +72,8 @@ type Coordinator struct {
 	firstPass       map[string]bool           // tracks stories that passed on first attempt
 	fusionGroups    map[string]*fusion.FusionGroup // active fusion groups by storyID
 	complexityCache map[string]bool                // cached complexity assessment results
+	fusionMetrics   costs.FusionMetrics            // running fusion outcome metrics for this run
+	antiPatterns    []memory.AntiPattern           // detected at startup; injected into worker prompts
 }
 
 func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory) *Coordinator {
@@ -84,6 +87,11 @@ func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory
 	prdHash, err := checkpoint.ComputePRDHash(cfg.PRDFile)
 	if err != nil {
 		debuglog.Log("warning: could not compute PRD hash: %v", err)
+	}
+
+	antiPatterns, err := memory.DetectAntiPatterns(cfg.ProjectDir)
+	if err != nil {
+		debuglog.Log("warning: anti-pattern detection failed: %v", err)
 	}
 
 	return &Coordinator{
@@ -103,6 +111,7 @@ func New(cfg *config.Config, d *dag.DAG, maxWorkers int, stories []prd.UserStory
 		firstPass:       make(map[string]bool),
 		fusionGroups:    make(map[string]*fusion.FusionGroup),
 		complexityCache: make(map[string]bool),
+		antiPatterns:    antiPatterns,
 	}
 }
 
@@ -200,6 +209,7 @@ func (c *Coordinator) ScheduleReady(ctx context.Context) int {
 				Expected: c.cfg.FusionWorkers,
 			}
 			c.fusionGroups[storyID] = fg
+			c.fusionMetrics.GroupsCreated++
 			c.inProgress[storyID] = 0 // reserve slot while architect runs
 			slots -= c.cfg.FusionWorkers
 			launched += c.cfg.FusionWorkers
@@ -238,6 +248,7 @@ func (c *Coordinator) spawnWorkerLocked(ctx context.Context, storyID string, sto
 		JJMu:         &c.jjMu,
 		Ctx:          wCtx,
 		Cancel:       wCancel,
+		AntiPatterns: c.antiPatterns,
 	}
 	c.workers[w.ID] = w
 	c.inProgress[storyID] = w.ID
@@ -942,6 +953,8 @@ type FusionCompareDoneMsg struct {
 	LoserChangeIDs []string
 	Reason         string
 	Passed         bool // true if at least one candidate passed and a winner was selected
+	MultiplePassed bool // true if 2+ candidates passed (the comparison judge actually ran)
+	WasFirstPasser bool // true if winner is the lowest-WorkerID passer (proxy for first to pass)
 	Err            error
 }
 
@@ -1035,6 +1048,32 @@ func (c *Coordinator) isBlockedByFailureLocked(storyID string, visited map[strin
 		}
 	}
 	return false, ""
+}
+
+// RecordFusionOutcome updates fusion metrics after a comparison completes.
+// multiplePassed indicates 2+ implementations passed; pickedNonFirst indicates
+// the comparison judge picked a non-first-to-pass implementation.
+func (c *Coordinator) RecordFusionOutcome(multiplePassed, pickedNonFirst bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if multiplePassed {
+		c.fusionMetrics.MultiplesPassed++
+		if pickedNonFirst {
+			c.fusionMetrics.ComparisonPicked++
+		}
+	}
+}
+
+// GetFusionMetrics returns a snapshot of fusion metrics for this run.
+func (c *Coordinator) GetFusionMetrics() costs.FusionMetrics {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.fusionMetrics
+}
+
+// GetAntiPatterns returns the anti-patterns detected at startup.
+func (c *Coordinator) GetAntiPatterns() []memory.AntiPattern {
+	return c.antiPatterns
 }
 
 // GetPlanQuality returns plan quality metrics based on the current run state.

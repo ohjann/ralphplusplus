@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/roles"
 	"github.com/ohjann/ralphplusplus/internal/worker"
 )
@@ -24,6 +25,7 @@ type DaemonStateEvent struct {
 	AllDone        bool                              `json:"all_done"`
 	CostTotals     CostTotals                        `json:"cost_totals"`
 	PlanQuality    PlanQualityInfo                   `json:"plan_quality"`
+	FusionMetrics  costs.FusionMetrics               `json:"fusion_metrics"`
 	Uptime         string                            `json:"uptime"`
 	ClientCount    int                               `json:"client_count"`
 	Timestamp      time.Time                         `json:"timestamp"`

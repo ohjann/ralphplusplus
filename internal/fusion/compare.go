@@ -18,6 +18,8 @@ type CompareResult struct {
 	LoserChangeIDs []string
 	Reason         string
 	Passed         bool
+	MultiplePassed bool // true when 2+ implementations passed (judge actually ran)
+	WasFirstPasser bool // true when winner is the lowest-WorkerID passer (proxy for first to pass)
 	Err            error
 }
 
@@ -47,6 +49,8 @@ func RunCompare(ctx context.Context, story *prd.UserStory, fg *FusionGroup, getD
 			LoserChangeIDs: loserChangeIDs,
 			Reason:         "only passing implementation",
 			Passed:         true,
+			MultiplePassed: false,
+			WasFirstPasser: true,
 		}
 	}
 
@@ -80,6 +84,14 @@ func RunCompare(ctx context.Context, story *prd.UserStory, fg *FusionGroup, getD
 
 	winnerPassing := passing[result.WinnerIndex]
 	loserIDs, loserChangeIDs := collectLosers(fg, winnerPassing.WorkerID)
+
+	firstPasserID := passing[0].WorkerID
+	for _, p := range passing[1:] {
+		if p.WorkerID < firstPasserID {
+			firstPasserID = p.WorkerID
+		}
+	}
+
 	return CompareResult{
 		WinnerWorkerID: winnerPassing.WorkerID,
 		WinnerChangeID: winnerPassing.ChangeID,
@@ -87,6 +99,8 @@ func RunCompare(ctx context.Context, story *prd.UserStory, fg *FusionGroup, getD
 		LoserChangeIDs: loserChangeIDs,
 		Reason:         result.Reason,
 		Passed:         true,
+		MultiplePassed: true,
+		WasFirstPasser: winnerPassing.WorkerID == firstPasserID,
 	}
 }
 

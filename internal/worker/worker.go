@@ -12,6 +12,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/debuglog"
 	"github.com/ohjann/ralphplusplus/internal/judge"
+	"github.com/ohjann/ralphplusplus/internal/memory"
 	"github.com/ohjann/ralphplusplus/internal/prd"
 	"github.com/ohjann/ralphplusplus/internal/roles"
 	"github.com/ohjann/ralphplusplus/internal/runner"
@@ -73,6 +74,7 @@ type Worker struct {
 	JJMu           *sync.Mutex // serialises jj operations against the main repo (shared with coordinator)
 	Ctx            context.Context
 	Cancel         context.CancelFunc
+	AntiPatterns   []memory.AntiPattern // injected into architect/implementer prompts
 }
 
 type WorkerUpdate struct {
@@ -257,7 +259,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	if w.ArchitectSessionID == "" && !cfg.NoArchitect && shouldRunArchitect(w.StoryID, w.Iteration, ws.Dir, wsPRD) {
 		send(WorkerRunning, roles.RoleArchitect, nil, false, "")
 
-		archParts, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleArchitect, MemoryDisabled: cfg.Memory.Disabled})
+		archParts, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleArchitect, MemoryDisabled: cfg.Memory.Disabled, AntiPatterns: w.AntiPatterns})
 		if err != nil {
 			send(WorkerFailed, roles.RoleArchitect, fmt.Errorf("build architect prompt: %w", err), false, "")
 			return
@@ -308,6 +310,57 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 			send(WorkerFailed, roles.RoleArchitect, fmt.Errorf("architect produced insufficient plan for %s (%d bytes)", w.StoryID, len(plan)), false, "")
 			return
 		}
+
+		// LLM-based plan quality gate: ensure the plan names files and addresses criteria.
+		// On infra error we log and proceed (don't block on flakes). On a real FAIL we
+		// re-run the architect once with the rejection reason appended; if still FAIL,
+		// the worker fails.
+		storyForGate := wsPRD.FindStory(w.StoryID)
+		pass, reason, gateErr := validatePlan(w.Ctx, plan, storyForGate, cfg.UtilityModel)
+		if gateErr != nil {
+			debuglog.Log("plan gate error for %s: %v — allowing through", w.StoryID, gateErr)
+		} else if !pass {
+			debuglog.Log("plan gate FAIL for %s: %s — re-running architect", w.StoryID, reason)
+			retryParts, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleArchitect, MemoryDisabled: cfg.Memory.Disabled, AntiPatterns: w.AntiPatterns})
+			if err != nil {
+				send(WorkerFailed, roles.RoleArchitect, fmt.Errorf("build architect retry prompt: %w", err), false, "")
+				return
+			}
+			retryParts.UserMessage = AppendParallelMode(retryParts.UserMessage, w.StoryID) +
+				"\n\n## Plan Gate Rejection (previous attempt)\n" +
+				"The previous plan was rejected: " + reason + "\n" +
+				"Produce a revised plan that names specific files to modify and addresses each acceptance criterion.\n"
+			retryLogPath := runner.LogFilePath(wsLogDir, w.Iteration) + ".architect.retry"
+			retryResult, err := runner.RunClaude(w.Ctx, ws.Dir, retryParts.UserMessage, retryLogPath, runner.RunClaudeOpts{
+				Iteration:    w.Iteration,
+				StoryID:      w.StoryID,
+				Role:         roles.RoleArchitect,
+				Model:        ResolveModel(roles.RoleArchitect, cfg),
+				SystemAppend: retryParts.SystemAppend,
+			})
+			if retryResult != nil {
+				claudeUsage = retryResult.TokenUsage
+				if retryResult.RateLimitInfo != nil {
+					latestRateLimit = retryResult.RateLimitInfo
+				}
+			}
+			if err != nil {
+				if w.Ctx.Err() != nil {
+					send(WorkerFailed, roles.RoleArchitect, w.Ctx.Err(), false, "")
+					return
+				}
+				sendRetryable(fmt.Errorf("architect retry run: %w", err))
+				return
+			}
+			plan, _ = storystate.LoadPlan(ws.Dir, w.StoryID)
+			pass2, reason2, gateErr2 := validatePlan(w.Ctx, plan, storyForGate, cfg.UtilityModel)
+			if gateErr2 != nil {
+				debuglog.Log("plan gate retry error for %s: %v — allowing through", w.StoryID, gateErr2)
+			} else if !pass2 {
+				send(WorkerFailed, roles.RoleArchitect, fmt.Errorf("plan gate rejected after retry: %s", reason2), false, "")
+				return
+			}
+		}
 	}
 
 	// 3. Build prompt and run implementer (or debugger if stuck)
@@ -317,7 +370,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	}
 	send(WorkerRunning, implRole, nil, false, "")
 
-	implParts, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: implRole, MemoryDisabled: cfg.Memory.Disabled})
+	implParts, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: implRole, MemoryDisabled: cfg.Memory.Disabled, AntiPatterns: w.AntiPatterns})
 	if err != nil {
 		send(WorkerFailed, implRole, fmt.Errorf("build prompt: %w", err), false, "")
 		return

@@ -50,6 +50,7 @@ type Config struct {
 	HistoryAll         bool   // --all flag for history subcommand
 	HistoryStats       bool   // --stats flag for history subcommand
 	HistoryCompare     bool   // --compare flag for history subcommand
+	HistoryBy          string // --by value for history --compare ("model" or "flags"); default "model"
 	NoArchitect        bool   // --no-architect: globally skip architect phase for all stories
 	SpriteEnabled      bool   // sprite mascot overlay (default true)
 	NoPRD              bool   // true when no prd.json exists (interactive-only mode)
@@ -154,6 +155,11 @@ func Parse(args []string) (*Config, error) {
 				cfg.HistoryStats = true
 			case "--compare":
 				cfg.HistoryCompare = true
+			case "--by":
+				if j+1 < len(args) {
+					cfg.HistoryBy = args[j+1]
+					j++
+				}
 			case "--dir":
 				if j+1 < len(args) {
 					cfg.ProjectDir = args[j+1]
@@ -162,6 +168,8 @@ func Parse(args []string) (*Config, error) {
 			default:
 				if strings.HasPrefix(args[j], "--dir=") {
 					cfg.ProjectDir = args[j][len("--dir="):]
+				} else if strings.HasPrefix(args[j], "--by=") {
+					cfg.HistoryBy = args[j][len("--by="):]
 				}
 			}
 		}

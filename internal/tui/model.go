@@ -457,6 +457,24 @@ func (m *Model) daemonGetPlanQuality() coordinator.PlanQuality {
 	return coordinator.PlanQuality{}
 }
 
+// daemonGetFusionMetrics returns fusion metrics from whichever source is active.
+// Returns nil when no fusion groups have been created (so the field stays out of run-history.json).
+func (m *Model) daemonGetFusionMetrics() *costs.FusionMetrics {
+	var fm costs.FusionMetrics
+	switch {
+	case m.client != nil && m.daemonState != nil:
+		fm = m.daemonState.FusionMetrics
+	case m.coord != nil:
+		fm = m.coord.GetFusionMetrics()
+	default:
+		return nil
+	}
+	if fm.GroupsCreated == 0 {
+		return nil
+	}
+	return &fm
+}
+
 // daemonQuit sends POST /api/quit to the daemon (non-blocking).
 func (m *Model) daemonQuit() {
 	if m.client != nil {
@@ -885,6 +903,11 @@ func (m *Model) contextContentWidth() int {
 
 func (m *Model) Init() tea.Cmd {
 	setTitle := tea.SetWindowTitle("✦ ralph")
+
+	// Detect anti-patterns from prior runs (cheap: reads run-history.json + events.jsonl).
+	if patterns, err := memory.DetectAntiPatterns(m.cfg.ProjectDir); err == nil {
+		m.antiPatternsContent = renderAntiPatternsContent(patterns)
+	}
 
 	// Start sprite tick loop if mascot is enabled.
 	var spriteInit tea.Cmd
@@ -2327,6 +2350,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				go m.coord.CleanupWorker(m.ctx, msg.LoserWorkerIDs[i])
 			}
 			// Merge winner
+			m.coord.RecordFusionOutcome(msg.MultiplePassed, !msg.WasFirstPasser)
 			m.coord.CompleteFusion(msg.StoryID, true)
 			winnerUpdate := worker.WorkerUpdate{
 				WorkerID: msg.WinnerWorkerID,
@@ -3657,6 +3681,12 @@ func (m *Model) persistRunHistory() {
 		CacheHitRate:          cacheHitRate,
 		StoryDetails:          storyDetails,
 		Workers:               m.cfg.Workers,
+		NoArchitect:           m.cfg.NoArchitect,
+		NoFusion:              m.cfg.NoFusion,
+		NoSimplify:            m.cfg.NoSimplify,
+		QualityReview:         m.cfg.QualityReview,
+		FusionWorkers:         m.cfg.FusionWorkers,
+		FusionMetrics:         m.daemonGetFusionMetrics(),
 	}
 
 	if err := costs.AppendRun(m.cfg.ProjectDir, summary); err != nil {

@@ -372,7 +372,8 @@ func (d *Daemon) BuildStateSnapshot() DaemonStateEvent {
 			TotalStories:   pq.TotalStories,
 			Score:          pq.Score(),
 		},
-		Timestamp: time.Now(),
+		FusionMetrics: d.Coord.GetFusionMetrics(),
+		Timestamp:     time.Now(),
 	}
 }
 

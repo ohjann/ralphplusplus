@@ -19,6 +19,13 @@ type StorySummary struct {
 	Model        string `json:"model,omitempty"` // primary model used for this story
 }
 
+// FusionMetrics tracks fusion-mode outcomes for a run.
+type FusionMetrics struct {
+	GroupsCreated    int `json:"groups_created"`              // fusion groups created
+	MultiplesPassed  int `json:"multiples_passed,omitempty"`  // groups where 2+ implementations passed
+	ComparisonPicked int `json:"comparison_picked,omitempty"` // groups where the comparison judge picked a non-first-passer
+}
+
 // RunSummary holds the summary of a single completed PRD run.
 type RunSummary struct {
 	PRD                   string         `json:"prd"`
@@ -39,6 +46,12 @@ type RunSummary struct {
 	CacheHitRate          float64        `json:"cache_hit_rate,omitempty"`
 	StoryDetails          []StorySummary `json:"story_details,omitempty"`        // per-story breakdown
 	Workers               int            `json:"workers,omitempty"`              // number of parallel workers used
+	NoArchitect           bool           `json:"no_architect,omitempty"`
+	NoFusion              bool           `json:"no_fusion,omitempty"`
+	NoSimplify            bool           `json:"no_simplify,omitempty"`
+	QualityReview         bool           `json:"quality_review,omitempty"`
+	FusionWorkers         int            `json:"fusion_workers,omitempty"`
+	FusionMetrics         *FusionMetrics `json:"fusion_metrics,omitempty"`
 }
 
 // RunHistory holds a list of run summaries.

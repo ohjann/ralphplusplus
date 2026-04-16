@@ -555,6 +555,8 @@ func fusionCompareCmd(ctx context.Context, coord *coordinator.Coordinator, story
 			LoserChangeIDs: cr.LoserChangeIDs,
 			Reason:         cr.Reason,
 			Passed:         cr.Passed,
+			MultiplePassed: cr.MultiplePassed,
+			WasFirstPasser: cr.WasFirstPasser,
 			Err:            cr.Err,
 		}
 	})

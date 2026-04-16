@@ -50,7 +50,7 @@ func main() {
 		case cfg.HistoryStats:
 			err = printStats(cfg.ProjectDir)
 		case cfg.HistoryCompare:
-			err = printCompare(cfg.ProjectDir)
+			err = printCompare(cfg.ProjectDir, cfg.HistoryBy)
 		default:
 			err = printHistory(cfg.ProjectDir, cfg.HistoryAll)
 		}
@@ -856,7 +856,7 @@ type modelGroup struct {
 	storiesDone   int
 }
 
-func printCompare(projectDir string) error {
+func printCompare(projectDir, by string) error {
 	h, err := costs.LoadHistory(projectDir)
 	if err != nil {
 		return err
@@ -864,6 +864,15 @@ func printCompare(projectDir string) error {
 	if len(h.Runs) == 0 {
 		fmt.Println("No run history yet.")
 		return nil
+	}
+
+	switch by {
+	case "flags":
+		return printCompareByFlags(h)
+	case "", "model":
+		// fall through to model grouping below
+	default:
+		return fmt.Errorf("unknown --by value %q (want \"model\" or \"flags\")", by)
 	}
 
 	// Group runs by primary model
@@ -930,6 +939,97 @@ func printCompare(projectDir string) error {
 		}
 		fmt.Printf("  %-12s  %5d  %9s  %8s  %9dk  %9dk\n",
 			g.model, g.runs, fp, ai, g.inputTokens/1000, g.outputTokens/1000)
+	}
+
+	return nil
+}
+
+type flagsGroup struct {
+	config       string
+	runs         int
+	firstPassSum float64
+	firstPassN   int
+	avgIterSum   float64
+	avgIterN     int
+	durationMin  float64
+}
+
+// flagsConfigKey returns a stable display string for a run's flag configuration.
+// Uses CLI-style flag names so users can recognise them.
+func flagsConfigKey(r costs.RunSummary) string {
+	var parts []string
+	if r.NoArchitect {
+		parts = append(parts, "--no-architect")
+	}
+	if r.NoFusion {
+		parts = append(parts, "--no-fusion")
+	}
+	if r.NoSimplify {
+		parts = append(parts, "--no-simplify")
+	}
+	if !r.QualityReview {
+		parts = append(parts, "--no-quality-review")
+	}
+	if len(parts) == 0 {
+		return "default"
+	}
+	return strings.Join(parts, " ")
+}
+
+func printCompareByFlags(h costs.RunHistory) error {
+	groups := make(map[string]*flagsGroup)
+	var order []string
+
+	for _, r := range h.Runs {
+		key := flagsConfigKey(r)
+		g, ok := groups[key]
+		if !ok {
+			g = &flagsGroup{config: key}
+			groups[key] = g
+			order = append(order, key)
+		}
+		g.runs++
+		g.durationMin += r.DurationMinutes
+		if r.FirstPassRate > 0 || r.StoriesCompleted > 0 {
+			g.firstPassSum += r.FirstPassRate
+			g.firstPassN++
+		}
+		if r.StoriesCompleted > 0 {
+			g.avgIterSum += r.AvgIterationsPerStory
+			g.avgIterN++
+		}
+	}
+
+	fmt.Println("── Flag Configuration Comparison ──")
+	fmt.Println()
+
+	if len(groups) < 2 {
+		fmt.Println("  Only one flag configuration found. Run PRDs with different flags to compare.")
+		fmt.Println()
+	}
+
+	const configCol = 28
+	fmt.Printf("  %-*s  %5s  %9s  %8s  %8s\n",
+		configCol, "CONFIG", "RUNS", "1ST PASS", "AVG ITER", "DURATION")
+	fmt.Printf("  %-*s  %5s  %9s  %8s  %8s\n",
+		configCol, strings.Repeat("─", configCol), "─────", "─────────", "────────", "────────")
+
+	for _, key := range order {
+		g := groups[key]
+		fp := "-"
+		if g.firstPassN > 0 {
+			fp = fmt.Sprintf("%.0f%%", (g.firstPassSum/float64(g.firstPassN))*100)
+		}
+		ai := "-"
+		if g.avgIterN > 0 {
+			ai = fmt.Sprintf("%.1f", g.avgIterSum/float64(g.avgIterN))
+		}
+		cfg := g.config
+		if len(cfg) > configCol {
+			cfg = cfg[:configCol-1] + "…"
+		}
+		fmt.Printf("  %-*s  %5d  %9s  %8s  %6.0fm\n",
+			configCol, cfg, g.runs, fp, ai, g.durationMin)
 	}
 
 	return nil

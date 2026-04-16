@@ -421,6 +421,7 @@ func (d *Daemon) handleFusionComplete(msg coordinator.FusionCompareDoneMsg, merg
 		for _, wid := range msg.LoserWorkerIDs {
 			go d.Coord.CleanupWorker(d.ctx, wid)
 		}
+		d.Coord.RecordFusionOutcome(msg.MultiplePassed, !msg.WasFirstPasser)
 		d.Coord.CompleteFusion(msg.StoryID, true)
 		d.notifyStoryComplete(msg.StoryID)
 		winnerUpdate := worker.WorkerUpdate{
@@ -506,6 +507,8 @@ func (d *Daemon) fusionCompare(storyID string, fg *fusion.FusionGroup, fusionCh 
 		LoserChangeIDs: cr.LoserChangeIDs,
 		Reason:         cr.Reason,
 		Passed:         cr.Passed,
+		MultiplePassed: cr.MultiplePassed,
+		WasFirstPasser: cr.WasFirstPasser,
 		Err:            cr.Err,
 	}
 }
