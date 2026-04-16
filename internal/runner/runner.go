@@ -484,7 +484,7 @@ func RunClaude(ctx context.Context, projectDir, prompt, logFilePath string, opts
 		if IsUsageLimitError(stderrBuf.String()) {
 			return result, &UsageLimitError{Stderr: strings.TrimSpace(stderrBuf.String())}
 		}
-		return result, err
+		return result, &ClaudeExitError{Err: err, Stderr: StderrTail(stderrBuf.String(), 500)}
 	}
 	return result, nil
 }
