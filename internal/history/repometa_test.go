@@ -320,6 +320,128 @@ func TestLoadAllRepos_MissingReposDir(t *testing.T) {
 	}
 }
 
+func TestLoadAllReposWithFP(t *testing.T) {
+	setDataDir(t)
+	r1 := t.TempDir()
+	r2 := t.TempDir()
+	fp1, _, err := TouchRepo(r1)
+	if err != nil {
+		t.Fatalf("touch r1: %v", err)
+	}
+	fp2, _, err := TouchRepo(r2)
+	if err != nil {
+		t.Fatalf("touch r2: %v", err)
+	}
+	all, err := LoadAllReposWithFP()
+	if err != nil {
+		t.Fatalf("LoadAllReposWithFP: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("len=%d want 2", len(all))
+	}
+	byFP := map[string]RepoMeta{}
+	for _, r := range all {
+		if r.FP == "" {
+			t.Fatalf("empty FP in entry: %+v", r)
+		}
+		byFP[r.FP] = r.Meta
+	}
+	if _, ok := byFP[fp1]; !ok {
+		t.Fatalf("fp1 %q missing from result", fp1)
+	}
+	if _, ok := byFP[fp2]; !ok {
+		t.Fatalf("fp2 %q missing from result", fp2)
+	}
+}
+
+func TestLoadAllReposWithFP_MissingReposDir(t *testing.T) {
+	setDataDir(t)
+	all, err := LoadAllReposWithFP()
+	if err != nil {
+		t.Fatalf("LoadAllReposWithFP: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("expected empty, got %d", len(all))
+	}
+}
+
+func TestLoadAllReposWithFP_SkipsUnparseableAndNonDir(t *testing.T) {
+	setDataDir(t)
+	repo := t.TempDir()
+	fp, _, err := TouchRepo(repo)
+	if err != nil {
+		t.Fatalf("TouchRepo: %v", err)
+	}
+	dataDir := os.Getenv("RALPH_DATA_DIR")
+	reposDir := filepath.Join(dataDir, "repos")
+
+	// Non-dir entry alongside the valid fingerprint dir.
+	if err := os.WriteFile(filepath.Join(reposDir, "stray.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("write stray: %v", err)
+	}
+	// Sibling fingerprint dir with unparseable meta.json.
+	badFP := "deadbeef0000"
+	badDir := filepath.Join(reposDir, badFP)
+	if err := os.Mkdir(badDir, 0o755); err != nil {
+		t.Fatalf("mkdir bad: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "meta.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("write bad meta: %v", err)
+	}
+
+	all, err := LoadAllReposWithFP()
+	if err != nil {
+		t.Fatalf("LoadAllReposWithFP: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("len=%d want 1 (bad entries should be skipped)", len(all))
+	}
+	if all[0].FP != fp {
+		t.Fatalf("FP=%q want %q", all[0].FP, fp)
+	}
+}
+
+func TestLoadAllReposWithFP_FPFromDirNameAfterMove(t *testing.T) {
+	setDataDir(t)
+	base := t.TempDir()
+	oldPath := filepath.Join(base, "old")
+	newPath := filepath.Join(base, "new")
+	if err := os.Mkdir(oldPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	initGitRepo(t, oldPath)
+
+	if _, _, err := TouchRepo(oldPath); err != nil {
+		t.Fatalf("TouchRepo old: %v", err)
+	}
+	if err := os.Rename(oldPath, newPath); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	fpNew, _, err := TouchRepo(newPath)
+	if err != nil {
+		t.Fatalf("TouchRepo new: %v", err)
+	}
+
+	all, err := LoadAllReposWithFP()
+	if err != nil {
+		t.Fatalf("LoadAllReposWithFP: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("len=%d want 1 (reconcile moved dir)", len(all))
+	}
+	if all[0].FP != fpNew {
+		t.Fatalf("FP=%q want %q (dir name)", all[0].FP, fpNew)
+	}
+	// FP must come from the dir name, which equals the current fp for newPath.
+	recomputed, err := Fingerprint(all[0].Meta.Path)
+	if err != nil {
+		t.Fatalf("Fingerprint: %v", err)
+	}
+	if recomputed != all[0].FP {
+		t.Fatalf("dir-name FP %q diverges from recomputed %q", all[0].FP, recomputed)
+	}
+}
+
 func TestUpdateLastRunID(t *testing.T) {
 	setDataDir(t)
 	repo := t.TempDir()

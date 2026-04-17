@@ -302,9 +302,21 @@ func UpdateLastRunID(fp, runID string) error {
 	return writeMeta(fp, meta)
 }
 
-// LoadAllRepos walks <Dir>/repos and returns every parseable meta.json.
-// Unparseable or missing entries are silently skipped.
-func LoadAllRepos() ([]RepoMeta, error) {
+// RepoWithFP pairs a repo's path-fingerprint (the repos/<fp>/ directory name)
+// with its RepoMeta so consumers can route by fingerprint without recomputing
+// userdata.Fingerprint for every entry.
+type RepoWithFP struct {
+	FP   string
+	Meta RepoMeta
+}
+
+// LoadAllReposWithFP walks <Dir>/repos and returns every parseable meta.json
+// paired with the fingerprint taken from the directory name. Using the
+// directory name (instead of recomputing from Meta.Path) keeps the result
+// stable even when a repo on disk has moved in a way TouchRepo has not yet
+// reconciled. Unparseable entries, non-directories, and a missing repos dir
+// are all tolerated silently.
+func LoadAllReposWithFP() ([]RepoWithFP, error) {
 	reposDir, err := userdata.ReposDir()
 	if err != nil {
 		return nil, err
@@ -316,7 +328,7 @@ func LoadAllRepos() ([]RepoMeta, error) {
 		}
 		return nil, err
 	}
-	var out []RepoMeta
+	var out []RepoWithFP
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -325,7 +337,24 @@ func LoadAllRepos() ([]RepoMeta, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, *m)
+		out = append(out, RepoWithFP{FP: e.Name(), Meta: *m})
+	}
+	return out, nil
+}
+
+// LoadAllRepos walks <Dir>/repos and returns every parseable meta.json.
+// Unparseable or missing entries are silently skipped.
+func LoadAllRepos() ([]RepoMeta, error) {
+	withFP, err := LoadAllReposWithFP()
+	if err != nil {
+		return nil, err
+	}
+	if withFP == nil {
+		return nil, nil
+	}
+	out := make([]RepoMeta, 0, len(withFP))
+	for _, r := range withFP {
+		out = append(out, r.Meta)
 	}
 	return out, nil
 }
