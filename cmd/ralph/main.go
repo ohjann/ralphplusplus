@@ -227,18 +227,53 @@ func main() {
 		client = nil
 	}
 
-	model := tui.NewModel(cfg, Version, client)
+	os.Exit(runTUI(cfg, client))
+}
 
+// runTUI owns the TUI parent process lifecycle: it opens an ad-hoc history run
+// (so clarify, utility, and user-initiated architect/implementer Claude calls
+// are captured alongside daemon runs), drives the Bubble Tea program, and
+// finalizes the run on exit. Returning an exit code (rather than calling
+// os.Exit inline) lets the deferred Finalize fire on any return path.
+func runTUI(cfg *config.Config, client *daemon.DaemonClient) int {
+	var teaErr error
+	if hr := openAdHocRun(cfg, Version); hr != nil {
+		defer func() {
+			status := history.StatusComplete
+			if teaErr != nil {
+				status = history.StatusFailed
+			}
+			_ = hr.Finalize(status, hr.ComputeTotals(), nil)
+		}()
+	}
+
+	model := tui.NewModel(cfg, Version, client)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	finalModel, err := p.Run()
+	teaErr = err
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
-
 	if m, ok := finalModel.(*tui.Model); ok {
-		os.Exit(m.ExitCode())
+		return m.ExitCode()
 	}
+	return 0
+}
+
+// openAdHocRun opens a KindAdHoc history run for the TUI parent process and
+// assigns it to cfg.HistoryRun. OpenRun failure is non-fatal: a warning is
+// logged and nil is returned so RunClaudeForIteration transparently no-ops.
+// Unlike the daemon/retro/memory-consolidate paths, ad-hoc runs deliberately
+// skip history.UpdateLastRunID — RepoMeta.LastRunID tracks substantive runs.
+func openAdHocRun(cfg *config.Config, version string) *history.Run {
+	hr, err := history.OpenRun(cfg.ProjectDir, cfg.PRDFile, version, history.RunOpts{Kind: history.KindAdHoc})
+	if err != nil {
+		debuglog.Log("history: open ad-hoc run failed: %v", err)
+		return nil
+	}
+	cfg.HistoryRun = hr
+	return hr
 }
 
 // daemonStatus represents the state of the daemon.

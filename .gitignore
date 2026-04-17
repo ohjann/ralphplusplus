@@ -17,6 +17,11 @@ build/
 !/internal/assets/files/skills/
 !/internal/assets/files/skills/**
 
+# `ralph/` in the user's global ignore would otherwise skip every new file
+# added under cmd/ralph/ (already-tracked files are unaffected).
+!/cmd/ralph/
+!/cmd/ralph/**
+
 #Claude
 .claude/
 
