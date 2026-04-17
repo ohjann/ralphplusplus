@@ -2764,6 +2764,19 @@ func (m *Model) handleDaemonEvent(msg daemonEventMsg) {
 		m.runCosting.TotalCost = msg.State.CostTotals.TotalCost
 		m.runCosting.TotalInputTokens = msg.State.CostTotals.TotalInputTokens
 		m.runCosting.TotalOutputTokens = msg.State.CostTotals.TotalOutputTokens
+		// Auto-select a worker to tail so the claude panel shows activity.
+		// Without this, activeWorkerView stays at 0 in daemon mode (the
+		// daemon doesn't push WorkerLog events), the fast-tick poller at
+		// model.go:1698 never fires, and the panel is blank even though
+		// workers are running.
+		if m.activeWorkerView == 0 || !m.daemonIsWorkerActive(m.activeWorkerView) {
+			for id, w := range msg.State.Workers {
+				if w.State == "Running" || w.State == "Setup" || w.State == "Simplifying" || w.State == "Judging" {
+					m.activeWorkerView = id
+					break
+				}
+			}
+		}
 		m.updateStatusPage()
 	}
 
