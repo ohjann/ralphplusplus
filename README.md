@@ -66,7 +66,7 @@ make build
 ./build/ralph
 
 # Install the skill manually (make install does this automatically)
-cp -r skills/ralph ~/.claude/skills/ralph
+./build/ralph install-skill
 ```
 
 Then in your project:
@@ -96,6 +96,7 @@ ralph
 - Ad-hoc tasks via TUI input bar, no prd.json needed
 - Opus for architect/debugger, Sonnet for implementer/reviewer, Haiku for utility tasks (all configurable)
 - Orchestration state checkpointed after every story event; resume on restart
+- Per-run manifests, transcripts, and cost history go to a per-user data dir (`~/Library/Application Support/ralph/` on macOS, `$XDG_DATA_HOME/ralph` on Linux), keyed by a repo fingerprint that survives path renames. `.ralph/` keeps config, memory, and the resume checkpoint
 - Daemon/client architecture: the TUI is a disposable client over Unix socket IPC — if it crashes, workers keep running; just run `ralph` again to reconnect
 - CLI client mode (`ralph status`, `ralph logs`, `ralph hint`, `ralph pause`, `ralph resume`) for headless control from scripts or Claude Code
 
