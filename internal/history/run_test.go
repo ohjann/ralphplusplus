@@ -181,7 +181,7 @@ func TestFinalize_WritesEndTimeAndTotals(t *testing.T) {
 		t.Fatalf("OpenRun: %v", err)
 	}
 	totals := Totals{InputTokens: 100, OutputTokens: 40, Iterations: 3}
-	if err := r.Finalize(StatusComplete, totals); err != nil {
+	if err := r.Finalize(StatusComplete, totals, nil); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 	m := readManifest(t, r.Dir())
@@ -196,12 +196,49 @@ func TestFinalize_WritesEndTimeAndTotals(t *testing.T) {
 	}
 
 	// Second Finalize is a no-op — don't overwrite a terminal status.
-	if err := r.Finalize(StatusFailed, Totals{}); err != nil {
+	if err := r.Finalize(StatusFailed, Totals{}, nil); err != nil {
 		t.Fatalf("second Finalize: %v", err)
 	}
 	m = readManifest(t, r.Dir())
 	if m.Status != StatusComplete {
 		t.Errorf("status after re-finalize = %q, want complete", m.Status)
+	}
+}
+
+// Finalize with a non-nil summary must append a run-history.json entry whose
+// RunID and Kind match the manifest. This enforces the "two records cannot
+// diverge" contract from IH-005.
+func TestFinalize_AppendsCostSummaryWithManifestRunIDAndKind(t *testing.T) {
+	cfg := newRunCfg(t)
+	r, err := OpenRun(cfg, "v", RunOpts{Kind: KindRetro})
+	if err != nil {
+		t.Fatalf("OpenRun: %v", err)
+	}
+
+	summary := costs.RunSummary{PRD: "test", Date: "2026-04-17T12:00:00Z", StoriesTotal: 1, StoriesCompleted: 1}
+	totals := Totals{InputTokens: 10, OutputTokens: 2}
+	if err := r.Finalize(StatusComplete, totals, &summary); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	// summary was mutated in place.
+	if summary.RunID != r.ID() {
+		t.Errorf("summary RunID = %q, want %q", summary.RunID, r.ID())
+	}
+	if summary.Kind != KindRetro {
+		t.Errorf("summary Kind = %q, want %q", summary.Kind, KindRetro)
+	}
+
+	// And the run-history.json on disk reflects that.
+	h, err := costs.LoadHistory(r.manifest.RepoFP)
+	if err != nil {
+		t.Fatalf("LoadHistory: %v", err)
+	}
+	if len(h.Runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(h.Runs))
+	}
+	if h.Runs[0].RunID != r.ID() || h.Runs[0].Kind != KindRetro {
+		t.Errorf("persisted summary = %#v", h.Runs[0])
 	}
 }
 

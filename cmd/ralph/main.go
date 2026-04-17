@@ -59,14 +59,25 @@ func main() {
 
 	// Handle history subcommand before validation (no prd.json needed).
 	if cfg.HistoryCommand {
-		var err error
+		fp, err := history.Fingerprint(cfg.ProjectDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving repo fingerprint: %v\n", err)
+			os.Exit(1)
+		}
+		// Opportunistic migration for the current repo: first invocation of a
+		// post-IH-005 binary copies <projectDir>/.ralph/run-history.json to the
+		// user-level location. Failures here are non-fatal — the CLI should
+		// still be able to render whatever user-level history exists.
+		if mErr := costs.MigrateLegacyHistory(cfg.ProjectDir, fp); mErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: migrate run-history: %v\n", mErr)
+		}
 		switch {
 		case cfg.HistoryStats:
-			err = printStats(cfg.ProjectDir)
+			err = printStats(fp, cfg.HistoryAll, cfg.HistoryAllKinds)
 		case cfg.HistoryCompare:
-			err = printCompare(cfg.ProjectDir, cfg.HistoryBy)
+			err = printCompare(fp, cfg.HistoryBy, cfg.HistoryAll, cfg.HistoryAllKinds)
 		default:
-			err = printHistory(cfg.ProjectDir, cfg.HistoryAll)
+			err = printHistory(fp, cfg.HistoryAll, cfg.HistoryAllKinds)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -140,6 +151,14 @@ func main() {
 	repoFP, _, err := history.TouchRepo(cfg.ProjectDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: history.TouchRepo: %v\n", err)
+	}
+	// Copy any pre-IH-005 <projectDir>/.ralph/run-history.json into the
+	// user-level location on first run of the new binary per repo. The legacy
+	// file is left in place and a .migrated sibling marker is written.
+	if repoFP != "" {
+		if mErr := costs.MigrateLegacyHistory(cfg.ProjectDir, repoFP); mErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: migrate run-history: %v\n", mErr)
+		}
 	}
 	runID := time.Now().UTC().Format("20060102T150405Z")
 	defer func() { mainDeferOnce.Do(func() { runMainDeferred(repoFP, runID) }) }()
@@ -703,10 +722,34 @@ func killDaemon(projectDir string) int {
 	return 1
 }
 
-func printHistory(projectDir string, showAll bool) error {
-	h, err := costs.LoadHistory(projectDir)
+// loadHistoryForCLI loads history for this repo's fp, or aggregates across
+// every fingerprint dir under <userdata>/repos when aggregate is true.
+func loadHistoryForCLI(fp string, aggregate bool) (costs.RunHistory, error) {
+	if aggregate {
+		return costs.LoadAllHistory()
+	}
+	return costs.LoadHistory(fp)
+}
+
+// filterDaemonRuns keeps only Kind=="daemon" or Kind=="" entries (legacy
+// pre-IH-005 entries are grandfathered as daemon).
+func filterDaemonRuns(runs []costs.RunSummary) []costs.RunSummary {
+	out := make([]costs.RunSummary, 0, len(runs))
+	for _, r := range runs {
+		if r.IsDaemon() {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func printHistory(fp string, aggregate, allKinds bool) error {
+	h, err := loadHistoryForCLI(fp, aggregate)
 	if err != nil {
 		return err
+	}
+	if !allKinds {
+		h.Runs = filterDaemonRuns(h.Runs)
 	}
 	if len(h.Runs) == 0 {
 		fmt.Println("No run history yet.")
@@ -714,7 +757,7 @@ func printHistory(projectDir string, showAll bool) error {
 	}
 
 	runs := h.Runs
-	if !showAll && len(runs) > 10 {
+	if !aggregate && len(runs) > 10 {
 		runs = runs[len(runs)-10:]
 	}
 
@@ -762,7 +805,7 @@ func printHistory(projectDir string, showAll bool) error {
 			date, prdName, stories, workers, cost, duration, avgIter, firstPass, model)
 	}
 
-	if !showAll && len(h.Runs) > 10 {
+	if !aggregate && len(h.Runs) > 10 {
 		fmt.Printf("\nShowing last 10 of %d runs. Use --all to see everything.\n", len(h.Runs))
 	}
 	return nil
@@ -785,10 +828,13 @@ func shortModelName(model string) string {
 	return model
 }
 
-func printStats(projectDir string) error {
-	h, err := costs.LoadHistory(projectDir)
+func printStats(fp string, aggregate, allKinds bool) error {
+	h, err := loadHistoryForCLI(fp, aggregate)
 	if err != nil {
 		return err
+	}
+	if !allKinds {
+		h.Runs = filterDaemonRuns(h.Runs)
 	}
 	if len(h.Runs) == 0 {
 		fmt.Println("No run history yet.")
@@ -933,10 +979,13 @@ type modelGroup struct {
 	storiesDone   int
 }
 
-func printCompare(projectDir, by string) error {
-	h, err := costs.LoadHistory(projectDir)
+func printCompare(fp, by string, aggregate, allKinds bool) error {
+	h, err := loadHistoryForCLI(fp, aggregate)
 	if err != nil {
 		return err
+	}
+	if !allKinds {
+		h.Runs = filterDaemonRuns(h.Runs)
 	}
 	if len(h.Runs) == 0 {
 		fmt.Println("No run history yet.")

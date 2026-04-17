@@ -2,9 +2,12 @@ package costs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/ohjann/ralphplusplus/internal/userdata"
 )
 
 const historyFileName = "run-history.json"
@@ -30,6 +33,8 @@ type FusionMetrics struct {
 type RunSummary struct {
 	PRD                   string         `json:"prd"`
 	Date                  string         `json:"date"`
+	RunID                 string         `json:"run_id,omitempty"`  // cross-links to internal/history manifest
+	Kind                  string         `json:"kind,omitempty"`    // matches manifest Kind (daemon|retro|memory-consolidate|ad-hoc)
 	StoriesTotal          int            `json:"stories_total"`
 	StoriesCompleted      int            `json:"stories_completed"`
 	StoriesFailed         int            `json:"stories_failed"`
@@ -39,13 +44,13 @@ type RunSummary struct {
 	AvgIterationsPerStory float64        `json:"avg_iterations_per_story"`
 	StuckCount            int            `json:"stuck_count"`
 	JudgeRejectionRate    float64        `json:"judge_rejection_rate"`
-	FirstPassRate         float64        `json:"first_pass_rate"`                // fraction of stories that passed on first attempt
-	ModelsUsed            []string       `json:"models_used,omitempty"`          // distinct models used in this run
+	FirstPassRate         float64        `json:"first_pass_rate"`         // fraction of stories that passed on first attempt
+	ModelsUsed            []string       `json:"models_used,omitempty"`   // distinct models used in this run
 	TotalInputTokens      int            `json:"total_input_tokens,omitempty"`
 	TotalOutputTokens     int            `json:"total_output_tokens,omitempty"`
 	CacheHitRate          float64        `json:"cache_hit_rate,omitempty"`
-	StoryDetails          []StorySummary `json:"story_details,omitempty"`        // per-story breakdown
-	Workers               int            `json:"workers,omitempty"`              // number of parallel workers used
+	StoryDetails          []StorySummary `json:"story_details,omitempty"` // per-story breakdown
+	Workers               int            `json:"workers,omitempty"`       // number of parallel workers used
 	NoArchitect           bool           `json:"no_architect,omitempty"`
 	NoFusion              bool           `json:"no_fusion,omitempty"`
 	NoSimplify            bool           `json:"no_simplify,omitempty"`
@@ -54,21 +59,43 @@ type RunSummary struct {
 	FusionMetrics         *FusionMetrics `json:"fusion_metrics,omitempty"`
 }
 
+// IsDaemon reports whether this summary is a daemon run. Legacy pre-migration
+// entries with empty Kind are grandfathered as daemon so --history still shows
+// them in the default view.
+func (r RunSummary) IsDaemon() bool {
+	return r.Kind == "" || r.Kind == "daemon"
+}
+
 // RunHistory holds a list of run summaries.
 type RunHistory struct {
 	Runs []RunSummary `json:"runs"`
 }
 
-func historyPath(projectDir string) string {
+// historyPath returns <userdata>/ralph/repos/<fp>/run-history.json.
+func historyPath(fp string) (string, error) {
+	rd, err := userdata.RepoDir(fp)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(rd, historyFileName), nil
+}
+
+// LegacyHistoryPath returns the pre-IH-005 location (<projectDir>/.ralph/run-history.json).
+// Exposed for migration only.
+func LegacyHistoryPath(projectDir string) string {
 	return filepath.Join(projectDir, ".ralph", historyFileName)
 }
 
-// LoadHistory reads .ralph/run-history.json. Returns empty history if the file doesn't exist.
-func LoadHistory(projectDir string) (RunHistory, error) {
-	path := historyPath(projectDir)
+// LoadHistory reads <userdata>/ralph/repos/<fp>/run-history.json. Returns empty
+// history if the file doesn't exist.
+func LoadHistory(fp string) (RunHistory, error) {
+	path, err := historyPath(fp)
+	if err != nil {
+		return RunHistory{}, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return RunHistory{}, nil
 		}
 		return RunHistory{}, fmt.Errorf("reading run history: %w", err)
@@ -80,12 +107,15 @@ func LoadHistory(projectDir string) (RunHistory, error) {
 	return h, nil
 }
 
-// SaveHistory writes the run history to .ralph/run-history.json with JSON indentation.
-func SaveHistory(projectDir string, history RunHistory) error {
-	path := historyPath(projectDir)
-	// Ensure the .ralph directory exists
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating .ralph directory: %w", err)
+// SaveHistory writes the run history to <userdata>/ralph/repos/<fp>/run-history.json
+// with JSON indentation.
+func SaveHistory(fp string, history RunHistory) error {
+	path, err := historyPath(fp)
+	if err != nil {
+		return err
+	}
+	if err := userdata.EnsureDirs(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("creating repo dir: %w", err)
 	}
 	data, err := json.MarshalIndent(history, "", "  ")
 	if err != nil {
@@ -98,11 +128,81 @@ func SaveHistory(projectDir string, history RunHistory) error {
 }
 
 // AppendRun loads the existing history, appends the summary, and saves.
-func AppendRun(projectDir string, summary RunSummary) error {
-	h, err := LoadHistory(projectDir)
+func AppendRun(fp string, summary RunSummary) error {
+	h, err := LoadHistory(fp)
 	if err != nil {
 		return fmt.Errorf("loading history for append: %w", err)
 	}
 	h.Runs = append(h.Runs, summary)
-	return SaveHistory(projectDir, h)
+	return SaveHistory(fp, h)
+}
+
+// MigrateLegacyHistory copies <projectDir>/.ralph/run-history.json into the
+// user-level location for fp when the legacy file exists and the user-level
+// file does not. It leaves the legacy file in place (for rollback) and writes
+// a sibling <legacy>.migrated marker so the copy is only ever performed once.
+// If both files already exist, the user-level file wins and this is a no-op.
+func MigrateLegacyHistory(projectDir, fp string) error {
+	legacy := LegacyHistoryPath(projectDir)
+	marker := legacy + ".migrated"
+
+	legacyData, err := os.ReadFile(legacy)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("reading legacy history: %w", err)
+	}
+
+	userPath, err := historyPath(fp)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(userPath); err == nil {
+		// Both files exist: user-level already wins, skip.
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat user-level history: %w", err)
+	}
+
+	if err := userdata.EnsureDirs(filepath.Dir(userPath)); err != nil {
+		return fmt.Errorf("creating user repo dir: %w", err)
+	}
+	if err := os.WriteFile(userPath, legacyData, 0o644); err != nil {
+		return fmt.Errorf("writing user-level history: %w", err)
+	}
+	if err := os.WriteFile(marker, []byte("migrated\n"), 0o644); err != nil {
+		return fmt.Errorf("writing migration marker: %w", err)
+	}
+	return nil
+}
+
+// LoadAllHistory aggregates run-history.json files across every fingerprint
+// directory under <userdata>/ralph/repos/. Returns a concatenated list of
+// RunSummary entries in directory-walk order; no repos.json index is involved.
+func LoadAllHistory() (RunHistory, error) {
+	reposDir, err := userdata.ReposDir()
+	if err != nil {
+		return RunHistory{}, err
+	}
+	entries, err := os.ReadDir(reposDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return RunHistory{}, nil
+		}
+		return RunHistory{}, fmt.Errorf("read repos dir: %w", err)
+	}
+	var agg RunHistory
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		h, err := LoadHistory(e.Name())
+		if err != nil {
+			// Skip unreadable entries; aggregation must not fail on one bad file.
+			continue
+		}
+		agg.Runs = append(agg.Runs, h.Runs...)
+	}
+	return agg, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/assets"
 	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/debuglog"
+	"github.com/ohjann/ralphplusplus/internal/userdata"
 )
 
 // RunMeta tracks run count and last dream consolidation time.
@@ -140,12 +141,16 @@ Write each file in its entirety — the old content will be replaced.
 }
 
 func buildRecentRunSummaries(projectDir string, lastN int) string {
-	history, err := costs.LoadHistory(projectDir)
-	if err != nil || len(history.Runs) == 0 {
+	fp, err := userdata.Fingerprint(projectDir)
+	if err != nil {
+		return "(no run history)"
+	}
+	h, err := costs.LoadHistory(fp)
+	if err != nil || len(h.Runs) == 0 {
 		return "(no run history)"
 	}
 
-	runs := history.Runs
+	runs := h.Runs
 	if lastN > 0 && len(runs) > lastN {
 		runs = runs[len(runs)-lastN:]
 	}

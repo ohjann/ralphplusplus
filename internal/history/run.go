@@ -277,7 +277,11 @@ func (r *Run) StartIteration(storyID, role string, iter int, model string) (*Ite
 
 // Finalize stamps EndTime/totals and flips the manifest status. It is safe to
 // call multiple times — only the first call with a non-running status sticks.
-func (r *Run) Finalize(status string, totals Totals) error {
+//
+// When summary is non-nil, the run-history.json entry is appended in the same
+// critical section as the manifest write, with RunID and Kind sourced from the
+// manifest so the two records cannot diverge.
+func (r *Run) Finalize(status string, totals Totals, summary *costs.RunSummary) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.manifest.Status != StatusRunning {
@@ -287,7 +291,17 @@ func (r *Run) Finalize(status string, totals Totals) error {
 	r.manifest.EndTime = &now
 	r.manifest.Status = status
 	r.manifest.Totals = totals
-	return r.writeManifestLocked()
+	if err := r.writeManifestLocked(); err != nil {
+		return err
+	}
+	if summary != nil {
+		summary.RunID = r.manifest.RunID
+		summary.Kind = r.manifest.Kind
+		if err := costs.AppendRun(r.manifest.RepoFP, *summary); err != nil {
+			return fmt.Errorf("append run history: %w", err)
+		}
+	}
+	return nil
 }
 
 // ComputeTotals derives per-run cost totals from the recorded iterations. It

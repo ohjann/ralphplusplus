@@ -8,6 +8,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/events"
 	"github.com/ohjann/ralphplusplus/internal/storystate"
+	"github.com/ohjann/ralphplusplus/internal/userdata"
 )
 
 // Detection thresholds. Tuned so a fresh project with one bad run doesn't
@@ -24,17 +25,21 @@ const (
 // recurring failure patterns. Returns an empty slice (no error) when there's
 // no history yet.
 func DetectAntiPatterns(projectDir string) ([]AntiPattern, error) {
-	history, err := costs.LoadHistory(projectDir)
+	fp, err := userdata.Fingerprint(projectDir)
+	if err != nil {
+		return nil, err
+	}
+	h, err := costs.LoadHistory(fp)
 	if err != nil {
 		return nil, err
 	}
 
 	var patterns []AntiPattern
 
-	if fragile := detectFragileFiles(projectDir, history); len(fragile) > 0 {
+	if fragile := detectFragileFiles(projectDir, h); len(fragile) > 0 {
 		patterns = append(patterns, fragile...)
 	}
-	if friction := detectHighFrictionModules(projectDir, history); len(friction) > 0 {
+	if friction := detectHighFrictionModules(projectDir, h); len(friction) > 0 {
 		patterns = append(patterns, friction...)
 	}
 

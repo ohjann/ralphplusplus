@@ -49,7 +49,8 @@ type Config struct {
 	NtfyServer         string // --ntfy-server <url>: self-hosted ntfy server URL
 	EnableMonitoring   bool   // --enable-monitoring: activate ntfy + status page from .env
 	HistoryCommand     bool   // true when "history" subcommand is used
-	HistoryAll         bool   // --all flag for history subcommand
+	HistoryAll         bool   // --all flag for history subcommand: aggregate across every fingerprint dir
+	HistoryAllKinds    bool   // --all-kinds flag: bypass the daemon-only filter
 	HistoryStats       bool   // --stats flag for history subcommand
 	HistoryCompare     bool   // --compare flag for history subcommand
 	HistoryBy          string // --by value for history --compare ("model" or "flags"); default "model"
@@ -162,6 +163,8 @@ func Parse(args []string) (*Config, error) {
 			switch args[j] {
 			case "--all":
 				cfg.HistoryAll = true
+			case "--all-kinds":
+				cfg.HistoryAllKinds = true
 			case "--stats":
 				cfg.HistoryStats = true
 			case "--compare":

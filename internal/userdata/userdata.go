@@ -10,11 +10,31 @@
 package userdata
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 )
+
+// Fingerprint computes sha256(EvalSymlinks(absPath))[:12] — a stable 12-char
+// hex key for a repo path. Lives here (not internal/history) so that lower
+// packages like costs can key their files without importing history.
+// Symlink evaluation errors fall back to the absolute path so a path that
+// was just removed still produces a stable key.
+func Fingerprint(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("abs path: %w", err)
+	}
+	canonical := abs
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		canonical = resolved
+	}
+	sum := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(sum[:])[:12], nil
+}
 
 // Dir returns the root user data directory for Ralph.
 func Dir() (string, error) {

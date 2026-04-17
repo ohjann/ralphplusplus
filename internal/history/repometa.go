@@ -7,8 +7,6 @@
 package history
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,20 +30,10 @@ type RepoMeta struct {
 	RunCount    int       `json:"run_count"`
 }
 
-// Fingerprint computes sha256(EvalSymlinks(absPath))[:12].
-// Symlink evaluation errors fall back to the absolute path so non-existent
-// targets (e.g. a path that was just removed) still produce a stable key.
+// Fingerprint delegates to userdata.Fingerprint. Retained here for backward
+// compatibility with existing call sites.
 func Fingerprint(path string) (string, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", fmt.Errorf("abs path: %w", err)
-	}
-	canonical := abs
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		canonical = resolved
-	}
-	sum := sha256.Sum256([]byte(canonical))
-	return hex.EncodeToString(sum[:])[:12], nil
+	return userdata.Fingerprint(path)
 }
 
 // gitFirstSHA returns the first-parent commit SHA of HEAD, or "" for a

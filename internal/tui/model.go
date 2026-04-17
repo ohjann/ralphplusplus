@@ -27,6 +27,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/dag"
 	"github.com/ohjann/ralphplusplus/internal/debuglog"
 	"github.com/ohjann/ralphplusplus/internal/events"
+	"github.com/ohjann/ralphplusplus/internal/history"
 	"github.com/ohjann/ralphplusplus/internal/interactive"
 	"github.com/ohjann/ralphplusplus/internal/judge"
 	"github.com/ohjann/ralphplusplus/internal/memory"
@@ -1784,7 +1785,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case archiveDoneMsg:
 		// Show last run summary if history exists
-		if h, err := costs.LoadHistory(m.cfg.ProjectDir); err == nil && len(h.Runs) > 0 {
+		fp, fpErr := history.Fingerprint(m.cfg.ProjectDir)
+		var h costs.RunHistory
+		var err error
+		if fpErr == nil {
+			h, err = costs.LoadHistory(fp)
+		}
+		if err == nil && len(h.Runs) > 0 {
 			last := h.Runs[len(h.Runs)-1]
 			date := last.Date
 			if len(date) > 10 {
@@ -3701,7 +3708,15 @@ func (m *Model) persistRunHistory() {
 		FusionMetrics:         m.daemonGetFusionMetrics(),
 	}
 
-	if err := costs.AppendRun(m.cfg.ProjectDir, summary); err != nil {
+	fp, err := history.Fingerprint(m.cfg.ProjectDir)
+	if err != nil {
+		debuglog.Log("persistRunHistory: fingerprint: %v", err)
+		return
+	}
+	if summary.Kind == "" {
+		summary.Kind = history.KindDaemon
+	}
+	if err := costs.AppendRun(fp, summary); err != nil {
 		debuglog.Log("persistRunHistory: failed to append run: %v", err)
 	} else {
 		debuglog.Log("persistRunHistory: appended run summary for %s", p.Project)
