@@ -46,6 +46,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/repos/{fp}", s.handleRepoDetail)
 	mux.HandleFunc("GET /api/repos/{fp}/runs", s.handleRunsList)
 	mux.HandleFunc("GET /api/repos/{fp}/runs/{runID}", s.handleRunDetail)
+	mux.HandleFunc("GET /api/live/{fp}/events", s.handleLiveEvents)
+	mux.HandleFunc("GET /api/live/{fp}/state", s.handleLiveState)
+	mux.HandleFunc("GET /api/live/{fp}/worker/{id}/activity", s.handleLiveWorkerActivity)
 	mux.HandleFunc("/", s.handleRoot)
 	return AuthMiddleware(s.Token, mux)
 }
