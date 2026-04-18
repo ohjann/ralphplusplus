@@ -2,6 +2,7 @@ package viewer_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -280,6 +282,189 @@ func TestHandleLive_DaemonOfflineWhenSocketMissing(t *testing.T) {
 		}
 		if body["error"] != "daemon_offline" {
 			t.Errorf("%s: body=%+v want {error:daemon_offline}", p, body)
+		}
+	}
+}
+
+// doPost is a POST counterpart to doGet. It mirrors the httptest-based flow
+// the other handler tests use so command route tests stay close to their
+// sibling GET tests.
+func doPost(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+path, strings.NewReader(body))
+	req.Header.Set("X-Ralph-Token", "tok-abc")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
+}
+
+func TestHandleLiveCommand_ForwardsBodyAndStatusForAllFiveRoutes(t *testing.T) {
+	t.Setenv("RALPH_DATA_DIR", t.TempDir())
+	const fp = "feedfacecafe"
+	repoRoot := shortTempRoot(t)
+	seedRepoWithPath(t, fp, repoRoot)
+
+	// The fake daemon echoes the request body back as JSON with a 202 status
+	// so we can verify the status code (not just 200) and the body (verbatim)
+	// both round-trip. It also records the request path so we can assert the
+	// /api/live/:fp/<cmd> → /api/<cmd> mapping for each route.
+	type seen struct {
+		method string
+		path   string
+		body   []byte
+	}
+	var last seen
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		last = seen{method: r.Method, path: r.URL.Path, body: b}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write(b)
+	})
+	_ = startFakeDaemon(t, repoRoot, handler)
+
+	_, h := newTestServer(t)
+
+	cases := []struct {
+		cmd  string
+		body string
+	}{
+		{"pause", `{}`},
+		{"resume", `{}`},
+		{"hint", `{"worker_id":3,"text":"look here"}`},
+		{"clarify", `{"question":"are we there yet?"}`},
+		{"quit", `{}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cmd, func(t *testing.T) {
+			rr := doPost(t, h, "/api/live/"+fp+"/"+tc.cmd, tc.body)
+			if rr.Code != http.StatusAccepted {
+				t.Fatalf("status=%d want 202 body=%q", rr.Code, rr.Body.String())
+			}
+			if !bytes.Equal(rr.Body.Bytes(), []byte(tc.body)) {
+				t.Errorf("body round-trip: got %q want %q", rr.Body.String(), tc.body)
+			}
+			if last.method != http.MethodPost {
+				t.Errorf("upstream method=%q want POST", last.method)
+			}
+			if last.path != "/api/"+tc.cmd {
+				t.Errorf("upstream path=%q want /api/%s", last.path, tc.cmd)
+			}
+			if !bytes.Equal(last.body, []byte(tc.body)) {
+				t.Errorf("upstream body=%q want %q", string(last.body), tc.body)
+			}
+			if cc := rr.Header().Get("Cache-Control"); cc != "no-store" {
+				t.Errorf("Cache-Control=%q want no-store", cc)
+			}
+		})
+	}
+}
+
+func TestHandleLiveCommand_PreservesUpstreamErrorStatus(t *testing.T) {
+	t.Setenv("RALPH_DATA_DIR", t.TempDir())
+	const fp = "feedfacecafe"
+	repoRoot := shortTempRoot(t)
+	seedRepoWithPath(t, fp, repoRoot)
+
+	// The daemon returns 400 for invalid hint bodies; the proxy must pass
+	// that status through instead of normalising to 200/500.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":"worker_id is required"}`)
+	})
+	_ = startFakeDaemon(t, repoRoot, handler)
+
+	_, h := newTestServer(t)
+	rr := doPost(t, h, "/api/live/"+fp+"/hint", `{"text":"oops"}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%q", rr.Code, rr.Body.String())
+	}
+	if rr.Body.String() != `{"error":"worker_id is required"}` {
+		t.Errorf("body=%q not forwarded verbatim", rr.Body.String())
+	}
+}
+
+func TestHandleLiveCommand_RejectsNonPost(t *testing.T) {
+	t.Setenv("RALPH_DATA_DIR", t.TempDir())
+	const fp = "feedfacecafe"
+	repoRoot := shortTempRoot(t)
+	seedRepoWithPath(t, fp, repoRoot)
+	// No daemon needed: 405 must come from the mux before any dial.
+
+	_, h := newTestServer(t)
+
+	for _, cmd := range []string{"pause", "resume", "hint", "clarify", "quit"} {
+		for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+			req := httptest.NewRequest(method, "http://127.0.0.1/api/live/"+fp+"/"+cmd, nil)
+			req.Header.Set("X-Ralph-Token", "tok-abc")
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s %s: status=%d want 405", method, cmd, rr.Code)
+			}
+		}
+	}
+}
+
+func TestHandleLiveCommand_RejectsMissingToken(t *testing.T) {
+	t.Setenv("RALPH_DATA_DIR", t.TempDir())
+	const fp = "feedfacecafe"
+	repoRoot := shortTempRoot(t)
+	seedRepoWithPath(t, fp, repoRoot)
+
+	_, h := newTestServer(t)
+
+	for _, cmd := range []string{"pause", "resume", "hint", "clarify", "quit"} {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/live/"+fp+"/"+cmd, strings.NewReader("{}"))
+		// Deliberately no X-Ralph-Token header.
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("%s: status=%d want 401", cmd, rr.Code)
+		}
+	}
+}
+
+func TestHandleLiveCommand_RejectsNonLoopbackHost(t *testing.T) {
+	t.Setenv("RALPH_DATA_DIR", t.TempDir())
+	const fp = "feedfacecafe"
+	repoRoot := shortTempRoot(t)
+	seedRepoWithPath(t, fp, repoRoot)
+
+	_, h := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "http://evil.example.com/api/live/"+fp+"/pause", strings.NewReader("{}"))
+	req.Host = "evil.example.com"
+	req.Header.Set("X-Ralph-Token", "tok-abc")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status=%d want 403", rr.Code)
+	}
+}
+
+func TestHandleLiveCommand_DaemonOfflineWhenSocketMissing(t *testing.T) {
+	t.Setenv("RALPH_DATA_DIR", t.TempDir())
+	const fp = "feedfacecafe"
+	repoRoot := shortTempRoot(t)
+	seedRepoWithPath(t, fp, repoRoot)
+	// Deliberately no .ralph/daemon.sock.
+
+	_, h := newTestServer(t)
+
+	for _, cmd := range []string{"pause", "resume", "hint", "clarify", "quit"} {
+		rr := doPost(t, h, "/api/live/"+fp+"/"+cmd, `{}`)
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: status=%d want 503", cmd, rr.Code)
+		}
+		var body map[string]string
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: unmarshal: %v body=%q", cmd, err, rr.Body.String())
+		}
+		if body["error"] != "daemon_offline" {
+			t.Errorf("%s: body=%+v want {error:daemon_offline}", cmd, body)
 		}
 	}
 }

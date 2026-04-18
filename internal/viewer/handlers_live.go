@@ -100,3 +100,23 @@ func (s *Server) handleLiveWorkerActivity(w http.ResponseWriter, r *http.Request
 	id := r.PathValue("id")
 	s.proxyToDaemon(w, r, "/api/worker/"+id+"/activity")
 }
+
+// handleLiveCommand returns a handler that POSTs to the matching daemon
+// /api/<cmd> endpoint. The reverse proxy preserves method, headers, and body
+// verbatim; the daemon's response status and body are returned unchanged so
+// validation errors (400 with {error:...}) surface to the SPA.
+//
+// The handler itself enforces POST-only (rather than relying on a
+// method-scoped mux pattern) because the viewer mux has a "/" catchall that
+// would otherwise swallow mismatched methods as 404s instead of 405s.
+func (s *Server) handleLiveCommand(cmd string) http.HandlerFunc {
+	upstream := "/api/" + cmd
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		s.proxyToDaemon(w, r, upstream)
+	}
+}
