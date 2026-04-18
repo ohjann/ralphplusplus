@@ -30,3 +30,26 @@ jobs:
 
       - name: Test
         run: make test
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install frontend dependencies
+        run: pnpm --filter ./frontend install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm --filter ./frontend build
+
+      - name: Verify dist/ is up to date
+        run: git diff --exit-code internal/viewer/dist/

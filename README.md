@@ -84,6 +84,22 @@ ralph
 
 `--plan` goes from a Claude Code plan to running stories. If you want more control over `prd.json`, the `/ralph` skill in Claude Code converts plans to Ralph's format without starting execution.
 
+## Web UI
+
+Ralph ships with a local web viewer for browsing runs, transcripts, and live daemon state.
+
+```bash
+# Start the viewer manually (binds 127.0.0.1 on an OS-chosen port)
+ralph viewer
+
+# Start Ralph and the viewer together; the viewer URL is printed on stdout
+ralph --web
+```
+
+The viewer binds loopback-only and is gated by a per-user token stored at `<userdata>/ralph/viewer.token` (mode `0600`). The URL printed on start includes the token as a query parameter, so opening it in your browser logs you in. Only one viewer runs per user — invoking `ralph viewer` again prints the live URL instead of starting a rival server.
+
+For frontend development, run `ralph viewer --dev` in one terminal and `pnpm --filter ./frontend dev` in another; the Go server reverse-proxies `/` to Vite on `127.0.0.1:5173` while keeping `/api/**` on the Go side.
+
 ## What it does
 
 - DAG analysis finds story dependencies, independent stories run across N workers in isolated jj workspaces (`--workers 3` or `--workers auto`)
