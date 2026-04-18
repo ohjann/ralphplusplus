@@ -3,10 +3,16 @@ package viewer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"sort"
+	"strconv"
 
+	"github.com/ohjann/ralphplusplus/internal/costs"
+	"github.com/ohjann/ralphplusplus/internal/history"
 	"github.com/ohjann/ralphplusplus/internal/viewer/projects"
 )
 
@@ -35,7 +41,11 @@ func NewServer(ctx context.Context, token, version string) (*Server, error) {
 // it is parsed from the URL so subsequent calls have a header to send.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/bootstrap", s.handleBootstrap)
+	mux.HandleFunc("GET /api/bootstrap", s.handleBootstrap)
+	mux.HandleFunc("GET /api/repos", s.handleRepos)
+	mux.HandleFunc("GET /api/repos/{fp}", s.handleRepoDetail)
+	mux.HandleFunc("GET /api/repos/{fp}/runs", s.handleRunsList)
+	mux.HandleFunc("GET /api/repos/{fp}/runs/{runID}", s.handleRunDetail)
 	mux.HandleFunc("/", s.handleRoot)
 	return AuthMiddleware(s.Token, mux)
 }
@@ -49,25 +59,176 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, "ralph viewer\n")
 }
 
-// bootstrapResponse is the shape returned by GET /api/bootstrap. Token is
-// echoed so the SPA can store it in memory once it has been extracted from
-// the initial URL query; featureFlags is reserved for future toggles.
-type bootstrapResponse struct {
-	Version      string   `json:"version"`
-	FeatureFlags []string `json:"featureFlags"`
-	Token        string   `json:"token"`
-}
-
 func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(bootstrapResponse{
+	writeJSON(w, http.StatusOK, Bootstrap{
 		Version:      s.Version,
 		FeatureFlags: []string{},
 		Token:        s.Token,
 	})
+}
+
+func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
+	repos, err := s.Index.Get(r.Context())
+	if err != nil {
+		http.Error(w, "load repos: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]RepoSummary, 0, len(repos))
+	for _, rp := range repos {
+		out = append(out, RepoSummary{
+			FP:       rp.FP,
+			Path:     rp.Meta.Path,
+			Name:     rp.Meta.Name,
+			LastSeen: rp.Meta.LastSeen,
+			RunCount: rp.Meta.RunCount,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].LastSeen.After(out[j].LastSeen)
+	})
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleRepoDetail(w http.ResponseWriter, r *http.Request) {
+	fp := r.PathValue("fp")
+	repos, err := s.Index.Get(r.Context())
+	if err != nil {
+		http.Error(w, "load repos: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var meta *history.RepoMeta
+	for i := range repos {
+		if repos[i].FP == fp {
+			meta = &repos[i].Meta
+			break
+		}
+	}
+	if meta == nil {
+		http.NotFound(w, r)
+		return
+	}
+	h, err := costs.LoadHistory(fp)
+	if err != nil {
+		http.Error(w, "load history: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, RepoDetail{
+		Meta:     *meta,
+		AggCosts: aggregate(h.Runs),
+	})
+}
+
+func (s *Server) handleRunsList(w http.ResponseWriter, r *http.Request) {
+	fp := r.PathValue("fp")
+	kindFilter := r.URL.Query().Get("kind")
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
+
+	manifests, err := history.LoadManifestsForRepo(fp)
+	if err != nil {
+		http.Error(w, "load manifests: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h, err := costs.LoadHistory(fp)
+	if err != nil {
+		http.Error(w, "load history: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	byRunID := make(map[string]*costs.RunSummary, len(h.Runs))
+	for i := range h.Runs {
+		if id := h.Runs[i].RunID; id != "" {
+			byRunID[id] = &h.Runs[i]
+		}
+	}
+
+	items := make([]RunListItem, 0, len(manifests))
+	for _, m := range manifests {
+		if kindFilter != "" && m.Kind != kindFilter {
+			continue
+		}
+		item := RunListItem{
+			RunID:        m.RunID,
+			Kind:         m.Kind,
+			Status:       m.Status,
+			StartTime:    m.StartTime,
+			EndTime:      m.EndTime,
+			GitBranch:    m.GitBranch,
+			GitHeadSHA:   m.GitHeadSHA,
+			Iterations:   m.Totals.Iterations,
+			InputTokens:  m.Totals.InputTokens,
+			OutputTokens: m.Totals.OutputTokens,
+		}
+		if sum, ok := byRunID[m.RunID]; ok {
+			cost := sum.TotalCost
+			dur := sum.DurationMinutes
+			fpr := sum.FirstPassRate
+			item.TotalCost = &cost
+			item.DurationMinutes = &dur
+			item.FirstPassRate = &fpr
+			item.ModelsUsed = sum.ModelsUsed
+		}
+		items = append(items, item)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].StartTime.After(items[j].StartTime)
+	})
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
+	fp := r.PathValue("fp")
+	runID := r.PathValue("runID")
+	m, err := history.ReadManifest(fp, runID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "read manifest: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h, err := costs.LoadHistory(fp)
+	if err != nil {
+		http.Error(w, "load history: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var summary *costs.RunSummary
+	for i := range h.Runs {
+		if h.Runs[i].RunID == runID {
+			s := h.Runs[i]
+			summary = &s
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, RunDetail{Manifest: *m, Summary: summary})
+}
+
+func aggregate(runs []costs.RunSummary) AggCosts {
+	var a AggCosts
+	for _, r := range runs {
+		a.Runs++
+		a.TotalCost += r.TotalCost
+		a.DurationMinutes += r.DurationMinutes
+		a.TotalIterations += r.TotalIterations
+		a.StoriesTotal += r.StoriesTotal
+		a.StoriesCompleted += r.StoriesCompleted
+		a.StoriesFailed += r.StoriesFailed
+	}
+	return a
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }

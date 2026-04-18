@@ -607,3 +607,52 @@ func prdSnapshot(path string) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
+
+// ReadManifest parses <userdata>/repos/<fp>/runs/<runID>/manifest.json.
+// Returns os.ErrNotExist when the run dir is missing so callers can 404.
+func ReadManifest(fp, runID string) (*Manifest, error) {
+	dir, err := runDirFor(fp, runID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return nil, err
+	}
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("parse manifest %s/%s: %w", fp, runID, err)
+	}
+	return &m, nil
+}
+
+// LoadManifestsForRepo walks <userdata>/repos/<fp>/runs/*/manifest.json and
+// returns every parseable manifest. A missing runs dir returns (nil, nil);
+// unparseable manifests are silently skipped so a single bad file cannot
+// break the listing.
+func LoadManifestsForRepo(fp string) ([]Manifest, error) {
+	repoDir, err := userdata.RepoDir(fp)
+	if err != nil {
+		return nil, err
+	}
+	runsDir := filepath.Join(repoDir, "runs")
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read runs dir: %w", err)
+	}
+	out := make([]Manifest, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		m, err := ReadManifest(fp, e.Name())
+		if err != nil {
+			continue
+		}
+		out = append(out, *m)
+	}
+	return out, nil
+}
