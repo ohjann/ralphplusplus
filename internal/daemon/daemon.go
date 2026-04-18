@@ -21,7 +21,6 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/fusion"
 	"github.com/ohjann/ralphplusplus/internal/judge"
 	"github.com/ohjann/ralphplusplus/internal/notify"
-	"github.com/ohjann/ralphplusplus/internal/statuspage"
 	"github.com/ohjann/ralphplusplus/internal/worker"
 )
 
@@ -34,10 +33,6 @@ type Daemon struct {
 	RunCosting *costs.RunCosting
 	Version    string
 	prepare    func(ctx context.Context) error
-
-	// Status page
-	statusServer *statuspage.StatusServer
-	statusMu     sync.Mutex
 
 	// SSE broadcaster for daemon events
 	sseMu       sync.Mutex
@@ -105,7 +100,6 @@ func (d *Daemon) Run() error {
 	defer d.cleanup()
 
 	d.installSignalHandler()
-	d.startStatusPage()
 
 	// Start the HTTP API over Unix socket
 	apiServer, err := d.StartAPI()
@@ -128,7 +122,6 @@ func (d *Daemon) Run() error {
 	if d.totalStories > 0 {
 		d.Coord.ScheduleReady(d.ctx)
 	}
-	d.updateStatusPage()
 
 	// Enter the coordination event loop
 	d.eventLoop()
@@ -191,15 +184,9 @@ func (d *Daemon) Unsubscribe(ch chan DaemonEvent) {
 }
 
 // TotalConnectedClients returns the total number of connected clients
-// across both the daemon API and the status page.
+// on the daemon API.
 func (d *Daemon) TotalConnectedClients() int {
-	count := d.ClientCount()
-	d.statusMu.Lock()
-	if d.statusServer != nil {
-		count += d.statusServer.ConnectedClients()
-	}
-	d.statusMu.Unlock()
-	return count
+	return d.ClientCount()
 }
 
 // broadcast sends a DaemonEvent to all SSE subscribers.
@@ -292,7 +279,6 @@ func (d *Daemon) eventLoop() {
 // handleWorkerUpdate processes a worker update from the coordinator's channel.
 func (d *Daemon) handleWorkerUpdate(u worker.WorkerUpdate, mergeCh chan coordinator.MergeCompleteMsg, fusionCh chan coordinator.FusionCompareDoneMsg) {
 	willRetry := d.Coord.HandleUpdate(u)
-	d.updateStatusPage()
 
 	// Track cost data
 	if u.TokenUsage != nil && d.RunCosting != nil {
@@ -376,7 +362,6 @@ func (d *Daemon) handleWorkerUpdate(u worker.WorkerUpdate, mergeCh chan coordina
 
 // handleMergeComplete processes a merge result.
 func (d *Daemon) handleMergeComplete(msg coordinator.MergeCompleteMsg) {
-	d.updateStatusPage()
 
 	if msg.Err != nil {
 		if msg.ChangeID != "" {
@@ -404,7 +389,6 @@ func (d *Daemon) handleMergeComplete(msg coordinator.MergeCompleteMsg) {
 
 // handleFusionComplete processes a fusion comparison result.
 func (d *Daemon) handleFusionComplete(msg coordinator.FusionCompareDoneMsg, mergeCh chan coordinator.MergeCompleteMsg) {
-	d.updateStatusPage()
 
 	if msg.Err != nil || !msg.Passed {
 		reason := "no passing implementations"
@@ -453,7 +437,6 @@ func (d *Daemon) handleFusionComplete(msg coordinator.FusionCompareDoneMsg, merg
 // scheduleMore triggers scheduling of ready stories after a state change.
 func (d *Daemon) scheduleMore() {
 	d.Coord.ScheduleReady(d.ctx)
-	d.updateStatusPage()
 }
 
 // checkCompletion checks whether all stories are done and broadcasts
@@ -478,7 +461,6 @@ func (d *Daemon) checkCompletion() {
 		}
 		d.Notifier.RunComplete(d.ctx, d.completedStories, d.totalStories, cost)
 	}
-	d.updateStatusPage()
 }
 
 // mergeBack runs MergeAndSync and sends the result to mergeCh.
@@ -613,9 +595,6 @@ func (d *Daemon) cleanup() {
 		_ = d.apiServer.Stop(context.Background())
 	}
 
-	// Stop status page
-	d.stopStatusPage()
-
 	// Remove PID file
 	_ = os.Remove(d.pidFile)
 
@@ -623,80 +602,5 @@ func (d *Daemon) cleanup() {
 	_ = os.Remove(d.socketPath)
 
 	debuglog.Log("daemon: cleanup complete")
-}
-
-// --- Status page ---
-
-// startStatusPage starts the status page server if configured.
-func (d *Daemon) startStatusPage() {
-	port := d.Cfg.StatusPort
-	if port == 0 {
-		return
-	}
-	ss := statuspage.New()
-	actualPort, err := ss.Start(port)
-	if err != nil {
-		debuglog.Log("daemon: status page failed to start on port %d: %v", port, err)
-		return
-	}
-	d.statusMu.Lock()
-	d.statusServer = ss
-	d.Cfg.StatusPort = actualPort
-	d.statusMu.Unlock()
-	debuglog.Log("daemon: status page started on port %d", actualPort)
-}
-
-// stopStatusPage stops the status page server.
-func (d *Daemon) stopStatusPage() {
-	d.statusMu.Lock()
-	defer d.statusMu.Unlock()
-	if d.statusServer != nil {
-		_ = d.statusServer.Stop(context.Background())
-		d.statusServer = nil
-	}
-}
-
-// updateStatusPage updates the status page with current state.
-func (d *Daemon) updateStatusPage() {
-	d.statusMu.Lock()
-	ss := d.statusServer
-	d.statusMu.Unlock()
-	if ss == nil {
-		return
-	}
-	ss.UpdateState(d.buildStatusState())
-}
-
-// buildStatusState constructs a StatusState from current daemon state.
-func (d *Daemon) buildStatusState() statuspage.StatusState {
-	elapsed := time.Since(d.startTime).Truncate(time.Second)
-
-	state := statuspage.StatusState{
-		Phase:       "parallel",
-		PhaseIcon:   "⫘",
-		RunDuration: costs.FormatDuration(elapsed),
-		Running:     d.Coord.ActiveCount() > 0,
-		Version:     d.Version,
-		Completed:   d.Coord.CompletedCount(),
-		Total:       d.totalStories,
-		AllComplete: d.Coord.AllDone(),
-	}
-
-	if d.RunCosting != nil {
-		state.TotalCost = d.RunCosting.TotalCost
-		if d.RunCosting.TotalInputTokens > 0 || d.RunCosting.TotalOutputTokens > 0 {
-			state.CostDisplay = fmt.Sprintf("$%.2f", d.RunCosting.TotalCost)
-			state.HasTokenData = true
-		}
-	}
-
-	if d.Cfg.JudgeEnabled {
-		state.Badges = append(state.Badges, statuspage.Badge{Label: "Judge", Icon: "⚖"})
-	}
-	if d.Cfg.QualityReview {
-		state.Badges = append(state.Badges, statuspage.Badge{Label: "Quality", Icon: "◇"})
-	}
-
-	return state
 }
 

@@ -21,7 +21,6 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/tui/sprite"
 	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/notify"
-	"github.com/ohjann/ralphplusplus/internal/statuspage"
 	"github.com/ohjann/ralphplusplus/internal/coordinator"
 	"github.com/ohjann/ralphplusplus/internal/daemon"
 	"github.com/ohjann/ralphplusplus/internal/dag"
@@ -174,9 +173,6 @@ type Model struct {
 	// Push notifications
 	notifier *notify.Notifier
 
-	// Remote status page
-	statusServer *statuspage.StatusServer
-
 	// Sprite mascot
 	mascot *sprite.Mascot
 
@@ -189,25 +185,7 @@ func NewModel(cfg *config.Config, version string, client *daemon.DaemonClient) *
 
 	// Always create notifier for terminal notifications; ntfy push only fires if topic is set
 	n := notify.NewNotifier(cfg.NotifyTopic, cfg.NtfyServer)
-
-	// Start status page server if --status-port is configured
-	var ss *statuspage.StatusServer
-	if cfg.StatusPort > 0 {
-		ss = statuspage.New()
-		actualPort, err := ss.Start(cfg.StatusPort)
-		if err != nil {
-			debuglog.Log("warning: status page failed to start on port %d: %v", cfg.StatusPort, err)
-			ss = nil
-		} else {
-			cfg.StatusPort = actualPort
-			debuglog.Log("Status page: http://localhost:%d", actualPort)
-		}
-	}
-
-	initialContent := ""
-	if summary := cfg.MonitoringSummary(); summary != "" {
-		initialContent = summary + "\n\n"
-	}
+	n.SetDisabled(!cfg.NotifyEnabled)
 
 	hi := textarea.New()
 	hi.Placeholder = "Type a hint for Claude..."
@@ -238,12 +216,10 @@ func NewModel(cfg *config.Config, version string, client *daemon.DaemonClient) *
 		storiesVP:      newStoriesViewport(35, 10),
 		contextVP:      newContextViewport(60, 10),
 		claudeVP:       newClaudeViewport(80, 20),
-		claudeContent:  initialContent,
 		progressSpring: harmonica.NewSpring(harmonica.FPS(30), 6.0, 0.5),
 		runCosting:     costs.NewRunCosting(),
 		workerLogCache: make(map[worker.WorkerID]string),
 		notifier:       n,
-		statusServer:   ss,
 		hintInput:      hi,
 		taskInput:      ti,
 		mascot:         m,
@@ -260,17 +236,6 @@ func (m *Model) ExitCode() int {
 func tsLog(format string, args ...interface{}) string {
 	msg := fmt.Sprintf(format, args...)
 	return fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), msg)
-}
-
-// stopStatusServer gracefully shuts down the status page server if running.
-func (m *Model) stopStatusServer() {
-	if m.statusServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := m.statusServer.Stop(ctx); err != nil {
-			debuglog.Log("status server stop error: %v", err)
-		}
-	}
 }
 
 // --- Daemon-aware helpers ---
@@ -482,418 +447,6 @@ func (m *Model) daemonGetFusionMetrics() *costs.FusionMetrics {
 func (m *Model) daemonQuit() {
 	if m.client != nil {
 		go m.client.Quit()
-	}
-}
-
-// updateStatusPage pushes the current model state to the status page server.
-func (m *Model) updateStatusPage() {
-	if m.statusServer == nil {
-		return
-	}
-	m.statusServer.UpdateState(m.buildStatusState())
-}
-
-// buildStatusState constructs a StatusState from current Model fields.
-func (m *Model) buildStatusState() statuspage.StatusState {
-	state := statuspage.StatusState{
-		Phase:     phaseToString(m.phase),
-		PhaseIcon: phaseIcon(m.phase),
-		TotalCost: m.runCosting.TotalCost,
-		Running:   isLoopActive(m.phase),
-		Version:   m.version,
-	}
-
-	elapsed := time.Since(m.startTime).Truncate(time.Second)
-	state.RunDuration = costs.FormatDuration(elapsed)
-
-	// Cost display (mirrors header logic)
-	if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
-		pct := rateLimitUsagePercent(m.rateLimitInfo)
-		state.CostDisplay = fmt.Sprintf("Usage: %d%%", pct)
-	} else if m.runCosting.TotalInputTokens > 0 || m.runCosting.TotalOutputTokens > 0 {
-		state.CostDisplay = fmt.Sprintf("$%.2f", m.runCosting.TotalCost)
-		state.HasTokenData = true
-	} else {
-		totalIters := len(m.runCosting.Stories)
-		if totalIters > 0 {
-			state.CostDisplay = fmt.Sprintf("%d stories tracked", totalIters)
-		} else {
-			state.CostDisplay = "—"
-		}
-	}
-
-	// Badges
-	if m.cfg.JudgeEnabled {
-		state.Badges = append(state.Badges, statuspage.Badge{Label: "Judge", Icon: "⚖"})
-	}
-	if m.cfg.QualityReview {
-		state.Badges = append(state.Badges, statuspage.Badge{Label: "Quality", Icon: "◇"})
-	}
-	if m.cfg.WorkersAuto {
-		if m.cfg.Workers > 1 {
-			state.Badges = append(state.Badges, statuspage.Badge{
-				Label: fmt.Sprintf("Auto %d Workers", m.cfg.Workers), Icon: "⫘"})
-		} else {
-			state.Badges = append(state.Badges, statuspage.Badge{
-				Label: "Auto Workers", Icon: "⫘"})
-		}
-	} else if m.cfg.Workers > 1 {
-		state.Badges = append(state.Badges, statuspage.Badge{
-			Label: fmt.Sprintf("%d Workers", m.cfg.Workers), Icon: "⫘"})
-	}
-	if m.cfg.NotifyTopic != "" {
-		state.Badges = append(state.Badges, statuspage.Badge{Label: "ntfy", Icon: "🔔"})
-	}
-
-	// Completion reason and plan quality
-	state.CompletionReason = m.completionReason
-	pq := m.daemonGetPlanQuality()
-	if pq.TotalStories > 0 {
-		state.PlanQuality = &statuspage.PlanQualityStatus{
-			Score:          pq.Score(),
-			FirstPassCount: pq.FirstPassCount,
-			RetryCount:     pq.RetryCount,
-			FailedCount:    pq.FailedCount,
-			TotalStories:   pq.TotalStories,
-		}
-	}
-
-	// Settings
-	for _, e := range m.settings.Entries {
-		var val string
-		switch e.Type {
-		case settingBool:
-			val = fmt.Sprintf("%t", e.BoolVal)
-		case settingInt:
-			val = fmt.Sprintf("%d", e.IntVal)
-		case settingFloat:
-			val = fmt.Sprintf("%.2f", e.FloatVal)
-		}
-		state.Settings = append(state.Settings, statuspage.SettingStatus{
-			Label: e.Label,
-			Value: val,
-		})
-	}
-
-	// Current task description (plain text version of renderCurrentTask)
-	state.CurrentTask = m.buildCurrentTaskText()
-
-	// Context panel content (all tabs) — tail-truncate to keep SSE payloads bounded.
-	const maxContentLen = 8000
-	state.ProgressContent = tailTruncate(m.progressContent, maxContentLen)
-	state.WorktreeContent = tailTruncate(m.worktreeContent, maxContentLen)
-	state.JudgeContent = tailTruncate(m.judgeContent, maxContentLen)
-	state.QualityContent = tailTruncate(m.qualityContent, maxContentLen)
-	state.MemoryContent = tailTruncate(m.memoryContent, maxContentLen)
-	state.CostsContent = tailTruncate(m.costsContent, maxContentLen)
-
-	// Claude activity (last portion to keep payload reasonable)
-	state.ClaudeActivity = tailTruncate(m.claudeContent, 4000)
-
-	// Worker logs and tabs for parallel/interactive mode
-	if (m.phase == phaseParallel || m.phase == phaseInteractive) && m.coord != nil && len(m.workerLogCache) > 0 {
-		workerLogs := make(map[int]string, len(m.workerLogCache))
-		for wID, content := range m.workerLogCache {
-			workerLogs[int(wID)] = tailTruncate(content, 4000)
-		}
-		state.WorkerLogs = workerLogs
-
-		// Build worker tabs matching the TUI tab order
-		if m.client != nil && m.daemonState != nil {
-			for _, wID := range m.workerTabOrder {
-				ws, ok := m.daemonState.Workers[wID]
-				if !ok {
-					continue
-				}
-				state.WorkerTabs = append(state.WorkerTabs, statuspage.WorkerTab{
-					WorkerID: int(wID),
-					StoryID:  ws.StoryID,
-					Role:     string(ws.Role),
-					State:    ws.State,
-					Active:   wID == m.activeWorkerView,
-				})
-			}
-		} else if m.coord != nil {
-			workers := m.coord.Workers()
-			for _, wID := range m.workerTabOrder {
-				w := workers[wID]
-				if w == nil {
-					continue
-				}
-				state.WorkerTabs = append(state.WorkerTabs, statuspage.WorkerTab{
-					WorkerID: int(wID),
-					StoryID:  w.StoryID,
-					Role:     string(w.Role),
-					State:    w.State.String(),
-					Active:   wID == m.activeWorkerView,
-				})
-			}
-		}
-	}
-
-	// Stuck alert
-	if m.stuckAlert != nil {
-		state.StuckAlert = fmt.Sprintf("⚠ STUCK: %s — %s (%dx)",
-			m.stuckAlert.StoryID, m.stuckAlert.Pattern, m.stuckAlert.Count)
-	}
-
-	// Rate limit
-	if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
-		remaining := time.Until(m.rateLimitInfo.ResetsAt)
-		if remaining < 0 {
-			remaining = 0
-		}
-		windowLabel := m.rateLimitInfo.RateLimitType
-		switch windowLabel {
-		case "five_hour":
-			windowLabel = "5-hour window"
-		case "daily":
-			windowLabel = "daily window"
-		}
-		state.RateLimit = statuspage.RateLimitStatus{
-			HasLimit: true,
-			Window:   windowLabel,
-			Status:   m.rateLimitInfo.Status,
-			ResetsIn: costs.FormatDuration(remaining.Truncate(time.Second)),
-		}
-	}
-
-	// Build worker assignments for parallel mode
-	workerAssignments := make(map[string]int)
-	workerIterations := make(map[string]int)
-	workerRoles := make(map[string]string)
-	if m.client != nil && m.daemonState != nil {
-		for wID, ws := range m.daemonState.Workers {
-			if ws.State == "running" || ws.State == "setup" || ws.State == "judging" || ws.State == "active" {
-				workerAssignments[ws.StoryID] = int(wID)
-				workerIterations[ws.StoryID] = ws.Iteration
-				workerRoles[ws.StoryID] = string(ws.Role)
-			}
-		}
-	} else if m.coord != nil {
-		for wID, w := range m.coord.Workers() {
-			if w.State == worker.WorkerRunning || w.State == worker.WorkerSetup || w.State == worker.WorkerJudging {
-				workerAssignments[w.StoryID] = int(wID)
-				workerIterations[w.StoryID] = w.Iteration
-				workerRoles[w.StoryID] = string(w.Role)
-			}
-		}
-	}
-
-	// Load PRD for story data and project name
-	if p, err := prd.Load(m.cfg.PRDFile); err == nil {
-		state.PRDName = p.Project
-		state.Total = len(p.UserStories)
-		for _, s := range p.UserStories {
-			ss := statuspage.StoryStatus{
-				ID:            s.ID,
-				Title:         s.Title,
-				IsInteractive: strings.HasPrefix(s.ID, "T-"),
-			}
-			if s.Passes {
-				ss.Status = "done"
-				state.Completed++
-				if ss.IsInteractive {
-					ss.TaskStatus = "done"
-				}
-			} else if s.ID == m.currentStoryID && m.phase == phaseClaudeRun {
-				ss.Status = "running"
-				ss.Iteration = m.iteration
-				ss.Role = string(m.currentRole)
-				if ss.IsInteractive {
-					ss.TaskStatus = "running"
-				}
-			} else {
-				ss.Status = "queued"
-				if ss.IsInteractive {
-					ss.TaskStatus = "queued"
-				}
-			}
-
-			// In parallel mode, check coordinator/daemon for running/failed status
-			if m.coord != nil || m.client != nil {
-				if m.daemonIsInProgress(s.ID) {
-					ss.Status = "running"
-					ss.WorkerID = workerAssignments[s.ID]
-					ss.Iteration = workerIterations[s.ID]
-					ss.Role = workerRoles[s.ID]
-					if ss.IsInteractive {
-						ss.TaskStatus = "running"
-					}
-				} else if m.daemonIsFailed(s.ID) {
-					ss.Status = "failed"
-					if ss.IsInteractive {
-						ss.TaskStatus = "failed"
-					}
-				}
-			}
-
-			// DAG dependencies — prefer the PRD's own DependsOn, fall back to runtime DAG
-			if len(s.DependsOn) > 0 {
-				ss.DependsOn = s.DependsOn
-			} else if m.storyDAG != nil && len(m.storyDAG.Nodes) > 0 {
-				if node, ok := m.storyDAG.Nodes[s.ID]; ok && len(node.DependsOn) > 0 {
-					ss.DependsOn = node.DependsOn
-				}
-			}
-
-			// Add per-story cost from RunCosting
-			ss.Cost = m.runCosting.StoryCost(s.ID)
-
-			state.Stories = append(state.Stories, ss)
-		}
-	}
-
-	state.AllComplete = state.Completed == state.Total && state.Total > 0
-
-	return state
-}
-
-// buildCurrentTaskText returns a plain-text version of renderCurrentTask for the status page.
-func (m *Model) buildCurrentTaskText() string {
-	switch m.phase {
-	case phaseIdle:
-		return "Idle mode"
-	case phasePlanning:
-		return "Generating prd.json from plan..."
-	case phaseReview:
-		return "Review prd.json — press Enter to execute"
-	case phaseDagAnalysis:
-		return "Analyzing story dependencies..."
-	case phaseQualityReview:
-		return fmt.Sprintf("Quality review (round %d)...", m.qualityIteration)
-	case phaseQualityFix:
-		return fmt.Sprintf("Fixing quality issues (round %d)...", m.qualityIteration)
-	case phaseQualityPrompt:
-		return "Issues remain — Enter to continue, q to finish"
-	case phasePaused:
-		if m.rateLimitInfo != nil && !m.rateLimitInfo.ResetsAt.IsZero() {
-			remaining := time.Until(m.rateLimitInfo.ResetsAt)
-			if remaining <= 0 {
-				return "Usage limit — resuming shortly..."
-			}
-			return fmt.Sprintf("Usage limit — auto-resuming in %s", costs.FormatDuration(remaining.Truncate(time.Second)))
-		}
-		return "Usage limit — press Enter to resume"
-	case phaseDone:
-		if m.allComplete {
-			return "All stories complete!"
-		} else if m.completionReason != "" {
-			return m.completionReason
-		}
-		return "Some failed stories"
-	case phaseParallel:
-		active := m.daemonActiveStoryIDs()
-		if len(active) > 0 {
-			return strings.Join(active, ", ")
-		}
-		if m.coord != nil || m.client != nil {
-			return "Scheduling..."
-		}
-		return "Starting workers..."
-	case phaseInit:
-		return "Initializing..."
-	case phaseSummary:
-		return "Generating summary..."
-	case phaseResumePrompt:
-		return "Resume from checkpoint? Press Enter to continue, q to restart"
-	case phaseInteractive:
-		return "Interactive — press t to add a task"
-	default:
-		if m.currentStoryID != "" {
-			s := m.currentStoryID
-			if m.currentRole != "" {
-				s += " · " + string(m.currentRole)
-			}
-			if m.currentStoryTitle != "" {
-				s += " " + m.currentStoryTitle
-			}
-			if strings.HasPrefix(m.currentStoryID, "FIX-") {
-				s += " [AUTO-FIX]"
-			}
-			return s
-		}
-		return "Preparing next story..."
-	}
-}
-
-// phaseIcon returns a unicode icon for the phase.
-func phaseIcon(p phase) string {
-	switch p {
-	case phaseInit:
-		return "◌"
-	case phaseIterating:
-		return "✦"
-	case phaseClaudeRun:
-		return "⚡"
-	case phaseJudgeRun:
-		return "⚖"
-	case phasePlanning:
-		return "✦"
-	case phaseReview:
-		return "◇"
-	case phaseDone:
-		return "✓"
-	case phaseIdle:
-		return "◇"
-	case phaseDagAnalysis:
-		return "◌"
-	case phaseParallel:
-		return "⚡"
-	case phaseQualityReview:
-		return "⚖"
-	case phaseQualityFix:
-		return "⚡"
-	case phaseQualityPrompt:
-		return "◇"
-	case phasePaused:
-		return "⏸"
-	case phaseInteractive:
-		return "⚡"
-	default:
-		return ""
-	}
-}
-
-// phaseToString converts a phase to a human-readable string for the status page.
-func phaseToString(p phase) string {
-	switch p {
-	case phaseInit:
-		return "Initializing"
-	case phaseIterating:
-		return "Finding story"
-	case phaseClaudeRun:
-		return "Claude running"
-	case phaseJudgeRun:
-		return "Judge reviewing"
-	case phasePlanning:
-		return "Planning"
-	case phaseReview:
-		return "Review"
-	case phaseDone:
-		return "Complete"
-	case phaseIdle:
-		return "Idle"
-	case phaseDagAnalysis:
-		return "Analyzing DAG"
-	case phaseParallel:
-		return "Parallel"
-	case phaseQualityReview:
-		return "Quality Review"
-	case phaseQualityFix:
-		return "Quality Fix"
-	case phaseQualityPrompt:
-		return "Quality Prompt"
-	case phaseSummary:
-		return "Summary"
-	case phaseResumePrompt:
-		return "Resume Prompt"
-	case phasePaused:
-		return "Paused"
-	case phaseInteractive:
-		return "Interactive"
-	default:
-		return "Unknown"
 	}
 }
 
@@ -1207,14 +760,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.coord.CleanupAll(context.Background())
 				}
 				m.cleanupWorkerLogs()
-				m.stopStatusServer()
 				m.cancel()
 				return m, tea.Quit
 			case "q":
 				if m.confirmQuit || m.phase == phaseDone || m.phase == phaseIdle {
 					m.daemonQuit()
 					m.cleanupWorkerLogs()
-					m.stopStatusServer()
 					m.cancel()
 					return m, tea.Quit
 				}
@@ -1244,7 +795,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.coord.CleanupAll(context.Background())
 			}
 			m.cleanupWorkerLogs()
-			m.stopStatusServer()
 			m.cancel()
 			return m, tea.Quit
 		case msg.String() == "y":
@@ -1316,14 +866,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.phase == phaseResumePrompt {
 				m.daemonQuit()
 				m.cleanupWorkerLogs()
-				m.stopStatusServer()
 				m.cancel()
 				return m, tea.Quit
 			}
 			if m.phase == phaseReview {
 				m.daemonQuit()
 				m.cleanupWorkerLogs()
-				m.stopStatusServer()
 				m.cancel()
 				return m, tea.Quit
 			}
@@ -1334,7 +882,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.confirmQuit || m.phase == phaseDone || m.phase == phaseIdle {
 				m.daemonQuit()
 				m.cleanupWorkerLogs()
-				m.stopStatusServer()
 				m.cancel()
 				return m, tea.Quit
 			}
@@ -1451,42 +998,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case panelClaude:
 				m.claudeVP.ViewUp()
 			}
-			return m, nil
-		case msg.String() == "m":
-			// Toggle all monitoring (status page + ntfy) on/off at runtime
-			if m.statusServer != nil {
-				// Turn everything off
-				m.stopStatusServer()
-				m.statusServer = nil
-				m.cfg.StatusPort = 0
-				m.notifier.SetDisabled(true)
-				m.claudeContent += "\n" + tsLog("── Monitoring stopped (status page + notifications) ──\n")
-			} else {
-				// Turn everything on
-				port := m.cfg.StatusPort
-				if port == 0 {
-					port = 8080
-				}
-				ss := statuspage.New()
-				actualPort, err := ss.Start(port)
-				if err != nil {
-					m.claudeContent += "\n" + tsLog("── Status page failed to start on port %d: %v ──\n", port, err)
-				} else {
-					m.statusServer = ss
-					m.cfg.StatusPort = actualPort
-					m.updateStatusPage()
-					m.claudeContent += "\n" + tsLog("── Status page started: http://localhost:%d ──\n", actualPort)
-				}
-				m.notifier.SetDisabled(false)
-				if m.notifier.Topic() == "" {
-					m.notifier.SetTopic("ralph")
-					m.cfg.NotifyTopic = "ralph"
-				}
-				m.claudeContent += tsLog("── Notifications enabled ──\n")
-			}
-			m.claudeVP.SetContent(m.claudeContent)
-			m.claudeVP.GotoBottom()
-			m.prevClaudeLen = len(m.claudeContent)
 			return m, nil
 		case msg.String() == "[" || msg.String() == "]":
 			// Cycle context panel tabs
@@ -1644,7 +1155,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fastTickMsg:
 		cmds = append(cmds, fastTickCmd())
 		cmds = append(cmds, pollProgressCmd(m.cfg.ProgressFile))
-		m.updateStatusPage()
 
 		// Advance animation frame
 		m.animFrame++
@@ -1863,7 +1373,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.runCosting != nil {
 			m.runCosting.AddIteration(msg.StoryID, msg.Usage, 0)
 			m.costsContent = renderCostsContent(m.runCosting, m.storyDisplayInfos)
-			m.updateStatusPage()
 		}
 
 	case statusMsg:
@@ -1947,7 +1456,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentRole = roles.RoleImplementer
 		}
 		m.phase = phaseClaudeRun
-		m.updateStatusPage()
 		m.claudeContent = ""
 		m.prevClaudeLen = 0
 
@@ -1976,7 +1484,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.ctx.Err() != nil {
 				debuglog.Log("claudeDone: context cancelled, quitting")
 				m.cleanupWorkerLogs()
-				m.stopStatusServer()
 					return m, tea.Quit
 			}
 			// Usage limit — pause and auto-resume when limit resets
@@ -2016,7 +1523,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.RateLimitInfo != nil {
 			m.rateLimitInfo = msg.RateLimitInfo
 		}
-		m.updateStatusPage()
 
 		// Mark current story as passed in prd.json if agent reported it complete.
 		// The system owns the passes field — the agent no longer modifies prd.json.
@@ -2067,7 +1573,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stuckAlert = &info
 		m.stuckAlertAt = time.Now()
 		m.notifier.StoryStuck(m.ctx, msg.Info.StoryID, fmt.Sprintf("%s (%dx)", msg.Info.Pattern, msg.Info.Count))
-		m.updateStatusPage()
 		// Cancel Claude — it's stuck
 		m.cancel()
 		// Recreate context for future operations
@@ -2178,13 +1683,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, scheduleReadyCmd(m.ctx, m.coord))
 			}
 			m.phase = phaseParallel
-			m.updateStatusPage()
 		}
 
 	case workerUpdateMsg:
 		u := msg.Update
 		willRetry := m.coord.HandleUpdate(u)
-		m.updateStatusPage()
 
 		// Track usage data from parallel workers
 		if u.TokenUsage != nil && m.runCosting != nil {
@@ -2343,7 +1846,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case coordinator.FusionCompareDoneMsg:
-		m.updateStatusPage()
 		if msg.Err != nil || !msg.Passed {
 			reason := "no passing implementations"
 			if msg.Err != nil {
@@ -2394,7 +1896,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case coordinator.MergeCompleteMsg:
 		// Only fires in coord-direct mode (no daemon)
-		m.updateStatusPage()
 		if msg.Err != nil {
 			if msg.ChangeID != "" && m.coord != nil {
 				m.coord.AbandonChange(m.ctx, msg.ChangeID)
@@ -2650,7 +2151,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
 		debuglog.Log("entering phaseInteractive after PRD completion")
-		m.updateStatusPage()
 
 	case retroDoneMsg:
 		if msg.Err != nil {
@@ -2671,7 +2171,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.claudeVP.GotoBottom()
 		m.prevClaudeLen = len(m.claudeContent)
 		debuglog.Log("entering phaseInteractive after retrospective")
-		m.updateStatusPage()
 
 	// --- Daemon SSE event handlers ---
 
@@ -2777,7 +2276,6 @@ func (m *Model) handleDaemonEvent(msg daemonEventMsg) {
 				}
 			}
 		}
-		m.updateStatusPage()
 	}
 
 	if msg.WorkerLog != nil {
@@ -2822,7 +2320,6 @@ func (m *Model) handleDaemonEvent(msg daemonEventMsg) {
 // handleDaemonMergeResult processes a MergeResultEvent from SSE.
 // The daemon already performed the merge; the TUI just updates its display.
 func (m *Model) handleDaemonMergeResult(r *daemon.MergeResultEvent) {
-	m.updateStatusPage()
 	if !r.Success {
 		m.claudeContent += "\n" + tsLog("── Merge failed (%s): %s ──\n", r.StoryID, r.Error)
 	} else {
@@ -2889,7 +2386,6 @@ func checkpointOverlapsPRD(cp *checkpoint.Checkpoint, prdFile string) bool {
 // Otherwise, transitions to summary generation.
 func (m *Model) transitionToComplete() (tea.Model, tea.Cmd) {
 	debuglog.Log("transitionToComplete: iteration=%d, currentStory=%s", m.iteration, m.currentStoryID)
-	m.updateStatusPage()
 	if m.cfg.QualityReview && m.qualityIteration == 0 {
 		m.qualityIteration = 1
 		m.phase = phaseQualityReview
@@ -2916,8 +2412,6 @@ func (m *Model) transitionToSummary() (tea.Model, tea.Cmd) {
 
 // finishSummary stops the sidecar and starts summary generation.
 func (m *Model) finishSummary() (tea.Model, tea.Cmd) {
-	// Stop status page — no more updates needed
-	m.stopStatusServer()
 	// Best-effort checkpoint cleanup on clean completion
 	_ = checkpoint.Delete(m.cfg.ProjectDir)
 	m.phase = phaseSummary
@@ -3396,14 +2890,6 @@ func (m *Model) rebuildStoryDisplayInfos() {
 }
 
 // clampLines truncates or pads a string to exactly n lines.
-// tailTruncate returns the last maxLen bytes of s, or s unchanged if shorter.
-func tailTruncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[len(s)-maxLen:]
-}
-
 func clampLines(s string, n int) string {
 	lines := strings.Split(s, "\n")
 	if len(lines) > n {

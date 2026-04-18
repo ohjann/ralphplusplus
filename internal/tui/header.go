@@ -78,10 +78,6 @@ func renderHeader(m *Model, width int) string {
 	if m.cfg.NotifyTopic != "" && !m.notifier.IsDisabled() {
 		badges = append(badges, lipgloss.NewStyle().Foreground(colorSuccess).Bold(true).Render("🔔 ntfy"))
 	}
-	if m.cfg.StatusPort > 0 {
-		badges = append(badges, lipgloss.NewStyle().Foreground(colorSuccess).Bold(true).Render(
-			fmt.Sprintf("📡 :%d", m.cfg.StatusPort)))
-	}
 	if m.client != nil {
 		if m.daemonConnected {
 			uptime := ""

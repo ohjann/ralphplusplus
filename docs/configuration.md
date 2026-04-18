@@ -25,10 +25,11 @@ Options:
   --utility-model <name>          Override model for utility tasks (default: haiku)
   --story-timeout <minutes>       Max wall clock minutes per story before cancellation (default: 0 = no limit)
   --memory-disable                Disable memory injection
-  --notify <topic>                Send push notifications via ntfy.sh to given topic
+  --web                           Launch the local web viewer (singleton per host) and print its URL
+  --notify                        Enable push notifications via ntfy
+  --notify-topic <topic>          ntfy topic to publish to (default: RALPH_NOTIFY_TOPIC)
   --ntfy-server <url>             Self-hosted ntfy server URL (default: https://ntfy.sh)
-  --status-port <port>            Start remote status page on given port (disabled by default)
-  --enable-monitoring             Enable ntfy + status page using .ralph/.env config
+  --enable-monitoring             DEPRECATED alias for --web --notify (prints a warning)
   --no-guy                        Disable sprite mascot overlay
   --idle                          Launch TUI without executing (display only)
   --help, -h                      Show help
@@ -69,7 +70,7 @@ Examples:
   ralph --no-judge                               Run without judge verification
   ralph --no-quality-review                     Run without final quality gate
   ralph --plan plan.md --workers 2              Full pipeline
-  ralph --enable-monitoring                     Use .ralph/.env for ntfy + status page
+  ralph --web --notify                          Launch the web viewer and enable push notifications
 ```
 
 ## TUI Keybindings
@@ -89,7 +90,6 @@ Examples:
 | `t` | Enter task input mode |
 | `i` | Inject hint (when stuck bar is showing) |
 | `s` | Enter settings mode |
-| `m` | Toggle monitoring on/off |
 | `p` | Enter interactive sprite mode |
 | `y/n` | Resume from checkpoint / start fresh |
 | `Enter` | Start execution (review phase) / Submit task / Resume |
@@ -97,57 +97,56 @@ Examples:
 
 ## Monitoring Setup
 
-Ralph can send push notifications (ntfy.sh) and serve a status page.
+Ralph can send push notifications (ntfy.sh) and serve a local web viewer
+for browsing past runs.
 
-### Quick Setup (`.ralph/.env`)
+### Push Notifications (ntfy)
 
-Configure once, then use `--enable-monitoring` to activate both:
+Pick a topic name and store it in `.ralph/.env` so you don't have to
+pass it every invocation:
 
 ```bash
 mkdir -p .ralph
 cat > .ralph/.env << 'EOF'
 RALPH_NOTIFY_TOPIC=ralph-yourname-a8f3
-RALPH_STATUS_PORT=8080
 # RALPH_NTFY_SERVER=https://ntfy.my-server.ts.net  # optional, defaults to https://ntfy.sh
 EOF
 ```
 
 Install the ntfy app on your phone ([iOS](https://apps.apple.com/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy)) and subscribe to the same topic.
 
-Then just run:
+Then run:
 
 ```bash
-ralph --enable-monitoring
+ralph --notify
 ```
 
-Ralph prints the active monitoring config at startup:
+Flags take priority over env values: `--notify-topic`, `--ntfy-server`.
 
+### Web Viewer
+
+`--web` launches a singleton web viewer on localhost and prints a URL with
+an access token. A second `ralph --web` on the same host reuses the running
+viewer and reprints the URL:
+
+```bash
+ralph --web
+# ✦ Ralph web viewer: http://127.0.0.1:54321/?token=…
 ```
-Monitoring:
-  Notifications: https://ntfy.sh/ralph-yourname-a8f3
-  Status page:   http://localhost:8080
+
+You can also start the viewer directly and leave it running across runs:
+
+```bash
+ralph viewer
 ```
-
-You can also set these values as OS environment variables (`RALPH_NOTIFY_TOPIC`, `RALPH_NTFY_SERVER`, `RALPH_STATUS_PORT`) or use the explicit flags (`--notify`, `--ntfy-server`, `--status-port`) which always take priority.
-
-### Remote Access with Tailscale
-
-Combined with [Tailscale](https://tailscale.com), the status page is accessible from your phone without port forwarding:
-
-1. Install [Tailscale](https://tailscale.com/download) on your laptop and phone
-2. Find your laptop's Tailscale IP: `tailscale ip -4` (e.g., `100.64.1.42`)
-3. Open `http://100.64.1.42:8080` on your phone
-
-The status page shows PRD name, current phase, run duration, story list with status/cost, and total cost. Updates live via SSE. JSON API at `/api/status`.
 
 ### Putting it together
 
 ```bash
-# On your laptop (connected to Tailscale)
-ralph --plan .claude/plans/my-feature.md --workers 3 --enable-monitoring
+ralph --plan .claude/plans/my-feature.md --workers 3 --web --notify
 ```
 
-Then on your phone:
-- **Status page**: `http://<tailscale-ip>:8080` for live progress
+Then:
+- **Web viewer**: open the printed `http://127.0.0.1:…` URL
 - **ntfy app**: push notifications for key events
-- **ralph history**: check past runs when you're back at your laptop
+- **ralph history**: check past runs from the CLI

@@ -105,7 +105,7 @@ ralph
 | Document | Contents |
 |----------|----------|
 | [Workflow & Modes](docs/workflow.md) | Planning, execution, parallel workers, judge, fusion, simplification, quality review, interactive mode |
-| [Configuration](docs/configuration.md) | CLI reference, TUI keybindings, monitoring setup (ntfy.sh, status page, Tailscale) |
+| [Configuration](docs/configuration.md) | CLI reference, TUI keybindings, monitoring setup (--notify, --web) |
 | [PRD Format](docs/prd-format.md) | `prd.json` schema, field reference, story sizing and ordering guidance |
 | [Architecture](docs/architecture.md) | Project structure, memory system, workspace lifecycle, key files |
 

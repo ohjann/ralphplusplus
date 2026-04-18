@@ -35,6 +35,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/retro"
 	"github.com/ohjann/ralphplusplus/internal/runner"
 	"github.com/ohjann/ralphplusplus/internal/tui"
+	"github.com/ohjann/ralphplusplus/internal/viewer"
 	"github.com/ohjann/ralphplusplus/internal/worker"
 )
 
@@ -200,6 +201,13 @@ func main() {
 	}
 	defer debuglog.Close()
 	debuglog.Log("ralph starting, version=%s, workers=%d", Version, cfg.Workers)
+
+	// --web: ensure the singleton viewer is running and print its URL.
+	if cfg.WebEnabled {
+		if err := launchViewer(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not launch web viewer: %v\n", err)
+		}
+	}
 
 	// Handle --daemon: run as background daemon (no TUI).
 	if cfg.DaemonMode {
@@ -409,6 +417,64 @@ func forkDaemon(cfg *config.Config, sockPath string) error {
 	return fmt.Errorf("daemon did not start within 5 seconds (check %s)", logPath)
 }
 
+func launchViewer() error {
+	lockPath, err := viewer.LockPath()
+	if err != nil {
+		return err
+	}
+	token, err := viewer.LoadOrCreateToken()
+	if err != nil {
+		return fmt.Errorf("viewer token: %w", err)
+	}
+
+	printURL := func(info *viewer.LockInfo) {
+		fmt.Fprintf(os.Stderr, "✦ Ralph web viewer: http://127.0.0.1:%d/?token=%s\n", info.Port, token)
+	}
+
+	if info, ok := readLiveViewerLock(lockPath); ok {
+		printURL(info)
+		return nil
+	}
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable: %w", err)
+	}
+	cmd := exec.Command(exePath, "viewer")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("spawn viewer: %w", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+		if info, ok := readLiveViewerLock(lockPath); ok {
+			printURL(info)
+			return nil
+		}
+	}
+	return fmt.Errorf("viewer did not become ready within 5 seconds")
+}
+
+func readLiveViewerLock(path string) (*viewer.LockInfo, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var info viewer.LockInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, false
+	}
+	if info.PID <= 0 || info.Port <= 0 {
+		return nil, false
+	}
+	if err := syscall.Kill(info.PID, 0); err != nil {
+		return nil, false
+	}
+	return &info, true
+}
+
 // buildDaemonArgs takes the original CLI args, filters out TUI-only flags,
 // and appends --daemon.
 func buildDaemonArgs(args []string) []string {
@@ -417,6 +483,7 @@ func buildDaemonArgs(args []string) []string {
 	tuiOnlyFlags := map[string]bool{
 		"--no-guy": true,
 		"--kill":   true,
+		"--web":    true,
 	}
 
 	i := 0
@@ -473,6 +540,7 @@ func runDaemonMode(cfg *config.Config) {
 	coord.SetRunCosting(rc)
 
 	n := notify.NewNotifier(cfg.NotifyTopic, cfg.NtfyServer)
+	n.SetDisabled(!cfg.NotifyEnabled)
 	coord.SetNotifier(n)
 
 	// Create and run daemon

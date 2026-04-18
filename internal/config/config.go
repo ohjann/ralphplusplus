@@ -44,10 +44,11 @@ type Config struct {
 	QualityMaxIters    int    // --quality-max-iterations N: review-fix cycles (default: 2)
 	Memory             MemoryConfig
 	MemoryCommand      string // "stats", "consolidate", "reset" (empty = normal TUI mode)
-	StatusPort         int    // --status-port <port>: remote status page (0 = disabled)
-	NotifyTopic        string // --notify <topic>: ntfy.sh topic for push notifications
+	NotifyTopic        string // --notify-topic <topic>: ntfy.sh topic for push notifications
 	NtfyServer         string // --ntfy-server <url>: self-hosted ntfy server URL
-	EnableMonitoring   bool   // --enable-monitoring: activate ntfy + status page from .env
+	WebEnabled         bool   // --web: spawn the web viewer and print its URL
+	NotifyEnabled      bool   // --notify: enable push notifications via ntfy
+	EnableMonitoring   bool   // --enable-monitoring: DEPRECATED — alias for --web --notify
 	HistoryCommand     bool   // true when "history" subcommand is used
 	HistoryAll         bool   // --all flag for history subcommand: aggregate across every fingerprint dir
 	HistoryAllKinds    bool   // --all-kinds flag: bypass the daemon-only filter
@@ -369,19 +370,15 @@ func Parse(args []string) (*Config, error) {
 		case "--memory-disable":
 			cfg.Memory.Disabled = true
 			i++
-		case "--status-port":
-			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--status-port requires a port number")
-			}
-			n, err := strconv.Atoi(args[i+1])
-			if err != nil {
-				return nil, fmt.Errorf("--status-port: invalid number %q", args[i+1])
-			}
-			cfg.StatusPort = n
-			i += 2
+		case "--web":
+			cfg.WebEnabled = true
+			i++
 		case "--notify":
+			cfg.NotifyEnabled = true
+			i++
+		case "--notify-topic":
 			if i+1 >= len(args) {
-				return nil, fmt.Errorf("--notify requires a topic string")
+				return nil, fmt.Errorf("--notify-topic requires a topic string")
 			}
 			cfg.NotifyTopic = args[i+1]
 			i += 2
@@ -392,7 +389,10 @@ func Parse(args []string) (*Config, error) {
 			cfg.NtfyServer = args[i+1]
 			i += 2
 		case "--enable-monitoring":
+			fmt.Fprintln(os.Stderr, "warning: --enable-monitoring is deprecated, use --web and --notify")
 			cfg.EnableMonitoring = true
+			cfg.WebEnabled = true
+			cfg.NotifyEnabled = true
 			i++
 		case "--no-architect":
 			cfg.NoArchitect = true
@@ -539,17 +539,8 @@ func Parse(args []string) (*Config, error) {
 				i++
 				continue
 			}
-			if strings.HasPrefix(args[i], "--status-port=") {
-				n, err := strconv.Atoi(args[i][len("--status-port="):])
-				if err != nil {
-					return nil, fmt.Errorf("--status-port: invalid number %q", args[i][len("--status-port="):])
-				}
-				cfg.StatusPort = n
-				i++
-				continue
-			}
-			if strings.HasPrefix(args[i], "--notify=") {
-				cfg.NotifyTopic = args[i][len("--notify="):]
+			if strings.HasPrefix(args[i], "--notify-topic=") {
+				cfg.NotifyTopic = args[i][len("--notify-topic="):]
 				i++
 				continue
 			}
@@ -677,42 +668,10 @@ func (c *Config) applyEnvDefaults(dotEnv map[string]string) {
 	if c.NtfyServer == "" {
 		c.NtfyServer = getEnv("RALPH_NTFY_SERVER")
 	}
-	if c.StatusPort == 0 {
-		if v := getEnv("RALPH_STATUS_PORT"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				c.StatusPort = n
-			}
-		}
+	// --notify without a topic falls back to "ralph" so the flag is self-contained.
+	if c.NotifyEnabled && c.NotifyTopic == "" {
+		c.NotifyTopic = "ralph"
 	}
-
-	// --enable-monitoring activates monitoring using env values with sensible defaults.
-	if c.EnableMonitoring {
-		if c.StatusPort == 0 {
-			c.StatusPort = 8080
-		}
-		// NotifyTopic must come from env — we can't guess a topic name.
-		// NtfyServer defaults to https://ntfy.sh (handled downstream in notify package).
-	}
-}
-
-// MonitoringSummary returns a human-readable string describing the active monitoring config.
-// Returns empty string if no monitoring is enabled.
-func (c *Config) MonitoringSummary() string {
-	var lines []string
-	if c.NotifyTopic != "" {
-		server := c.NtfyServer
-		if server == "" {
-			server = "https://ntfy.sh"
-		}
-		lines = append(lines, fmt.Sprintf("  Notifications: %s/%s", server, c.NotifyTopic))
-	}
-	if c.StatusPort > 0 {
-		lines = append(lines, fmt.Sprintf("  Status page:   http://localhost:%d", c.StatusPort))
-	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return "Monitoring:\n" + strings.Join(lines, "\n")
 }
 
 // ResolveAutoWorkers sets the Workers count when --workers auto is active.
@@ -804,10 +763,11 @@ Memory:
   --memory-disable               Disable memory injection
 
 Monitoring:
-  --status-port <port>           Start remote status page on given port (disabled by default)
-  --notify <topic>               Send push notifications via ntfy.sh to given topic
+  --web                          Launch the web viewer (singleton per host) and print its URL
+  --notify                       Enable push notifications via ntfy
+  --notify-topic <topic>         ntfy topic to publish to (default: read from RALPH_NOTIFY_TOPIC)
   --ntfy-server <url>            Self-hosted ntfy server URL (default: https://ntfy.sh)
-  --enable-monitoring            Enable ntfy + status page using .ralph/.env config
+  --enable-monitoring            DEPRECATED: alias for --web --notify (prints a warning)
 
 Daemon:
   --daemon                        Run as a background daemon (no TUI, coordination loop + API only)
@@ -834,7 +794,7 @@ Examples:
   ralph --judge-max-rejections 3  Allow up to 3 rejections per story
   ralph --plan .claude/plans/my-plan.md   Generate prd.json from plan, then execute
   ralph --no-quality-review       Run without final quality gate
-  ralph --enable-monitoring       Use .ralph/.env for ntfy + status page config
+  ralph --web --notify            Launch the web viewer and enable push notifications
 
 History Subcommand:
   ralph history                          Show last 10 runs
