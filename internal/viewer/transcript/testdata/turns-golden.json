@@ -1,0 +1,63 @@
+[
+  {
+    "index": 0,
+    "role": "user",
+    "blocks": [
+      {
+        "kind": "text",
+        "text": "Say hello and list the files.\n"
+      }
+    ]
+  },
+  {
+    "index": 1,
+    "role": "assistant",
+    "blocks": [
+      {
+        "kind": "thinking",
+        "text": "The user wants a greeting and a listing."
+      },
+      {
+        "kind": "tool_use",
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_1",
+        "input": {
+          "command": "ls"
+        }
+      }
+    ],
+    "stop_reason": "tool_use",
+    "usage": {
+      "input_tokens": 10,
+      "output_tokens": 25,
+      "cache_read_input_tokens": 100,
+      "cache_creation_input_tokens": 5
+    }
+  },
+  {
+    "index": 2,
+    "role": "user",
+    "blocks": [
+      {
+        "kind": "tool_result",
+        "tool_use_id": "toolu_1",
+        "output": "a.txt\nb.txt\n"
+      }
+    ]
+  },
+  {
+    "index": 3,
+    "role": "assistant",
+    "blocks": [
+      {
+        "kind": "text",
+        "text": "Hello! I see two files."
+      }
+    ],
+    "stop_reason": "end_turn",
+    "usage": {
+      "input_tokens": 20,
+      "output_tokens": 12
+    }
+  }
+]
