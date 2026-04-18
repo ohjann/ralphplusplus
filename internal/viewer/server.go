@@ -50,6 +50,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/repos/{fp}/runs", s.handleRunsList)
 	mux.HandleFunc("GET /api/repos/{fp}/runs/{runID}", s.handleRunDetail)
 	mux.HandleFunc("GET /api/repos/{fp}/prd", s.handlePRD)
+	mux.HandleFunc("GET /api/repos/{fp}/runs/{runID}/transcript/{story}/{iter}", s.handleTranscript)
+	mux.HandleFunc("GET /api/repos/{fp}/runs/{runID}/prompt/{story}/{iter}", s.handlePrompt)
 	mux.HandleFunc("GET /api/live/{fp}/events", s.handleLiveEvents)
 	mux.HandleFunc("GET /api/live/{fp}/state", s.handleLiveState)
 	mux.HandleFunc("GET /api/live/{fp}/worker/{id}/activity", s.handleLiveWorkerActivity)
