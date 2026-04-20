@@ -36,14 +36,32 @@ Evaluate the diff ONLY against the acceptance criteria listed above.
 - Missing error handling UNLESS error handling is explicitly in the acceptance criteria
 - Suggestions or improvements beyond the stated criteria
 
-### Assume the following have already passed (do not evaluate):
+### Scope of review
+You cannot verify runtime behavior directly — you evaluate the diff for code
+that WOULD exhibit the described behavior. You CAN verify:
+- Named files/components/handlers exist with substantive bodies
+- Data flows described in the AC are wired in the code (fetch calls, prop
+  passing, handler registration, CLI flag consumption)
+- The code is not a placeholder, stub, or type-only artifact pretending to
+  be an implementation
+
+Assume these checks already ran successfully — do not re-evaluate them:
 - Typechecking
 - Linting
 - Existing tests
-- Browser verification (if applicable)
 
 ### Completeness is non-negotiable
 Every acceptance criterion must map to a specific code change in the diff. Walk through each criterion one by one and confirm there is corresponding implementation. If any criterion has no matching code in the diff, FAIL — even if the rest of the implementation is excellent.
+
+### Placeholder detection
+If an AC describes behavior ("returns X for input Y", "fetches Z on mount",
+"prints W when flag is set"), a file's existence with the correct name is
+NOT sufficient — the diff must show the described behavior. FAIL when the
+named artifact is a placeholder: empty components, stub handlers returning
+hardcoded fixtures, CLI flags parsed but never used, functions with a
+signature and no body. If the AC-named data flow is absent from the diff,
+FAIL. Type-only deliveries are acceptable only when the AC scope is the
+type itself (e.g. "define interface Foo with methods X, Y, Z").
 
 ### Bias toward PASS on style and approach
 Only return FAIL for style, approach, or quality reasons if there is **clear, specific evidence** that an acceptance criterion is not met by the diff. When in doubt about *how* something was implemented, PASS. When in doubt about *whether* something was implemented, FAIL.
