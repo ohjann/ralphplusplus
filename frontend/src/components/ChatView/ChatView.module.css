@@ -1,0 +1,90 @@
+/* Chat-tree markup (marked output + shiki code). Rendered via
+ * dangerouslySetInnerHTML, so these rules are namespaced by the scoped
+ * class CSS Modules generates for us. */
+
+.prose {
+  color: #d4d4d8;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.prose :global(p) {
+  margin: 0.5em 0;
+}
+
+.prose :global(p:first-child) {
+  margin-top: 0;
+}
+
+.prose :global(p:last-child) {
+  margin-bottom: 0;
+}
+
+.prose :global(h1),
+.prose :global(h2),
+.prose :global(h3),
+.prose :global(h4) {
+  font-weight: 600;
+  margin: 0.8em 0 0.4em;
+  color: #f4f4f5;
+}
+
+.prose :global(h1) { font-size: 1.25em; }
+.prose :global(h2) { font-size: 1.15em; }
+.prose :global(h3) { font-size: 1.05em; }
+
+.prose :global(ul),
+.prose :global(ol) {
+  padding-left: 1.5em;
+  margin: 0.4em 0;
+}
+
+.prose :global(li) {
+  margin: 0.2em 0;
+}
+
+.prose :global(a) {
+  color: #a5b4fc;
+  text-decoration: underline;
+}
+
+.prose :global(code:not(pre code)) {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+.prose :global(blockquote) {
+  border-left: 3px solid #52525b;
+  padding-left: 0.8em;
+  color: #a1a1aa;
+  margin: 0.5em 0;
+}
+
+.prose :global(hr) {
+  border: none;
+  border-top: 1px solid #3f3f46;
+  margin: 1em 0;
+}
+
+.prose :global(strong) { color: #fafafa; }
+.prose :global(em) { color: #e4e4e7; }
+
+.codeBlock {
+  font-size: 12px;
+  margin: 0.6em 0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.codeBlock :global(pre) {
+  margin: 0;
+  padding: 0.6em 0.8em;
+  overflow-x: auto;
+}
+
+.codeBlockFallback {
+  background: #18181b;
+  color: #e4e4e7;
+}

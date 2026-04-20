@@ -2,7 +2,7 @@ import { LocationProvider, Router, Route } from 'preact-iso';
 import { Sidebar } from './components/Sidebar/Sidebar';
 import { Home } from './routes/Home';
 import { RunRoute } from './routes/RunRoute';
-import { IterPlaceholder } from './routes/IterPlaceholder';
+import { IterRoute } from './routes/IterRoute';
 
 export function App() {
   return (
@@ -14,7 +14,7 @@ export function App() {
             <Route path="/" component={Home} />
             <Route
               path="/repos/:fp/runs/:runId/iter/:story/:iter"
-              component={IterPlaceholder}
+              component={IterRoute}
             />
             <Route path="/repos/:fp/runs/:runId" component={RunRoute} />
             <Route default component={Home} />

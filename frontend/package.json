@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@preact/signals": "^2.2.1",
+    "marked": "^18.0.2",
     "preact": "^10.26.4",
-    "preact-iso": "^2.11.1"
+    "preact-iso": "^2.11.1",
+    "shiki": "^4.0.2"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.3",
