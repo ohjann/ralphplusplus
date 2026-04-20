@@ -7,6 +7,7 @@ import {
   type PRDResponse,
   type StoryRecord,
 } from '../../lib/api';
+import { StatusPanel } from '../StatusPanel/StatusPanel';
 
 const loading = signal<boolean>(false);
 const error = signal<string>('');
@@ -95,8 +96,11 @@ export function RunSummary({ fp, runId }: { fp: string; runId: string }) {
         ? 'bg-neutral-700/30 text-neutral-200 border-neutral-600'
         : 'bg-amber-500/10 text-amber-300 border-amber-500/40';
 
+  const isLive = m.status === 'running';
+
   return (
-    <div class="p-6 max-w-4xl">
+    <div class="flex items-stretch">
+      <div class="flex-1 p-6 max-w-4xl">
       <header class="mb-6">
         <div class="flex items-center gap-2 mb-1">
           <h1 class="text-xl font-semibold">{m.repo_name || m.repo_path}</h1>
@@ -179,6 +183,8 @@ export function RunSummary({ fp, runId }: { fp: string; runId: string }) {
         </h2>
         <StoriesList fp={fp} runId={runId} stories={m.stories ?? []} />
       </section>
+      </div>
+      {isLive && <StatusPanel fp={fp} />}
     </div>
   );
 }

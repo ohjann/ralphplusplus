@@ -2,6 +2,14 @@ import { signal, computed } from '@preact/signals';
 import { useEffect } from 'preact/hooks';
 import { useLocation } from 'preact-iso';
 import { apiGet, type RepoSummary, type RunListItem } from '../../lib/api';
+import { probeReach } from '../../lib/live';
+
+const HEARTBEAT_MS = 15_000;
+
+// reachByFP tracks daemon socket reachability per repo. True means last probe
+// returned 200 within the current heartbeat window; false means 503 / network
+// failure / or > HEARTBEAT_MS stale.
+const reachByFP = signal<Record<string, boolean>>({});
 
 const repos = signal<RepoSummary[]>([]);
 const runsByRepo = signal<Record<string, RunListItem[]>>({});
@@ -26,6 +34,20 @@ async function loadRepos() {
   } catch (e) {
     repoError.value = e instanceof Error ? e.message : String(e);
   }
+}
+
+// Probe every known repo's daemon socket in parallel and refresh reachByFP.
+// Called on mount and every HEARTBEAT_MS afterwards. A repo that stops
+// responding flips to false on the next heartbeat, which greys its badge.
+async function probeAllRepos() {
+  const list = repos.value;
+  if (list.length === 0) return;
+  const results = await Promise.all(
+    list.map(async (r) => [r.fp, await probeReach(r.fp)] as const),
+  );
+  const next: Record<string, boolean> = {};
+  for (const [fp, ok] of results) next[fp] = ok;
+  reachByFP.value = next;
 }
 
 async function loadRuns(fp: string) {
@@ -87,7 +109,19 @@ function runIdFromPath(path: string): string {
 
 export function Sidebar() {
   useEffect(() => {
-    void loadRepos();
+    let cancelled = false;
+    void (async () => {
+      await loadRepos();
+      if (cancelled) return;
+      void probeAllRepos();
+    })();
+    const id = setInterval(() => {
+      if (!cancelled) void probeAllRepos();
+    }, HEARTBEAT_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   return (
@@ -128,7 +162,11 @@ function RepoRow({ repo }: { repo: RepoSummary }) {
   const isOpen = expanded.value.has(repo.fp);
   const runs = runsByRepo.value[repo.fp];
   const loading = loadingRuns.value.has(repo.fp);
-  const anyRunning = (runs ?? []).some((r) => r.status === 'running');
+  // Repo-level badge reflects *socket reachability* (per RV-013), not any
+  // manifest's Status field — a daemon in --idle mode with no running runs
+  // is still reachable, and a "running" manifest whose daemon has died is
+  // not. Per-run badges below still key on manifest.Status.
+  const daemonReachable = reachByFP.value[repo.fp] === true;
 
   return (
     <div>
@@ -142,8 +180,20 @@ function RepoRow({ repo }: { repo: RepoSummary }) {
           <span class="font-medium">{repo.name || repo.path}</span>
           <span class="block text-[11px] text-neutral-500 truncate">{repo.path}</span>
         </span>
-        {anyRunning && <LiveDot />}
-        <span class="text-[11px] text-neutral-500">{repo.runCount}</span>
+        {daemonReachable ? (
+          <LiveDot />
+        ) : (
+          <span
+            class="w-2 h-2 inline-block rounded-full bg-neutral-700"
+            title="Daemon not reachable"
+          />
+        )}
+        <span
+          class="text-[11px] text-neutral-500"
+          title={`${repo.runCount} total Ralph invocations in this repo (may exceed the number of stored runs visible when expanded)`}
+        >
+          {repo.runCount}
+        </span>
       </button>
       {isOpen && (
         <div class="pl-5 pr-3 py-1 bg-neutral-925">
