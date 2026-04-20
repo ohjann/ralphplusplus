@@ -234,7 +234,13 @@ function RunGroups({ fp, runs }: { fp: string; runs: RunListItem[] }) {
 
 function RunRow({ fp, run }: { fp: string; run: RunListItem }) {
   const href = `/repos/${fp}/runs/${run.runId}`;
-  const isRunning = run.status === 'running';
+  const claimsRunning = run.status === 'running';
+  const daemonReachable = reachByFP.value[fp] === true;
+  // Only show a live (green) dot when the manifest claims running AND the
+  // daemon is actually reachable. A stale 'running' manifest (daemon died
+  // mid-run without finalising) shows grey with a tooltip so users can tell
+  // apart "complete" from "orphaned".
+  const isActuallyLive = claimsRunning && daemonReachable;
   const loc = useLocation();
   const isActive = runIdFromPath(loc.path) === run.runId;
   return (
@@ -245,10 +251,17 @@ function RunRow({ fp, run }: { fp: string; run: RunListItem }) {
         (isActive ? 'bg-neutral-800' : '')
       }
     >
-      {isRunning ? (
+      {isActuallyLive ? (
         <LiveDot />
       ) : (
-        <span class="w-2 h-2 inline-block rounded-full bg-neutral-700" />
+        <span
+          class="w-2 h-2 inline-block rounded-full bg-neutral-700"
+          title={
+            claimsRunning
+              ? 'Manifest says running, but daemon is unreachable (probably orphaned)'
+              : run.status
+          }
+        />
       )}
       <span class="font-mono text-neutral-300">{shortHash(run.runId)}</span>
       <span class="text-neutral-500 truncate">{fmtTime(run.startTime)}</span>
