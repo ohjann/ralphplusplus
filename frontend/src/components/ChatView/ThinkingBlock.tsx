@@ -4,14 +4,17 @@ export function ThinkingBlock({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const trimmed = text.trim();
 
-  // Anthropic's extended-thinking API can emit thinking blocks whose text is
-  // redacted server-side — only a signature_delta arrives, no plaintext. Show
-  // a non-clickable "redacted" tag in that case so users aren't confused by
-  // an empty dropdown.
+  // Anthropic's extended-thinking API sometimes streams only a signature_delta
+  // (cryptographic commitment) without the plaintext thinking_delta events —
+  // typically on long thinking sequences or cache-heavy calls. The thinking
+  // happened server-side but the text isn't in the stream. Render a
+  // non-clickable tag so users aren't confused by an empty dropdown.
+  // (Distinct from Anthropic's `redacted_thinking` block type, which is a
+  // separate kind we'd render differently if it appears.)
   if (trimmed.length === 0) {
     return (
       <div class="border-l-2 border-neutral-800 pl-3 my-2 text-[11px] uppercase tracking-wider text-neutral-600">
-        thinking · redacted
+        thinking · summary not provided
       </div>
     );
   }
