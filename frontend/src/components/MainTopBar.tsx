@@ -1,7 +1,8 @@
 import { useLocation } from 'preact-iso';
+import { IntegrationsRow } from './IntegrationsRow';
 
-// Sticky 40px top bar showing a breadcrumb-style route label. Mirrors the
-// handoff spec: mono text, 11px, fg-ghost, bottom hairline.
+// Sticky 40px top bar — breadcrumb-style route label on the left,
+// integration chips (ntfy + Tailscale) on the right. Mirrors the handoff.
 export function MainTopBar() {
   const loc = useLocation();
   const label = deriveLabel(loc.path);
@@ -31,6 +32,8 @@ export function MainTopBar() {
       >
         {label}
       </div>
+      <div style={{ flex: 1 }} />
+      <IntegrationsRow />
     </div>
   );
 }
