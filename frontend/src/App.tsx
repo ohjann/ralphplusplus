@@ -1,7 +1,21 @@
+import { LocationProvider, Router, Route } from 'preact-iso';
+import { Sidebar } from './components/Sidebar/Sidebar';
+import { Home } from './routes/Home';
+import { RunPlaceholder } from './routes/RunPlaceholder';
+
 export function App() {
   return (
-    <main class="min-h-screen flex items-center justify-center bg-neutral-950 text-neutral-100">
-      <h1 class="text-2xl font-semibold tracking-tight">Ralph Viewer</h1>
-    </main>
+    <LocationProvider>
+      <div class="flex h-screen bg-neutral-950 text-neutral-100">
+        <Sidebar />
+        <main class="flex-1 overflow-y-auto">
+          <Router>
+            <Route path="/" component={Home} />
+            <Route path="/repos/:fp/runs/:runId" component={RunPlaceholder} />
+            <Route default component={Home} />
+          </Router>
+        </main>
+      </div>
+    </LocationProvider>
   );
 }
