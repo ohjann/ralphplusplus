@@ -31,7 +31,7 @@ export function HintComposer({
       );
       setText('');
     } catch {
-      /* toast already fired */
+      /* toast fired */
     } finally {
       setBusy(false);
     }
@@ -39,44 +39,79 @@ export function HintComposer({
 
   if (workers.length === 0) {
     return (
-      <div class="text-[11px] text-neutral-500 italic">
-        No active workers — hints are delivered to a specific worker.
+      <div
+        style={{
+          fontSize: 11,
+          color: 'var(--fg-faint)',
+          fontStyle: 'italic',
+        }}
+      >
+        No active workers — hints target a specific worker.
       </div>
     );
   }
 
   return (
-    <form onSubmit={submit} class="flex flex-col gap-2">
-      <label class="flex items-center gap-2 text-[10px] uppercase tracking-wider text-neutral-500">
-        Worker
-        <select
-          value={workerId === '' ? '' : String(workerId)}
-          onChange={(e) => {
-            const v = (e.currentTarget as HTMLSelectElement).value;
-            setWorkerId(v === '' ? '' : Number(v));
-          }}
-          class="bg-neutral-900 border border-neutral-700 rounded text-xs px-1 py-0.5 text-neutral-200 focus:outline-none focus:border-neutral-500 normal-case tracking-normal"
-        >
-          {workers.map((w) => (
-            <option key={w.id} value={String(w.id)}>
-              #{w.id} · {w.role} · {w.story_id || '—'}
-            </option>
-          ))}
-        </select>
-      </label>
+    <form
+      onSubmit={submit}
+      style={{ display: 'flex', flexDirection: 'column', gap: 5 }}
+    >
+      <select
+        value={workerId === '' ? '' : String(workerId)}
+        onChange={(e) => {
+          const v = (e.currentTarget as HTMLSelectElement).value;
+          setWorkerId(v === '' ? '' : Number(v));
+        }}
+        style={{
+          padding: '5px 8px',
+          fontSize: 12,
+          background: 'var(--bg-elev)',
+          border: '1px solid var(--border)',
+          borderRadius: 5,
+          color: 'var(--fg)',
+        }}
+      >
+        {workers.map((w) => (
+          <option key={w.id} value={String(w.id)}>
+            #{w.id} · {w.role} · {w.story_id || '—'}
+          </option>
+        ))}
+      </select>
       <textarea
         value={text}
         onInput={(e) => setText((e.currentTarget as HTMLTextAreaElement).value)}
-        placeholder="Hint to prepend to the next iteration's prompt"
-        rows={3}
-        class="bg-neutral-900 border border-neutral-700 rounded text-xs p-2 text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-neutral-500 resize-y"
+        placeholder="Hint to prepend to the next iteration's prompt…"
+        rows={2}
+        style={{
+          padding: '6px 8px',
+          background: 'var(--bg-elev)',
+          border: '1px solid var(--border)',
+          borderRadius: 5,
+          fontSize: 12,
+          color: 'var(--fg)',
+          resize: 'vertical',
+          fontFamily: 'var(--font-sans)',
+        }}
       />
       <button
         type="submit"
         disabled={busy || workerId === '' || text.trim() === ''}
-        class="self-start px-3 py-1 rounded border text-xs uppercase tracking-wider bg-indigo-500/10 border-indigo-500/40 text-indigo-200 hover:bg-indigo-500/20 disabled:opacity-50 disabled:hover:bg-indigo-500/10"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 6,
+          padding: '5px 10px',
+          fontSize: 12,
+          border: '1px solid var(--accent-border)',
+          borderRadius: 5,
+          background: 'var(--accent-soft)',
+          color: 'var(--accent-ink)',
+          opacity:
+            busy || workerId === '' || text.trim() === '' ? 0.5 : 1,
+        }}
       >
-        {busy ? 'Sending…' : 'Send hint'}
+        {busy ? 'sending…' : '→ send hint'}
       </button>
     </form>
   );

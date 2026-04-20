@@ -14,7 +14,7 @@ export function QuitButton({ fp }: { fp: string }) {
         errorPrefix: 'Quit failed',
       });
     } catch {
-      /* toast already fired */
+      /* toast fired */
     } finally {
       setBusy(false);
       setConfirming(false);
@@ -26,31 +26,59 @@ export function QuitButton({ fp }: { fp: string }) {
       <button
         type="button"
         onClick={() => setConfirming(true)}
-        class="px-3 py-1 rounded border text-xs uppercase tracking-wider bg-neutral-800 border-neutral-700 text-neutral-300 hover:bg-red-500/10 hover:border-red-500/40 hover:text-red-200 transition"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '5px 10px',
+          fontSize: 12,
+          border: '1px solid var(--err)',
+          borderRadius: 5,
+          background: 'var(--bg-elev)',
+          color: 'var(--err)',
+        }}
       >
-        Quit
+        <span aria-hidden>■</span>
+        quit
       </button>
     );
   }
 
   return (
-    <div class="flex items-center gap-1">
-      <span class="text-xs text-neutral-400">Quit daemon?</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontSize: 11.5, color: 'var(--fg-faint)' }}>
+        Quit daemon?
+      </span>
       <button
         type="button"
         onClick={doQuit}
         disabled={busy}
-        class="px-2 py-0.5 rounded border text-xs bg-red-500/10 border-red-500/40 text-red-200 hover:bg-red-500/20 disabled:opacity-50"
+        style={{
+          padding: '3px 8px',
+          fontSize: 11,
+          border: '1px solid var(--err)',
+          borderRadius: 4,
+          background: 'var(--err-soft)',
+          color: 'var(--err)',
+          opacity: busy ? 0.5 : 1,
+        }}
       >
-        {busy ? '…' : 'Confirm'}
+        {busy ? '…' : 'confirm'}
       </button>
       <button
         type="button"
         onClick={() => setConfirming(false)}
         disabled={busy}
-        class="px-2 py-0.5 rounded border text-xs border-neutral-700 text-neutral-400 hover:bg-neutral-800"
+        style={{
+          padding: '3px 8px',
+          fontSize: 11,
+          border: '1px solid var(--border)',
+          borderRadius: 4,
+          background: 'transparent',
+          color: 'var(--fg-muted)',
+        }}
       >
-        Cancel
+        cancel
       </button>
     </div>
   );

@@ -12,9 +12,13 @@ import { QuitButton } from '../Commands/QuitButton';
 import { HintComposer } from '../Commands/HintComposer';
 import { ClarifyPrompt } from '../Commands/ClarifyPrompt';
 
-// Per-fp live state, shared across any StatusPanel mounts for the same repo.
 const stateByFP = signal<Record<string, DaemonStateEvent | null>>({});
 const statusByFP = signal<Record<string, 'open' | 'error' | 'closed'>>({});
+
+function fmtUptime(s: string): string {
+  // Daemon sends Go duration strings like "2m34s" or "1h5m". Pass through.
+  return s || '0s';
+}
 
 export function StatusPanel({ fp }: { fp: string }) {
   useEffect(() => {
@@ -53,153 +57,257 @@ export function StatusPanel({ fp }: { fp: string }) {
 
   if (!state && status !== 'open') {
     return (
-      <aside class="border-l border-neutral-800 bg-neutral-900/30 p-4 text-sm">
-        <div class="text-xs uppercase tracking-wider text-neutral-500 mb-2">
-          Daemon
+      <aside style={panel.root}>
+        <div style={panel.hd}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span class="dot" />
+            <span style={{ fontSize: 12, fontWeight: 600 }}>Daemon offline</span>
+          </div>
         </div>
-        <div class="text-amber-400 text-xs">Daemon offline</div>
+        <div style={{ padding: 16, fontSize: 12, color: 'var(--fg-faint)' }}>
+          The repo has no reachable <code>.ralph/daemon.sock</code>. Start
+          Ralph in this repo to connect.
+        </div>
       </aside>
     );
   }
   if (!state) {
     return (
-      <aside class="border-l border-neutral-800 bg-neutral-900/30 p-4 text-sm">
-        <div class="text-xs text-neutral-500">Connecting…</div>
+      <aside style={panel.root}>
+        <div style={panel.hd}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span class="dot ok live" />
+            <span style={{ fontSize: 12, fontWeight: 600 }}>Connecting…</span>
+          </div>
+        </div>
       </aside>
     );
   }
 
   const workers = Object.values(state.workers ?? {});
+  const total = state.total_stories || 1;
+  const pct = Math.min(100, Math.round((state.completed_count / total) * 100));
 
   return (
-    <aside class="border-l border-neutral-800 bg-neutral-900/30 p-4 text-sm min-w-[18rem] max-w-xs">
-      <div class="flex items-center gap-2 mb-3">
-        <span class="text-xs uppercase tracking-wider text-neutral-500">
-          Daemon
-        </span>
-        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-        <span class="text-[10px] text-neutral-500">up {state.uptime}</span>
+    <aside style={panel.root}>
+      <div style={panel.hd}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span class="dot ok live" />
+          <span style={{ fontSize: 12, fontWeight: 600 }}>Daemon up</span>
+          <span
+            class="mono"
+            style={{ fontSize: 11, color: 'var(--fg-faint)' }}
+          >
+            {fmtUptime(state.uptime)}
+          </span>
+        </div>
       </div>
 
-      <Row
-        label="Phase"
-        value={
-          <span class="px-2 py-0.5 rounded border border-neutral-700 text-xs font-mono">
+      <div style={panel.body}>
+        {/* Phase */}
+        <Row label="Phase">
+          <span
+            class="pill indigo"
+            style={{
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              fontSize: 10.5,
+            }}
+          >
             {state.phase || 'idle'}
-            {state.paused && (
-              <span class="ml-1 text-amber-400">(paused)</span>
-            )}
           </span>
-        }
-      />
-      <Row
-        label="Progress"
-        value={
-          <span class="text-neutral-300 text-xs">
-            {state.completed_count}/{state.total_stories}
-            {state.failed_count > 0 && (
-              <span class="text-red-400 ml-1">
-                · {state.failed_count} failed
-              </span>
-            )}
-            <span class="ml-2 text-neutral-500">
-              iter {state.iteration_count}
+          {state.paused && <span class="pill warn">paused</span>}
+        </Row>
+
+        {/* Progress */}
+        <div>
+          <div style={panel.rowLabel}>Progress</div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginTop: 4,
+            }}
+          >
+            <span class="mono" style={{ fontSize: 13, color: 'var(--fg)' }}>
+              {state.completed_count}
+              <span style={{ color: 'var(--fg-ghost)' }}>/{state.total_stories}</span>
             </span>
-          </span>
-        }
-      />
-      <Row
-        label="Cost"
-        value={
-          <span class="font-mono text-xs">
+            <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+              stories
+            </span>
+            <span style={{ width: 1, height: 10, background: 'var(--border)' }} />
+            <span class="mono" style={{ fontSize: 13, color: 'var(--fg)' }}>
+              {state.iteration_count}
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+              iters
+            </span>
+            {state.failed_count > 0 && (
+              <>
+                <span
+                  style={{
+                    width: 1,
+                    height: 10,
+                    background: 'var(--border)',
+                  }}
+                />
+                <span
+                  class="mono"
+                  style={{ fontSize: 13, color: 'var(--err)' }}
+                >
+                  {state.failed_count}
+                </span>
+                <span style={{ fontSize: 11, color: 'var(--err)' }}>
+                  failed
+                </span>
+              </>
+            )}
+          </div>
+          <div style={panel.bar}>
+            <div style={{ ...panel.barFill, width: `${pct}%` }} />
+          </div>
+        </div>
+
+        {/* Cost */}
+        <Row label="Cost">
+          <span
+            class="mono"
+            style={{
+              fontSize: 14,
+              color: 'var(--fg)',
+              letterSpacing: '-0.01em',
+            }}
+          >
             ${state.cost_totals.total_cost.toFixed(2)}
           </span>
-        }
-      />
-
-      <section class="mt-4">
-        <div class="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">
-          Workers
-        </div>
-        {workers.length === 0 ? (
-          <div class="text-xs text-neutral-500 italic">Idle.</div>
-        ) : (
-          <ul class="flex flex-col gap-1">
-            {workers
-              .sort((a, b) => a.id - b.id)
-              .map((w) => (
-                <li key={w.id}>
-                  <WorkerRow w={w} />
-                </li>
-              ))}
-          </ul>
-        )}
-      </section>
-
-      <section class="mt-4">
-        <div class="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">
-          Plan quality
-        </div>
-        <div class="text-xs text-neutral-300">
-          <span class="font-mono">
-            {Math.round(state.plan_quality.score * 100)}%
+          <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+            · {state.cost_totals.total_input_tokens.toLocaleString()} in ·{' '}
+            {state.cost_totals.total_output_tokens.toLocaleString()} out
           </span>
-          <span class="text-neutral-500 ml-2">
-            {state.plan_quality.first_pass_count} first-pass ·{' '}
-            {state.plan_quality.retry_count} retries
-            {state.plan_quality.failed_count > 0 && (
-              <> · {state.plan_quality.failed_count} failed</>
-            )}
-          </span>
-        </div>
-      </section>
+        </Row>
 
-      {hasFusion(state.fusion_metrics) && (
-        <section class="mt-4">
-          <div class="text-[10px] uppercase tracking-wider text-neutral-500 mb-1">
-            Fusion metrics
+        {/* Workers */}
+        <div>
+          <div style={panel.rowLabel}>Workers</div>
+          {workers.length === 0 ? (
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: 11.5,
+                color: 'var(--fg-faint)',
+                fontStyle: 'italic',
+              }}
+            >
+              Idle.
+            </div>
+          ) : (
+            <div style={panel.workerTable}>
+              {workers
+                .sort((a, b) => a.id - b.id)
+                .map((w) => (
+                  <WorkerRow key={w.id} w={w} />
+                ))}
+            </div>
+          )}
+        </div>
+
+        {/* Plan quality */}
+        <div>
+          <div style={panel.rowLabel}>Plan quality</div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              marginTop: 4,
+            }}
+          >
+            <div
+              class="mono"
+              style={{
+                fontSize: 20,
+                color: 'var(--accent-ink)',
+                letterSpacing: '-0.01em',
+              }}
+            >
+              {state.plan_quality.score.toFixed(2)}
+            </div>
+            <span style={{ fontSize: 10.5, color: 'var(--fg-faint)' }}>
+              <span class="mono">{state.plan_quality.first_pass_count}</span>{' '}
+              first-pass
+              <span style={{ color: 'var(--fg-ghost)' }}> · </span>
+              <span class="mono">{state.plan_quality.retry_count}</span>{' '}
+              retry
+              {state.plan_quality.failed_count > 0 && (
+                <>
+                  <span style={{ color: 'var(--fg-ghost)' }}> · </span>
+                  <span
+                    class="mono"
+                    style={{ color: 'var(--err)' }}
+                  >
+                    {state.plan_quality.failed_count}
+                  </span>{' '}
+                  failed
+                </>
+              )}
+            </span>
           </div>
-          <dl class="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-neutral-300">
-            {Object.entries(state.fusion_metrics).map(([k, v]) => (
-              <div key={k} class="contents">
-                <dt class="text-neutral-500">{k}</dt>
-                <dd class="font-mono text-right">{fmtFusionVal(v)}</dd>
-              </div>
-            ))}
-          </dl>
-        </section>
-      )}
+        </div>
 
-      <section class="mt-4 pt-3 border-t border-neutral-800">
-        <div class="text-[10px] uppercase tracking-wider text-neutral-500 mb-2">
-          Controls
+        {/* Fusion */}
+        {hasFusion(state.fusion_metrics) && (
+          <div>
+            <div style={panel.rowLabel}>Fusion metrics</div>
+            <div style={panel.fusionGrid}>
+              {Object.entries(state.fusion_metrics).map(([k, v]) => (
+                <FusionCell key={k} label={k} value={fmtFusionVal(v)} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Composer */}
+        <div style={panel.composer}>
+          <div style={panel.rowLabel}>Commands</div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <PauseToggle fp={fp} paused={state.paused} />
+            <QuitButton fp={fp} />
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <HintComposer fp={fp} workers={workers} />
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <ClarifyPrompt fp={fp} enabled={false} />
+          </div>
         </div>
-        <div class="flex items-center gap-2 mb-3">
-          <PauseToggle fp={fp} paused={state.paused} />
-          <QuitButton fp={fp} />
-        </div>
-        <HintComposer fp={fp} workers={workers} />
-        <div class="mt-3">
-          <ClarifyPrompt fp={fp} enabled={false} />
-        </div>
-      </section>
+      </div>
     </aside>
   );
 }
 
 function Row({
   label,
-  value,
+  children,
 }: {
   label: string;
-  value: ComponentChildren;
+  children: ComponentChildren;
 }) {
   return (
-    <div class="flex items-center gap-2 py-1">
-      <span class="text-[10px] uppercase tracking-wider text-neutral-500 w-16">
-        {label}
-      </span>
-      <span class="flex-1">{value}</span>
+    <div>
+      <div style={panel.rowLabel}>{label}</div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginTop: 4,
+          flexWrap: 'wrap',
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -207,20 +315,85 @@ function Row({
 function WorkerRow({ w }: { w: WorkerStatus }) {
   const active = w.state !== 'idle' && w.state !== '';
   return (
-    <div class="flex items-center gap-2 text-xs px-2 py-1 rounded bg-neutral-900 border border-neutral-800">
-      <span class="font-mono text-neutral-500 w-6">#{w.id}</span>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 10px',
+        borderBottom: '1px solid var(--border-soft)',
+      }}
+    >
       <span
-        class={`w-1.5 h-1.5 rounded-full ${active ? 'bg-emerald-500' : 'bg-neutral-600'}`}
-      />
-      <span class="text-neutral-400 text-[10px] uppercase tracking-wider">
+        class="mono"
+        style={{ fontSize: 11, color: 'var(--fg-muted)', width: 22 }}
+      >
+        #{w.id}
+      </span>
+      <span class={`dot ${active ? 'ok live' : ''}`} />
+      <span style={{ fontSize: 11.5, color: 'var(--fg)', width: 68 }}>
+        {w.state || 'idle'}
+      </span>
+      <span
+        style={{
+          fontSize: 11.5,
+          color: 'var(--fg-muted)',
+          flex: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
         {w.role}
       </span>
-      <span class="text-neutral-300 truncate flex-1" title={w.story_title}>
+      <span
+        class="mono"
+        style={{
+          fontSize: 11,
+          color: 'var(--fg-faint)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          maxWidth: 80,
+        }}
+      >
         {w.story_id || '—'}
+        {w.iteration > 0 && ` · ${w.iteration}`}
       </span>
-      {w.iteration > 0 && (
-        <span class="text-neutral-500 text-[10px]">i{w.iteration}</span>
-      )}
+    </div>
+  );
+}
+
+function FusionCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        padding: '6px 8px',
+        border: '1px solid var(--border)',
+        borderRadius: 6,
+        background: 'var(--bg-elev)',
+      }}
+    >
+      <div
+        class="mono"
+        style={{
+          fontSize: 15,
+          color: 'var(--fg)',
+          letterSpacing: '-0.01em',
+        }}
+      >
+        {value}
+      </div>
+      <div
+        style={{
+          fontSize: 10,
+          color: 'var(--fg-faint)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+        }}
+      >
+        {label}
+      </div>
     </div>
   );
 }
@@ -234,9 +407,76 @@ function hasFusion(fm: unknown): fm is Record<string, unknown> {
 }
 
 function fmtFusionVal(v: unknown): string {
-  if (typeof v === 'number') {
+  if (typeof v === 'number')
     return Number.isInteger(v) ? v.toString() : v.toFixed(2);
-  }
   if (typeof v === 'string') return v;
   return JSON.stringify(v);
 }
+
+const panel = {
+  root: {
+    height: '100%',
+    display: 'flex' as const,
+    flexDirection: 'column' as const,
+    background: 'transparent',
+    overflow: 'hidden',
+  },
+  hd: {
+    display: 'flex' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    padding: '12px 14px',
+    borderBottom: '1px solid var(--border-soft)',
+  },
+  body: {
+    flex: 1,
+    overflow: 'auto' as const,
+    padding: 14,
+    display: 'flex' as const,
+    flexDirection: 'column' as const,
+    gap: 16,
+  },
+  rowLabel: {
+    fontSize: 10.5,
+    color: 'var(--fg-faint)',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.08em',
+    fontWeight: 600,
+  },
+  bar: {
+    marginTop: 8,
+    height: 4,
+    background: 'var(--bg-sunken)',
+    borderRadius: 2,
+    overflow: 'hidden' as const,
+  },
+  barFill: {
+    height: '100%',
+    background: 'var(--accent)',
+    borderRadius: 2,
+    transition: 'width 400ms ease',
+  },
+  workerTable: {
+    marginTop: 6,
+    display: 'flex' as const,
+    flexDirection: 'column' as const,
+    gap: 2,
+    border: '1px solid var(--border)',
+    borderRadius: 6,
+    overflow: 'hidden' as const,
+    background: 'var(--bg-elev)',
+  },
+  fusionGrid: {
+    marginTop: 6,
+    display: 'grid' as const,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))',
+    gap: 6,
+  },
+  composer: {
+    marginTop: 'auto',
+    padding: 12,
+    border: '1px solid var(--border)',
+    borderRadius: 8,
+    background: 'var(--bg-sunken)',
+  },
+};

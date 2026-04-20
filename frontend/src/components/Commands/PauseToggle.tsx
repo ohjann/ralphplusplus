@@ -14,36 +14,43 @@ export function PauseToggle({
     if (busy) return;
     setBusy(true);
     try {
-      if (paused) {
-        await sendCommand(fp, 'resume', undefined, {
-          success: 'Resumed',
-          errorPrefix: 'Resume failed',
-        });
-      } else {
-        await sendCommand(fp, 'pause', undefined, {
-          success: 'Paused',
-          errorPrefix: 'Pause failed',
-        });
-      }
+      await sendCommand(
+        fp,
+        paused ? 'resume' : 'pause',
+        undefined,
+        paused
+          ? { success: 'Resumed', errorPrefix: 'Resume failed' }
+          : { success: 'Paused', errorPrefix: 'Pause failed' },
+      );
     } catch {
-      /* toast already fired */
+      /* toast fired */
     } finally {
       setBusy(false);
     }
   }
 
-  const cls = paused
-    ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/20'
-    : 'bg-neutral-800 border-neutral-700 text-neutral-200 hover:bg-neutral-700';
-
+  const warn = paused;
   return (
     <button
       type="button"
       onClick={handleClick}
       disabled={busy}
-      class={`px-3 py-1 rounded border text-xs uppercase tracking-wider transition ${cls} disabled:opacity-50`}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '5px 10px',
+        fontSize: 12,
+        border: '1px solid',
+        borderColor: warn ? 'var(--warn)' : 'var(--border)',
+        borderRadius: 5,
+        background: warn ? 'var(--warn-soft)' : 'var(--bg-elev)',
+        color: warn ? 'var(--warn)' : 'var(--fg)',
+        opacity: busy ? 0.5 : 1,
+      }}
     >
-      {paused ? '▶ Resume' : '⏸ Pause'}
+      <span aria-hidden>{paused ? '▶' : '⏸'}</span>
+      {paused ? 'resume' : 'pause'}
     </button>
   );
 }
