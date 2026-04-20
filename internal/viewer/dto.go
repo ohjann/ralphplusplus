@@ -80,6 +80,26 @@ type RunDetail struct {
 	Summary  *costs.RunSummary `json:"summary,omitempty"`
 }
 
+// SettingsResponse is GET /api/live/:fp/settings. When the daemon socket is
+// reachable, Source is "daemon" and State holds the daemon's /api/state
+// snapshot verbatim. When unreachable, Source is "file" and Config holds the
+// parsed contents of <RepoMeta.Path>/.ralph/config.toml as a generic map so
+// the UI can render any subset of fields without a Go-side schema bump.
+// Exactly one of State or Config is populated per response.
+type SettingsResponse struct {
+	Source string                 `json:"source"`
+	State  json.RawMessage        `json:"state,omitempty"`
+	Config map[string]interface{} `json:"config,omitempty"`
+}
+
+// RepoMetaResponse is GET /api/repos/:fp/meta. Bundles the on-disk RepoMeta
+// with aggregate cost stats and a per-Kind run count breakdown.
+type RepoMetaResponse struct {
+	Meta            history.RepoMeta `json:"meta"`
+	AggCosts        AggCosts         `json:"aggCosts"`
+	RunCountsByKind map[string]int   `json:"runCountsByKind"`
+}
+
 // PRDResponse is GET /api/repos/:fp/prd. Hash is the sha256-hex of the
 // on-disk prd.json; Content is the parsed JSON body. MatchesRunSnapshot
 // is set only when a run_id query param is provided and the referenced
