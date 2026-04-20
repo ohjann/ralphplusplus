@@ -15,34 +15,49 @@ export function ToolResultCard({
   const needsCollapse = lines.length > COLLAPSE_LINES;
   const [open, setOpen] = useState(!needsCollapse);
   const shown = open ? text : lines.slice(0, COLLAPSE_LINES).join('\n');
-
-  const wrapperClass = paired
-    ? 'border-t border-neutral-800'
-    : 'my-2 border border-neutral-800 rounded bg-neutral-900/50';
-
-  const headerTone = block.is_error
-    ? 'text-red-400'
-    : paired
-      ? 'text-neutral-500'
-      : 'text-emerald-400';
+  const err = block.is_error === true;
 
   return (
-    <div class={wrapperClass}>
-      <div class="flex items-center gap-2 px-3 py-1.5">
-        <span class={`text-[10px] uppercase tracking-wider ${headerTone}`}>
-          {block.is_error ? 'tool error' : 'tool result'}
-        </span>
+    <div style={{ padding: '8px 10px', background: paired ? 'transparent' : 'var(--bg-elev)' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 10,
+          color: err ? 'var(--err)' : 'var(--fg-ghost)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.08em',
+          marginBottom: 4,
+        }}
+      >
+        <span>result{err ? ' · error' : ''}</span>
         {needsCollapse && (
           <button
             type="button"
             onClick={() => setOpen(!open)}
-            class="ml-auto text-[10px] text-neutral-500 hover:text-neutral-300 uppercase tracking-wider"
+            style={{
+              marginLeft: 'auto',
+              color: 'var(--accent-ink)',
+              fontSize: 11,
+              textTransform: 'none',
+              letterSpacing: 0,
+            }}
           >
             {open ? 'collapse' : `show all ${lines.length} lines`}
           </button>
         )}
       </div>
-      <pre class="px-3 pb-2 text-xs text-neutral-300 whitespace-pre-wrap font-mono overflow-x-auto">
+      <pre
+        class="code"
+        style={{
+          fontSize: 11.5,
+          borderColor: err ? 'var(--err)' : 'var(--border-soft)',
+          color: err ? 'var(--err)' : 'var(--fg)',
+          whiteSpace: 'pre-wrap',
+          overflowX: 'auto',
+        }}
+      >
         {shown}
         {!open && needsCollapse ? '\n…' : ''}
       </pre>

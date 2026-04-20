@@ -13,12 +13,7 @@ function storageKey(fp: string, runId: string, story: string, iter: string) {
   return `${fp}/${runId}/${story}/${iter}`;
 }
 
-async function load(
-  fp: string,
-  runId: string,
-  story: string,
-  iter: string,
-) {
+async function load(fp: string, runId: string, story: string, iter: string) {
   const key = storageKey(fp, runId, story, iter);
   loadingKey.value = key;
   turnsByKey.value = { ...turnsByKey.value, [key]: [] };
@@ -27,12 +22,11 @@ async function load(
     `/api/repos/${fp}/runs/${runId}/transcript/` +
     `${encodeURIComponent(story)}/${encodeURIComponent(iter)}`;
   try {
-    // Reconnect-safe de-dup by Turn.index — follow=true reconnects would
-    // replay from 0, so we keep the highest Index we've seen and skip
-    // duplicates.
     const seen = new Map<number, true>();
     for await (const t of streamNdjson<TurnT>(url, {
-      headers: { 'X-Ralph-Token': sessionStorage.getItem('ralph.token') ?? '' },
+      headers: {
+        'X-Ralph-Token': sessionStorage.getItem('ralph.token') ?? '',
+      },
     })) {
       if (loadingKey.value !== key) return;
       if (seen.has(t.index)) continue;
@@ -69,26 +63,92 @@ export function ChatView({
   }, [fp, runId, story, iter]);
 
   return (
-    <div class="p-6 max-w-4xl">
-      <header class="mb-4">
-        <div class="text-xs text-neutral-500 font-mono">
-          {story} · iter {iter}
-        </div>
-        <div class="text-[11px] text-neutral-600">
-          run {runId.slice(0, 12)}
-        </div>
-      </header>
+    <div style={{ padding: '22px 28px 80px', minHeight: '100%' }}>
+      {/* Breadcrumb */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 12,
+          color: 'var(--fg-faint)',
+          fontFamily: 'var(--font-mono)',
+          marginBottom: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        <a
+          href={`/repos/${fp}/runs/${runId}`}
+          style={{ color: 'var(--fg-faint)' }}
+        >
+          ← back to run
+        </a>
+        <span style={{ color: 'var(--fg-ghost)' }}>/</span>
+        <span>{story}</span>
+        <span style={{ color: 'var(--fg-ghost)' }}>/</span>
+        <span style={{ color: 'var(--fg)' }}>iter {iter}</span>
+      </div>
+
+      <h1
+        style={{
+          fontSize: 20,
+          fontWeight: 600,
+          letterSpacing: '-0.01em',
+          margin: '0 0 4px',
+          color: 'var(--fg)',
+        }}
+      >
+        Iteration transcript
+      </h1>
+      <div
+        style={{
+          fontSize: 12.5,
+          color: 'var(--fg-faint)',
+          marginBottom: 20,
+        }}
+      >
+        Streaming NDJSON · {turns.value.length} turns
+      </div>
+
       {err.value && (
-        <div class="p-3 mb-3 rounded bg-red-500/10 border border-red-500/30 text-red-300 text-sm">
+        <div
+          style={{
+            padding: '10px 12px',
+            marginBottom: 14,
+            borderRadius: 6,
+            background: 'var(--err-soft)',
+            border: '1px solid var(--err)',
+            color: 'var(--err)',
+            fontSize: 13,
+          }}
+        >
           {err.value}
         </div>
       )}
       {turns.value.length === 0 && !err.value && (
-        <div class="text-sm text-neutral-500 italic">Loading transcript…</div>
+        <div
+          style={{
+            fontSize: 13,
+            color: 'var(--fg-faint)',
+            fontStyle: 'italic',
+          }}
+        >
+          Loading transcript…
+        </div>
       )}
-      {turns.value.map((t) => (
-        <Turn key={t.index} turn={t} toolResults={pairs.value} />
-      ))}
+
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+          maxWidth: 820,
+        }}
+      >
+        {turns.value.map((t) => (
+          <Turn key={t.index} turn={t} toolResults={pairs.value} />
+        ))}
+      </div>
     </div>
   );
 }

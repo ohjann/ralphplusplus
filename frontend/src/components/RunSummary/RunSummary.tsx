@@ -1,4 +1,3 @@
-import type { ComponentChildren } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import {
@@ -48,24 +47,18 @@ function fmtTime(iso?: string): string {
     return iso;
   }
 }
-
-function fmtNum(n: number): string {
+function fmtNum(n: number) {
   return n.toLocaleString();
 }
-
-function fmtCost(n: number): string {
+function fmtCost(n: number) {
   return `$${n.toFixed(2)}`;
 }
-
-function fmtDuration(minutes: number): string {
-  if (minutes < 1) return `${Math.round(minutes * 60)}s`;
-  if (minutes < 60) return `${minutes.toFixed(1)}m`;
-  const h = Math.floor(minutes / 60);
-  const m = Math.round(minutes % 60);
-  return `${h}h ${m}m`;
+function fmtDuration(m: number) {
+  if (m < 1) return `${Math.round(m * 60)}s`;
+  if (m < 60) return `${m.toFixed(1)}m`;
+  return `${Math.floor(m / 60)}h ${Math.round(m % 60)}m`;
 }
-
-function shortHash(s: string, n = 8): string {
+function short(s: string, n = 8) {
   return s.slice(0, n);
 }
 
@@ -75,207 +68,469 @@ export function RunSummary({ fp, runId }: { fp: string; runId: string }) {
   }, [fp, runId]);
 
   if (loading.value && !detail.value) {
-    return <div class="p-8 text-sm text-neutral-500">Loading run…</div>;
+    return (
+      <div style={{ padding: 32, color: 'var(--fg-faint)' }}>Loading run…</div>
+    );
   }
   if (error.value) {
     return (
-      <div class="p-8 text-sm text-red-400">Failed to load: {error.value}</div>
+      <div style={{ padding: 32, color: 'var(--err)' }}>
+        Failed to load: {error.value}
+      </div>
     );
   }
-  if (!detail.value) {
-    return null;
-  }
+  if (!detail.value) return null;
 
   const m = detail.value.manifest;
   const s = detail.value.summary;
   const p = prd.value;
-  const statusTone =
-    m.status === 'running'
-      ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/40'
-      : m.status === 'complete'
-        ? 'bg-neutral-700/30 text-neutral-200 border-neutral-600'
-        : 'bg-amber-500/10 text-amber-300 border-amber-500/40';
-
   const isLive = m.status === 'running';
 
   return (
-    <div class="flex items-stretch">
-      <div class="flex-1 p-6 max-w-4xl">
-      <header class="mb-6">
-        <div class="flex items-center gap-2 mb-1">
-          <h1 class="text-xl font-semibold">{m.repo_name || m.repo_path}</h1>
-          <span
-            class={`ml-1 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border ${statusTone}`}
-          >
-            {m.status}
-          </span>
-          <span class="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded border border-neutral-700 text-neutral-400">
-            {m.kind}
-          </span>
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: isLive ? 'minmax(0, 1fr) 340px' : 'minmax(0, 1fr)',
+        height: '100%',
+        minHeight: 0,
+      }}
+    >
+      <div
+        style={{
+          overflow: 'auto',
+          padding: '22px 28px 80px',
+        }}
+      >
+        {/* Breadcrumb */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 12,
+            color: 'var(--fg-faint)',
+            fontFamily: 'var(--font-mono)',
+            marginBottom: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <span>repos</span>
+          <span style={{ color: 'var(--fg-ghost)' }}>/</span>
+          <span>{m.repo_name || m.repo_path}</span>
+          <span style={{ color: 'var(--fg-ghost)' }}>/</span>
+          <span style={{ color: 'var(--fg)' }}>{short(m.run_id, 8)}</span>
         </div>
-        <div class="text-xs text-neutral-500 font-mono">{m.repo_path}</div>
-        <dl class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-2 mt-4 text-xs">
-          <Field label="Branch" value={m.git_branch || '—'} mono />
-          <Field label="HEAD" value={m.git_head_sha ? shortHash(m.git_head_sha, 10) : '—'} mono />
-          <Field label="Started" value={fmtTime(m.start_time)} />
-          <Field label="Ended" value={fmtTime(m.end_time)} />
-          <Field label="Run ID" value={shortHash(m.run_id)} mono />
-          <Field label="Ralph" value={m.ralph_version} mono />
-        </dl>
-      </header>
 
-      {(m.flags?.length || m.claude_models) && (
-        <section class="mb-6">
-          <h2 class="text-xs uppercase tracking-wider text-neutral-500 mb-2">
-            Configuration
-          </h2>
-          <div class="flex flex-wrap gap-1.5">
-            {m.flags?.map((f) => (
-              <Chip key={f} tone="neutral">
-                {f}
-              </Chip>
-            ))}
-            {m.claude_models &&
-              Object.entries(m.claude_models).map(([role, model]) => (
-                <Chip key={role} tone="indigo">
-                  <span class="text-indigo-400">{role}</span>
-                  <span class="text-neutral-500 mx-1">→</span>
-                  <span class="text-neutral-100">{model}</span>
-                </Chip>
-              ))}
+        {/* Header */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 16,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                flexWrap: 'wrap',
+              }}
+            >
+              <h1
+                style={{
+                  fontSize: 22,
+                  fontWeight: 600,
+                  letterSpacing: '-0.015em',
+                  margin: 0,
+                  color: 'var(--fg)',
+                }}
+              >
+                {m.repo_name || m.repo_path}
+              </h1>
+              <span class="pill indigo">{m.kind}</span>
+              <StatusPill status={m.status} />
+            </div>
+            <div
+              class="mono"
+              style={{
+                fontSize: 11.5,
+                color: 'var(--fg-faint)',
+                marginTop: 6,
+              }}
+            >
+              {m.repo_path}
+            </div>
           </div>
-        </section>
-      )}
-
-      <section class="mb-6">
-        <h2 class="text-xs uppercase tracking-wider text-neutral-500 mb-2">
-          Totals
-        </h2>
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
-          <Metric label="Input tokens" value={fmtNum(m.totals.input_tokens)} />
-          <Metric label="Output tokens" value={fmtNum(m.totals.output_tokens)} />
-          <Metric label="Cache read" value={fmtNum(m.totals.cache_read)} />
-          <Metric label="Cache write" value={fmtNum(m.totals.cache_write)} />
-          <Metric label="Iterations" value={fmtNum(m.totals.iterations)} />
-          {s && <Metric label="Cost" value={fmtCost(s.total_cost)} />}
-          {s && (
-            <Metric label="Duration" value={fmtDuration(s.duration_minutes)} />
-          )}
-          {s && (
-            <Metric
-              label="First-pass rate"
-              value={`${Math.round(s.first_pass_rate * 100)}%`}
-            />
-          )}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <CopyButton text={m.run_id} label="copy run-id" />
+          </div>
         </div>
-      </section>
 
-      <section class="mb-6">
-        <h2 class="text-xs uppercase tracking-wider text-neutral-500 mb-2">
-          PRD
-        </h2>
-        <PRDRow fp={fp} prd={p} />
-      </section>
+        {/* Meta row */}
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 16,
+            padding: '10px 12px',
+            marginTop: 14,
+            background: 'var(--bg-elev)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+          }}
+        >
+          <MetaItem label="branch" value={m.git_branch || '—'} mono />
+          <MetaItem
+            label="HEAD"
+            value={m.git_head_sha ? short(m.git_head_sha, 10) : '—'}
+            mono
+            title={m.git_head_sha}
+          />
+          <MetaItem label="started" value={fmtTime(m.start_time)} />
+          <MetaItem label="ended" value={fmtTime(m.end_time)} />
+          <MetaItem label="run-id" value={short(m.run_id, 10)} mono title={m.run_id} />
+          <MetaItem label="ralph" value={m.ralph_version} mono />
+        </div>
 
-      <section>
-        <h2 class="text-xs uppercase tracking-wider text-neutral-500 mb-2">
-          Stories
-        </h2>
-        <StoriesList fp={fp} runId={runId} stories={m.stories ?? []} />
-      </section>
+        {/* Models & flags */}
+        {(m.flags?.length || m.claude_models) && (
+          <Section title="Models & flags">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {m.claude_models &&
+                Object.entries(m.claude_models).map(([role, model]) => (
+                  <span
+                    key={role}
+                    class="chip indigo mono"
+                    title={`${role} → ${model}`}
+                  >
+                    <span
+                      style={{ color: 'var(--accent-ink)', opacity: 0.7 }}
+                    >
+                      {role}
+                    </span>
+                    <span style={{ color: 'var(--fg-ghost)' }}>→</span>
+                    <span>{model}</span>
+                  </span>
+                ))}
+              {m.claude_models && m.flags && m.flags.length > 0 && (
+                <div
+                  style={{
+                    width: 1,
+                    height: 18,
+                    background: 'var(--border)',
+                    margin: '0 4px',
+                    alignSelf: 'center',
+                  }}
+                />
+              )}
+              {m.flags?.map((f) => (
+                <span key={f} class="chip mono">
+                  {f}
+                </span>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {/* Metrics */}
+        <Section title="Metrics">
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns:
+                'repeat(auto-fill, minmax(140px, 1fr))',
+              gap: 8,
+            }}
+          >
+            <Metric
+              label="input"
+              value={fmtNum(m.totals.input_tokens)}
+              sub="tokens"
+            />
+            <Metric
+              label="output"
+              value={fmtNum(m.totals.output_tokens)}
+              sub="tokens"
+            />
+            <Metric
+              label="cache read"
+              value={fmtNum(m.totals.cache_read)}
+              sub="tokens"
+            />
+            <Metric
+              label="cache write"
+              value={fmtNum(m.totals.cache_write)}
+              sub="tokens"
+            />
+            <Metric
+              label="iterations"
+              value={fmtNum(m.totals.iterations)}
+              sub="turns"
+            />
+            {s && (
+              <>
+                <Metric
+                  label="cost"
+                  value={fmtCost(s.total_cost)}
+                  sub="usd"
+                  accent
+                />
+                <Metric
+                  label="duration"
+                  value={fmtDuration(s.duration_minutes)}
+                  sub="wall clock"
+                />
+                <Metric
+                  label="first-pass"
+                  value={`${Math.round(s.first_pass_rate * 100)}%`}
+                  sub="rate"
+                />
+              </>
+            )}
+          </div>
+        </Section>
+
+        {/* PRD */}
+        {p && <Section title="PRD"><PRDBlock fp={fp} prd={p} /></Section>}
+
+        {/* Stories */}
+        <Section
+          title="Stories"
+          hint={`${(m.stories ?? []).length} total · click iteration to view transcript`}
+        >
+          <StoriesList
+            fp={fp}
+            runId={runId}
+            stories={m.stories ?? []}
+          />
+        </Section>
       </div>
-      {isLive && <StatusPanel fp={fp} />}
+
+      {isLive && (
+        <div
+          style={{
+            height: '100%',
+            minHeight: 0,
+            borderLeft: '1px solid var(--border)',
+            overflow: 'hidden',
+          }}
+        >
+          <StatusPanel fp={fp} />
+        </div>
+      )}
     </div>
   );
 }
 
-function Field({
+function StatusPill({ status }: { status: string }) {
+  if (status === 'running') {
+    return (
+      <span class="pill ok">
+        <span class="dot ok live" />
+        running
+      </span>
+    );
+  }
+  if (status === 'complete') return <span class="pill">complete</span>;
+  if (status === 'interrupted') return <span class="pill warn">interrupted</span>;
+  return <span class="pill err">{status}</span>;
+}
+
+function MetaItem({
   label,
   value,
   mono,
+  title,
 }: {
   label: string;
   value: string;
   mono?: boolean;
+  title?: string;
 }) {
   return (
-    <div>
-      <dt class="text-[10px] uppercase tracking-wider text-neutral-500">
-        {label}
-      </dt>
-      <dd class={'text-neutral-200 ' + (mono ? 'font-mono text-xs' : '')}>
-        {value}
-      </dd>
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div class="bg-neutral-900 border border-neutral-800 rounded px-3 py-2">
-      <div class="text-[10px] uppercase tracking-wider text-neutral-500">
-        {label}
-      </div>
-      <div class="text-neutral-100 font-mono text-sm">{value}</div>
-    </div>
-  );
-}
-
-function Chip({
-  children,
-  tone = 'neutral',
-}: {
-  children: ComponentChildren;
-  tone?: 'neutral' | 'indigo';
-}) {
-  const cls =
-    tone === 'indigo'
-      ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-200'
-      : 'bg-neutral-800 border-neutral-700 text-neutral-300';
-  return (
-    <span
-      class={`text-xs px-2 py-0.5 rounded border ${cls} inline-flex items-center`}
+    <div
+      style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
+      title={title}
     >
-      {children}
-    </span>
+      <span
+        style={{
+          fontSize: 11,
+          color: 'var(--fg-faint)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+        }}
+      >
+        {label}
+      </span>
+      <span
+        class={mono ? 'mono' : ''}
+        style={{
+          fontSize: mono ? 12 : 13,
+          color: 'var(--fg)',
+        }}
+      >
+        {value}
+      </span>
+    </div>
   );
 }
 
-function PRDRow({ fp, prd }: { fp: string; prd: PRDResponse | null }) {
-  if (!prd) {
-    return (
-      <div class="text-sm text-neutral-500 italic">
-        No prd.json on disk for this repo.
+function Section({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: preact.ComponentChildren;
+}) {
+  return (
+    <section style={{ marginTop: 22 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
+          gap: 12,
+          marginBottom: 10,
+        }}
+      >
+        <h2
+          style={{
+            fontSize: 12.5,
+            fontWeight: 600,
+            margin: 0,
+            color: 'var(--fg-muted)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.07em',
+          }}
+        >
+          {title}
+        </h2>
+        {hint && (
+          <span style={{ fontSize: 11.5, color: 'var(--fg-faint)' }}>
+            {hint}
+          </span>
+        )}
       </div>
-    );
-  }
+      {children}
+    </section>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  accent?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        padding: '10px 12px',
+        background: 'var(--bg-elev)',
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10.5,
+          color: 'var(--fg-faint)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.07em',
+          fontWeight: 600,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        class="mono"
+        style={{
+          fontSize: 18,
+          fontWeight: 500,
+          marginTop: 2,
+          color: accent ? 'var(--accent-ink)' : 'var(--fg)',
+          letterSpacing: '-0.01em',
+        }}
+      >
+        {value}
+      </div>
+      <div
+        style={{
+          fontSize: 10.5,
+          color: 'var(--fg-ghost)',
+          marginTop: 1,
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+        }}
+      >
+        {sub}
+      </div>
+    </div>
+  );
+}
+
+function PRDBlock({ fp, prd }: { fp: string; prd: PRDResponse }) {
   const unchanged = prd.matchesRunSnapshot === true;
   const changed = prd.matchesRunSnapshot === false;
+  const tone = unchanged ? 'ok' : changed ? 'warn' : 'neutral';
+  const bg =
+    tone === 'ok'
+      ? 'var(--ok-soft)'
+      : tone === 'warn'
+        ? 'var(--warn-soft)'
+        : 'var(--bg-elev)';
+  const color =
+    tone === 'ok'
+      ? 'var(--ok)'
+      : tone === 'warn'
+        ? 'var(--warn)'
+        : 'var(--fg-muted)';
+  const border =
+    tone === 'ok'
+      ? 'var(--ok)'
+      : tone === 'warn'
+        ? 'var(--warn)'
+        : 'var(--border)';
   return (
-    <div class="flex items-center gap-3 text-sm">
-      <span class="font-mono text-xs text-neutral-400">
-        sha256 {shortHash(prd.hash, 12)}
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '9px 12px',
+        background: bg,
+        border: `1px solid ${border}`,
+        borderRadius: 6,
+        fontSize: 13,
+        color,
+      }}
+    >
+      <span class="mono" style={{ fontSize: 11, opacity: 0.8 }}>
+        sha256:{short(prd.hash, 12)}
       </span>
-      {unchanged && (
-        <span class="text-emerald-400 text-xs">
-          PRD unchanged since this run
-        </span>
-      )}
-      {changed && (
-        <>
-          <span class="text-amber-400 text-xs">PRD changed</span>
-          <a
-            href={`/repos/${fp}/prd`}
-            class="text-xs text-indigo-300 hover:underline"
-          >
-            view current →
-          </a>
-        </>
-      )}
-      {prd.matchesRunSnapshot === undefined && (
-        <span class="text-xs text-neutral-500">
-          (run has no PRD snapshot)
-        </span>
+      <span style={{ flex: 1 }}>
+        {unchanged
+          ? 'PRD unchanged since this run.'
+          : changed
+            ? 'PRD has changed since this run.'
+            : 'No PRD snapshot recorded for this run.'}
+      </span>
+      {(unchanged || changed) && (
+        <a href={`/repos/${fp}/meta`} style={{ fontSize: 12 }}>
+          view current →
+        </a>
       )}
     </div>
   );
@@ -292,43 +547,133 @@ function StoriesList({
 }) {
   if (stories.length === 0) {
     return (
-      <div class="text-sm text-neutral-500 italic">
+      <div
+        style={{
+          fontSize: 13,
+          color: 'var(--fg-faint)',
+          fontStyle: 'italic',
+        }}
+      >
         No stories recorded for this run.
       </div>
     );
   }
   return (
-    <ul class="divide-y divide-neutral-800 border border-neutral-800 rounded">
-      {stories.map((st) => (
-        <li key={st.story_id} class="p-3">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="font-mono text-xs text-neutral-400">
-              {st.story_id}
-            </span>
-            {st.final_status && (
-              <Chip tone="neutral">{st.final_status}</Chip>
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+        overflow: 'hidden',
+        background: 'var(--bg-elev)',
+      }}
+    >
+      {stories.map((st, i) => (
+        <div
+          key={st.story_id}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '90px 120px 1fr auto',
+            alignItems: 'center',
+            gap: 12,
+            padding: '10px 14px',
+            borderTop: i === 0 ? 'none' : '1px solid var(--border-soft)',
+          }}
+        >
+          <span
+            class="mono"
+            style={{ fontSize: 11.5, color: 'var(--fg-muted)' }}
+          >
+            {st.story_id}
+          </span>
+          <span>
+            <StoryStatus status={st.final_status ?? ''} />
+          </span>
+          <span style={{ fontSize: 13.5, color: 'var(--fg)' }}>
+            {st.title || ''}
+          </span>
+          <div
+            style={{
+              display: 'flex',
+              gap: 4,
+              flexWrap: 'wrap',
+              justifyContent: 'flex-end',
+            }}
+          >
+            {(st.iterations?.length ?? 0) === 0 && (
+              <span
+                style={{ color: 'var(--fg-ghost)', fontSize: 11 }}
+              >
+                —
+              </span>
             )}
-            {st.title && (
-              <span class="text-sm text-neutral-200">{st.title}</span>
-            )}
+            {st.iterations?.map((iter) => (
+              <a
+                key={iter.index}
+                href={`/repos/${fp}/runs/${runId}/iter/${encodeURIComponent(st.story_id)}/${iter.index}`}
+                class="mono"
+                title={`${st.story_id} · iteration ${iter.index} · ${iter.role}`}
+                style={{
+                  border: '1px solid var(--accent-border)',
+                  color: 'var(--accent-ink)',
+                  background: 'var(--accent-soft)',
+                  borderRadius: 4,
+                  fontSize: 11,
+                  padding: '2px 7px',
+                  minWidth: 24,
+                  textAlign: 'center',
+                  textDecoration: 'none',
+                }}
+              >
+                {iter.index}
+              </a>
+            ))}
           </div>
-          {st.iterations && st.iterations.length > 0 && (
-            <ul class="flex flex-wrap gap-1.5 mt-1">
-              {st.iterations.map((iter) => (
-                <li key={iter.index}>
-                  <a
-                    href={`/repos/${fp}/runs/${runId}/iter/${encodeURIComponent(st.story_id)}/${iter.index}`}
-                    class="text-xs font-mono px-2 py-0.5 rounded border border-neutral-700 hover:border-neutral-500 hover:bg-neutral-800 text-neutral-300"
-                    title={`${iter.role} · ${iter.model ?? '—'}`}
-                  >
-                    #{iter.index} {iter.role}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-        </li>
+        </div>
       ))}
-    </ul>
+    </div>
+  );
+}
+
+function StoryStatus({ status }: { status: string }) {
+  if (!status) return <span class="chip">—</span>;
+  if (status === 'complete' || status === 'passed')
+    return <span class="chip ok">complete</span>;
+  if (status === 'failed') return <span class="chip err">failed</span>;
+  if (status === 'in-progress' || status === 'running')
+    return (
+      <span class="chip indigo">
+        <span class="dot ok live" />
+        in progress
+      </span>
+    );
+  return <span class="chip">{status}</span>;
+}
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const copied = signal<boolean>(false);
+  const onClick = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* ignore */
+    }
+    copied.value = true;
+    setTimeout(() => (copied.value = false), 1600);
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        border: '1px solid var(--border)',
+        background: 'var(--bg-elev)',
+        color: 'var(--fg-muted)',
+        borderRadius: 6,
+        padding: '5px 10px',
+        fontSize: 12,
+      }}
+    >
+      {copied.value ? '✓ copied' : label}
+    </button>
   );
 }

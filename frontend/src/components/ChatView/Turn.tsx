@@ -12,36 +12,62 @@ export function Turn({
   toolResults: Map<string, Block>;
 }) {
   const role = turn.role;
-  // A "user" turn carrying only tool_result blocks is the paired half of an
-  // earlier tool_use — we render it as part of the corresponding ToolUseCard
-  // instead. If the user turn has any text/thinking blocks, render the turn
-  // normally so we don't hide real user content.
+  // Pure-tool_result user turns are the paired half of a tool_use — render
+  // under the tool card instead.
   const isPairedToolResults =
     role === 'user' &&
     turn.blocks.length > 0 &&
     turn.blocks.every((b) => b.kind === 'tool_result');
   if (isPairedToolResults) return null;
 
-  const bubbleClass =
-    role === 'assistant'
-      ? 'bg-neutral-900/40 border border-neutral-800'
-      : role === 'user'
-        ? 'bg-indigo-500/5 border border-indigo-500/20'
-        : 'bg-neutral-900/20 border border-neutral-800';
+  const isUser = role === 'user';
 
   return (
-    <article class={`my-3 rounded px-4 py-3 ${bubbleClass}`}>
-      <header class="flex items-center gap-2 mb-2">
-        <span class="text-[10px] uppercase tracking-wider text-neutral-500">
+    <article
+      style={{
+        border: `1px solid ${isUser ? 'var(--accent-border)' : 'var(--border)'}`,
+        borderRadius: 10,
+        padding: '14px 16px',
+        background: isUser ? 'var(--accent-soft)' : 'var(--bg-elev)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          marginBottom: 8,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 10.5,
+            textTransform: 'uppercase',
+            letterSpacing: '0.09em',
+            fontWeight: 600,
+            color: isUser ? 'var(--accent-ink)' : 'var(--fg-faint)',
+          }}
+        >
           {role}
         </span>
-        <span class="text-[10px] font-mono text-neutral-600">#{turn.index}</span>
+        <span
+          class="mono"
+          style={{ fontSize: 10.5, color: 'var(--fg-ghost)' }}
+        >
+          #{turn.index}
+        </span>
         {turn.stop_reason && (
-          <span class="text-[10px] text-neutral-600 ml-auto">
+          <span
+            style={{
+              fontSize: 10.5,
+              color: 'var(--fg-ghost)',
+              marginLeft: 'auto',
+            }}
+          >
             {turn.stop_reason}
           </span>
         )}
-      </header>
+      </div>
       {turn.blocks.map((b, i) => (
         <BlockView key={i} block={b} toolResults={toolResults} />
       ))}
@@ -66,9 +92,6 @@ function BlockView({
       return <ToolUseCard block={block} result={paired} />;
     }
     case 'tool_result':
-      // Unpaired tool_results (rare) render standalone. Paired ones render
-      // inside their ToolUseCard; the turn.tsx wrapper swallows pure-
-      // tool_result user turns above.
       return <ToolResultCard block={block} />;
     case 'text':
     default:
