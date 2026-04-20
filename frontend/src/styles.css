@@ -239,3 +239,62 @@ pre.code {
     transition-duration: 0s !important;
   }
 }
+
+/* ------------------------------------------------------------------------
+ * Responsive
+ * ----------------------------------------------------------------------- */
+
+/* Default (desktop) — mobile-only chrome hidden. */
+.rv-mobile-only { display: none !important; }
+
+/* Tablet + small desktop: shrink status column. Handled inline for the
+ * moment; when a breakpoint is needed CSS will take over. */
+
+/* <1100px: sidebar becomes an off-canvas drawer with a scrim. Main pane
+ * takes the full width. Status column (when present) hides. */
+@media (max-width: 1100px) {
+  .rv-shell {
+    grid-template-columns: minmax(0, 1fr) !important;
+    padding: 0 !important;
+    gap: 0 !important;
+  }
+  .rv-sidebar-col {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 300px;
+    max-width: 82vw;
+    z-index: 40;
+    transform: translateX(-105%);
+    transition: transform 200ms ease-out;
+    box-shadow: var(--shadow-md);
+    background: var(--bg-sidebar);
+  }
+  .rv-sidebar-col.rv-open { transform: translateX(0); }
+  .rv-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 35;
+  }
+  .rv-main-col {
+    height: 100vh !important;
+    padding-top: 44px !important;
+  }
+  .rv-main-card {
+    border-radius: 0 !important;
+  }
+  .rv-mobile-only { display: flex !important; }
+  .rv-status-col { display: none !important; }
+  .rv-runsummary-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .rv-runsummary-statuscol { display: none !important; }
+}
+
+/* Very narrow: further compact paddings so the main card doesn't waste
+ * horizontal space. */
+@media (max-width: 600px) {
+  .rv-main-pad { padding: 16px 14px 60px !important; }
+}

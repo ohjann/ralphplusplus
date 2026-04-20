@@ -5,6 +5,7 @@ import { apiGet, type RepoSummary, type RunListItem } from '../../lib/api';
 import { probeReach } from '../../lib/live';
 import { themeMode, setThemeMode, type ThemeMode } from '../../lib/theme';
 import { PalettePicker } from './PalettePicker';
+import { closeMobileNav } from '../../lib/mobileNav';
 
 const HEARTBEAT_MS = 15_000;
 
@@ -399,6 +400,7 @@ function NavRow({ href, label }: { href: string; label: string }) {
   return (
     <a
       href={href}
+      onClick={closeMobileNav}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -609,6 +611,7 @@ function RunRow({ fp, run }: { fp: string; run: RunListItem }) {
   return (
     <a
       href={href}
+      onClick={closeMobileNav}
       style={{
         display: 'flex',
         alignItems: 'center',
