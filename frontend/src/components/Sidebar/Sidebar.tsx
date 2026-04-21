@@ -73,6 +73,22 @@ async function loadRuns(fp: string) {
   }
 }
 
+// refreshRepoRuns invalidates the cached runs list for a repo and forces an
+// immediate reload if the repo row is expanded. Also auto-expands the repo
+// so a freshly-triggered run (retro button on RepoMeta) is visible without
+// the user having to click the chevron.
+export function refreshRepoRuns(fp: string): void {
+  const next = { ...runsByRepo.value };
+  delete next[fp];
+  runsByRepo.value = next;
+  if (!expanded.value.has(fp)) {
+    const e = new Set(expanded.value);
+    e.add(fp);
+    expanded.value = e;
+  }
+  void loadRuns(fp);
+}
+
 function toggleRepo(fp: string) {
   const next = new Set(expanded.value);
   if (next.has(fp)) {

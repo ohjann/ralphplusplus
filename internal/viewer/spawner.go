@@ -14,15 +14,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ohjann/ralphplusplus/internal/history"
 	"github.com/ohjann/ralphplusplus/internal/userdata"
 )
 
-// SpawnResult is the outcome of a successful daemon spawn: the repo
-// fingerprint (for routing in the viewer index) and the OS pid of the
-// detached process.
+// SpawnResult is the outcome of a successful spawn. FP routes the new run in
+// the viewer index; PID is the detached process id. RunID is populated only
+// by paths that poll for a freshly-written manifest (retro) and is omitted
+// for the daemon path, which returns before any run has been opened.
 type SpawnResult struct {
-	FP  string `json:"fp"`
-	PID int    `json:"pid"`
+	FP    string `json:"fp"`
+	PID   int    `json:"pid"`
+	RunID string `json:"runId,omitempty"`
 }
 
 // Spawner errors. Each represents a distinct HTTP status: ErrInvalidPath →
@@ -30,11 +33,13 @@ type SpawnResult struct {
 // directory), ErrPathConfirmation → 409 with a {warn, resolved} body on the
 // first POST when the resolved path is outside $HOME and the caller has not
 // yet sent {confirm:true}, ErrDaemonAlreadyRunning → 409 when the target
-// repo already has a live daemon.
+// repo already has a live daemon, ErrRetroAlreadyRunning → 409 when a retro
+// is already running for the same repo fingerprint.
 var (
 	ErrInvalidPath          = errors.New("invalid_path")
 	ErrPathConfirmation     = errors.New("path_confirmation_required")
 	ErrDaemonAlreadyRunning = errors.New("daemon_already_running")
+	ErrRetroAlreadyRunning  = errors.New("retro_already_running")
 )
 
 // AllowedFlags is the whitelist of spawn-form flags the viewer accepts. Any
@@ -210,10 +215,6 @@ func daemonReachable(repoPath string) bool {
 // SpawnDaemon starts `ralph --daemon --dir <repoPath> <flags...>` detached
 // from the viewer's process group, with stdout/stderr going to
 // <repoPath>/.ralph/daemon.log. Returns {fp, pid} on success.
-//
-// This helper is extracted now (not when RV-205 lands) so the retro-trigger
-// endpoint can share it. The retro variant will pass different flags but
-// the same detach + logging contract is identical.
 func SpawnDaemon(ctx context.Context, repoPath string, flags map[string]interface{}) (SpawnResult, error) {
 	if daemonReachable(repoPath) {
 		return SpawnResult{}, ErrDaemonAlreadyRunning
@@ -224,20 +225,67 @@ func SpawnDaemon(ctx context.Context, repoPath string, flags map[string]interfac
 		return SpawnResult{}, err
 	}
 
-	exePath, err := ralphExecutable()
+	pid, err := spawnDetached(repoPath, args, "daemon.log")
 	if err != nil {
 		return SpawnResult{}, err
 	}
 
-	dotRalph := filepath.Join(repoPath, ".ralph")
-	if err := os.MkdirAll(dotRalph, 0o755); err != nil {
-		return SpawnResult{}, fmt.Errorf("ensure .ralph dir: %w", err)
+	fp, ferr := userdata.Fingerprint(repoPath)
+	if ferr != nil {
+		return SpawnResult{}, fmt.Errorf("fingerprint: %w", ferr)
 	}
 
-	logPath := filepath.Join(dotRalph, "daemon.log")
+	return SpawnResult{FP: fp, PID: pid}, nil
+}
+
+// SpawnRetro starts `ralph retro --dir <repoPath>` detached, writing
+// stdout/stderr to <repoPath>/.ralph/retro.log. Unlike SpawnDaemon it does
+// not probe the daemon socket (a retro can run alongside a live daemon) but
+// it does refuse to spawn if another retro is already running for the same
+// repo (checked via the run manifest). Returns {fp, pid}; the caller is
+// responsible for polling for the new manifest to fill in RunID.
+func SpawnRetro(ctx context.Context, repoPath string) (SpawnResult, error) {
+	fp, ferr := userdata.Fingerprint(repoPath)
+	if ferr != nil {
+		return SpawnResult{}, fmt.Errorf("fingerprint: %w", ferr)
+	}
+
+	if _, running, err := isRetroRunning(fp); err != nil {
+		return SpawnResult{}, fmt.Errorf("check running retro: %w", err)
+	} else if running {
+		return SpawnResult{}, ErrRetroAlreadyRunning
+	}
+
+	// The retro CLI takes no user flags from the viewer — the fixed positional
+	// + --dir argument list is the whitelist.
+	args := []string{"retro", "--dir", repoPath}
+	pid, err := spawnDetached(repoPath, args, "retro.log")
+	if err != nil {
+		return SpawnResult{}, err
+	}
+	return SpawnResult{FP: fp, PID: pid}, nil
+}
+
+// spawnDetached execs the current ralph binary with args, detached via
+// Setsid from the viewer's process group, with stdout/stderr redirected to
+// <repoPath>/.ralph/<logName>. The spawned process is reaped in a
+// background goroutine so it does not become a zombie if it exits before
+// its side-effects (socket, manifest) appear.
+func spawnDetached(repoPath string, args []string, logName string) (int, error) {
+	exePath, err := ralphExecutable()
+	if err != nil {
+		return 0, err
+	}
+
+	dotRalph := filepath.Join(repoPath, ".ralph")
+	if err := os.MkdirAll(dotRalph, 0o755); err != nil {
+		return 0, fmt.Errorf("ensure .ralph dir: %w", err)
+	}
+
+	logPath := filepath.Join(dotRalph, logName)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
-		return SpawnResult{}, fmt.Errorf("open daemon log: %w", err)
+		return 0, fmt.Errorf("open log: %w", err)
 	}
 
 	cmd := exec.Command(exePath, args...)
@@ -248,23 +296,80 @@ func SpawnDaemon(ctx context.Context, repoPath string, flags map[string]interfac
 
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
-		return SpawnResult{}, fmt.Errorf("start daemon: %w", err)
+		return 0, fmt.Errorf("start process: %w", err)
 	}
 	pid := cmd.Process.Pid
 
-	// Reap the spawned process so it does not become a zombie if it exits
-	// before the daemon socket comes up (e.g. flag parse error).
 	go func() {
 		_ = cmd.Wait()
 		logFile.Close()
 	}()
 
-	fp, ferr := userdata.Fingerprint(repoPath)
-	if ferr != nil {
-		return SpawnResult{}, fmt.Errorf("fingerprint: %w", ferr)
-	}
+	return pid, nil
+}
 
-	return SpawnResult{FP: fp, PID: pid}, nil
+// isRetroRunning returns (runID, true, nil) when a retro manifest with
+// Status=="running" exists for fp. A missing runs dir or no retro manifests
+// returns ("", false, nil) — this is the expected state before the first
+// retro. Only filesystem errors propagate as err.
+func isRetroRunning(fp string) (string, bool, error) {
+	manifests, err := history.LoadManifestsForRepo(fp)
+	if err != nil {
+		return "", false, err
+	}
+	for _, m := range manifests {
+		if m.Kind == history.KindRetro && m.Status == history.StatusRunning {
+			return m.RunID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// retroRunIDSet reads the current retro run ids for fp so the caller can
+// spot a newly-written manifest afterwards. Errors are silently turned into
+// an empty set — the caller only uses this to filter the post-spawn poll,
+// not to gate the spawn.
+func retroRunIDSet(fp string) map[string]struct{} {
+	out := map[string]struct{}{}
+	manifests, err := history.LoadManifestsForRepo(fp)
+	if err != nil {
+		return out
+	}
+	for _, m := range manifests {
+		if m.Kind == history.KindRetro {
+			out[m.RunID] = struct{}{}
+		}
+	}
+	return out
+}
+
+// waitForNewRetroRun polls LoadManifestsForRepo every ~100ms until it finds
+// a retro manifest whose RunID is absent from known (the pre-spawn
+// snapshot). Returns "" on timeout or ctx.Done — the caller treats this as
+// "manifest didn't appear yet" and returns the pid-only response.
+func waitForNewRetroRun(ctx context.Context, fp string, known map[string]struct{}, timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	for {
+		manifests, err := history.LoadManifestsForRepo(fp)
+		if err == nil {
+			for _, m := range manifests {
+				if m.Kind != history.KindRetro {
+					continue
+				}
+				if _, seen := known[m.RunID]; !seen {
+					return m.RunID
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // ralphExecutable resolves the path to the currently running binary so the

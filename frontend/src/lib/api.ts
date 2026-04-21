@@ -231,6 +231,13 @@ export interface RepoMetaResponse {
   runCountsByKind: Record<string, number>;
 }
 
+export interface SpawnRetroResponse {
+  fp: string;
+  pid: number;
+  runId?: string;
+}
+
+
 export interface RunListItem {
   runId: string;
   displayName?: string;

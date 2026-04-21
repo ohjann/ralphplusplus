@@ -1,12 +1,47 @@
 import { useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { useRoute } from 'preact-iso';
-import { apiGet, type RepoMetaResponse } from '../lib/api';
+import {
+  apiGet,
+  apiPost,
+  ApiError,
+  type RepoMetaResponse,
+  type SpawnRetroResponse,
+} from '../lib/api';
+import { pushToast } from '../lib/toast';
+import { refreshRepoRuns } from '../components/Sidebar/Sidebar';
 
 const loading = signal<boolean>(false);
 const error = signal<string>('');
 const resp = signal<RepoMetaResponse | null>(null);
 const currentFP = signal<string>('');
+const retroBusy = signal<boolean>(false);
+
+async function triggerRetro(fp: string): Promise<void> {
+  if (retroBusy.value) return;
+  retroBusy.value = true;
+  try {
+    const out = await apiPost<SpawnRetroResponse>(
+      `/api/spawn/retro/${encodeURIComponent(fp)}`,
+    );
+    const tail = out.runId
+      ? `run ${out.runId.slice(0, 12)}`
+      : `pid ${out.pid}`;
+    pushToast('success', `Retro started — ${tail}`);
+    refreshRepoRuns(fp);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) {
+      const body = e.body as { runId?: string } | undefined;
+      const suffix = body?.runId ? ` (${body.runId.slice(0, 8)}…)` : '';
+      pushToast('warn', `A retro is already running for this repo${suffix}.`);
+      return;
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    pushToast('error', `Retro failed to start: ${msg}`);
+  } finally {
+    retroBusy.value = false;
+  }
+}
 
 async function load(fp: string) {
   if (currentFP.value === fp && resp.value) return;
@@ -64,9 +99,21 @@ export function RepoMetaRoute() {
 
   return (
     <div class="p-6 max-w-3xl">
-      <header class="mb-6">
-        <h1 class="text-xl font-semibold">{meta.name || meta.path}</h1>
-        <div class="text-xs text-neutral-500 font-mono">{meta.path}</div>
+      <header class="mb-6 flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <h1 class="text-xl font-semibold">{meta.name || meta.path}</h1>
+          <div class="text-xs text-neutral-500 font-mono break-all">
+            {meta.path}
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={retroBusy.value}
+          onClick={() => void triggerRetro(fp)}
+          class="shrink-0 px-3 py-1.5 text-xs font-semibold rounded border border-neutral-700 bg-neutral-800 text-neutral-100 hover:bg-neutral-700 disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {retroBusy.value ? 'Starting…' : 'Run retrospective'}
+        </button>
       </header>
 
       <section class="mb-6">
