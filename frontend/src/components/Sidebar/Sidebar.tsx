@@ -6,6 +6,7 @@ import { probeReach } from '../../lib/live';
 import { themeMode, setThemeMode, type ThemeMode } from '../../lib/theme';
 import { PalettePicker } from './PalettePicker';
 import { closeMobileNav } from '../../lib/mobileNav';
+import ralphPortrait from '../../assets/ralph-portrait.png';
 
 const HEARTBEAT_MS = 15_000;
 
@@ -234,37 +235,18 @@ function Brand() {
         padding: '18px 10px 16px 6px',
       }}
     >
-      <div
+      <img
+        src={ralphPortrait}
+        alt="Ralph"
         style={{
           width: 40,
           height: 40,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'var(--sidebar-fg)',
+          borderRadius: '50%',
+          objectFit: 'cover',
           flexShrink: 0,
+          border: '1px solid var(--sidebar-border)',
         }}
-      >
-        <svg width="40" height="40" viewBox="0 0 44 44" fill="none">
-          <circle
-            cx="22"
-            cy="22"
-            r="21"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            fill="none"
-            opacity="0.9"
-          />
-          <path
-            d="M14 28V16h8a3.5 3.5 0 0 1 0 7h-5M19 23l7 5"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            fill="none"
-          />
-        </svg>
-      </div>
+      />
       <div style={{ minWidth: 0 }}>
         <div
           style={{
