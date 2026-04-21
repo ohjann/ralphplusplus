@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -426,6 +427,12 @@ func (c *Coordinator) HandleUpdate(u worker.WorkerUpdate) bool {
 		if u.Err != nil {
 			errMsg = u.Err.Error()
 		}
+		// context.Canceled is never the story's fault — it means we pulled
+		// the rug on the worker (user pause, daemon shutdown, ctrl+C). The
+		// story goes back to the ready pool for the next schedule cycle so
+		// resume picks it up. Not retry-counted (the worker didn't get a
+		// fair swing), not persisted as failed.
+		cancelled := u.Err != nil && errors.Is(u.Err, context.Canceled)
 		if u.UsageLimit {
 			// Cancel all workers — nothing can proceed until the limit resets
 			for _, w := range c.workers {
@@ -436,6 +443,11 @@ func (c *Coordinator) HandleUpdate(u worker.WorkerUpdate) bool {
 			c.paused = true
 			c.failedErrors[u.StoryID] = errMsg
 			// Don't mark as failed — will retry after user resumes
+		} else if cancelled {
+			// User pause / daemon shutdown / ctrl+C — don't mark failed,
+			// don't increment retries. Story sits in limbo until resume
+			// or next daemon start pulls it back through ScheduleReady.
+			c.failedErrors[u.StoryID] = errMsg
 		} else if u.Retryable && c.retries[u.StoryID] < maxRetries {
 			c.retries[u.StoryID]++
 			c.failedErrors[u.StoryID] = errMsg
