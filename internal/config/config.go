@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,7 +31,45 @@ func DefaultMemoryConfig() MemoryConfig {
 	}
 }
 
+// ConfigSnapshot is a value-copy of the tunable + path fields readers need.
+// Take one with Config.Snapshot() to read fields without racing ApplySettings.
+type ConfigSnapshot struct {
+	ProjectDir         string
+	RalphHome          string
+	PRDFile            string
+	ProgressFile       string
+	ArchiveDir         string
+	LastBranchFile     string
+	LogDir             string
+	JudgeEnabled       bool
+	JudgeMaxRejections int
+	Workers            int
+	WorkersAuto        bool
+	AutoMaxWorkers     int
+	WorkspaceBase      string
+	QualityReview      bool
+	QualityWorkers     int
+	QualityMaxIters    int
+	Memory             MemoryConfig
+	NoArchitect        bool
+	SpriteEnabled      bool
+	ModelOverride      string
+	ArchitectModel     string
+	ImplementerModel   string
+	UtilityModel       string
+	StoryTimeout       int
+	NoSimplify         bool
+	NoFusion           bool
+	FusionWorkers      int
+	IdleTimeout        time.Duration
+}
+
 type Config struct {
+	// mu guards live-reloadable reads/writes on tunable fields. Readers
+	// should call Snapshot() for a consistent value-copy; writers
+	// (ApplySettings) take mu.Lock().
+	mu sync.RWMutex
+
 	ProjectDir         string
 	RalphHome          string
 	JudgeEnabled       bool
@@ -672,6 +711,59 @@ func (c *Config) applyEnvDefaults(dotEnv map[string]string) {
 	if c.NotifyEnabled && c.NotifyTopic == "" {
 		c.NotifyTopic = "ralph"
 	}
+}
+
+// Snapshot returns a consistent value-copy of the fields Coordinator /
+// Runner / Daemon read during normal operation. Callers should use the
+// snapshot for the duration of a single operation — re-snap for a fresh
+// read on the next tick.
+func (c *Config) Snapshot() ConfigSnapshot {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return ConfigSnapshot{
+		ProjectDir:         c.ProjectDir,
+		RalphHome:          c.RalphHome,
+		PRDFile:            c.PRDFile,
+		ProgressFile:       c.ProgressFile,
+		ArchiveDir:         c.ArchiveDir,
+		LastBranchFile:     c.LastBranchFile,
+		LogDir:             c.LogDir,
+		JudgeEnabled:       c.JudgeEnabled,
+		JudgeMaxRejections: c.JudgeMaxRejections,
+		Workers:            c.Workers,
+		WorkersAuto:        c.WorkersAuto,
+		AutoMaxWorkers:     c.AutoMaxWorkers,
+		WorkspaceBase:      c.WorkspaceBase,
+		QualityReview:      c.QualityReview,
+		QualityWorkers:     c.QualityWorkers,
+		QualityMaxIters:    c.QualityMaxIters,
+		Memory:             c.Memory,
+		NoArchitect:        c.NoArchitect,
+		SpriteEnabled:      c.SpriteEnabled,
+		ModelOverride:      c.ModelOverride,
+		ArchitectModel:     c.ArchitectModel,
+		ImplementerModel:   c.ImplementerModel,
+		UtilityModel:       c.UtilityModel,
+		StoryTimeout:       c.StoryTimeout,
+		NoSimplify:         c.NoSimplify,
+		NoFusion:           c.NoFusion,
+		FusionWorkers:      c.FusionWorkers,
+		IdleTimeout:        c.IdleTimeout,
+	}
+}
+
+// ApplySettings applies the non-nil fields of tc to the live Config under
+// the write-lock and returns the TOML tag names of fields that were
+// overwritten. Callers typically follow up with SaveConfig() so disk
+// matches memory.
+func (c *Config) ApplySettings(tc *TomlConfig) []string {
+	if tc == nil {
+		return nil
+	}
+	c.mu.Lock()
+	tc.applyTo(c)
+	c.mu.Unlock()
+	return tc.ChangedFields()
 }
 
 // ResolveAutoWorkers sets the Workers count when --workers auto is active.

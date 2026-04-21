@@ -3,6 +3,9 @@ package daemon_test
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,6 +22,37 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/prd"
 	"github.com/ohjann/ralphplusplus/internal/worker"
 )
+
+// unixHTTPClient returns an http.Client that dials the given Unix socket path.
+func unixHTTPClient(socketPath string) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", socketPath)
+			},
+		},
+	}
+}
+
+// postSettings POSTs the given JSON body to /api/settings over the daemon's
+// unix socket and returns the status code plus the decoded JSON body.
+func postSettings(t *testing.T, socketPath string, body string) (int, map[string]any) {
+	t.Helper()
+	hc := unixHTTPClient(socketPath)
+	resp, err := hc.Post("http://daemon/api/settings", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /api/settings: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	out := map[string]any{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("decode settings response %q: %v", string(raw), err)
+		}
+	}
+	return resp.StatusCode, out
+}
 
 // testDaemonShort creates a daemon with a short socket path suitable for Unix socket limits.
 func testDaemonShort(t *testing.T) (*daemon.Daemon, *coordinator.Coordinator, string) {
@@ -623,6 +657,117 @@ func TestIdleTimeoutResetOnClientConnect(t *testing.T) {
 	}
 	if !state.AllDone {
 		t.Error("expected AllDone to be true")
+	}
+}
+
+func TestApplySettings_UpdatesConfigPersistsAndBroadcasts(t *testing.T) {
+	dmn, _, tmpDir := testDaemonShort(t)
+	startDaemon(t, dmn)
+	defer dmn.Shutdown()
+
+	// Subscribe to SSE stream so we can observe the broadcast that follows
+	// ApplySettings. Drain the initial state event first.
+	sseClient, err := daemon.Connect(dmn.SocketPath())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	sseCtx, sseCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer sseCancel()
+	evtCh := sseClient.StreamEvents(sseCtx)
+	select {
+	case <-evtCh:
+	case <-sseCtx.Done():
+		t.Fatal("timed out waiting for initial SSE event")
+	}
+
+	code, body := postSettings(t, dmn.SocketPath(), `{"workers":4,"no_architect":true}`)
+	if code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%v)", code, body)
+	}
+	if body["status"] != "ok" {
+		t.Errorf("expected status=ok, got %v", body["status"])
+	}
+	appliedAny, ok := body["applied"].([]any)
+	if !ok {
+		t.Fatalf("expected applied to be []any, got %T (%v)", body["applied"], body["applied"])
+	}
+	applied := map[string]bool{}
+	for _, f := range appliedAny {
+		if s, ok := f.(string); ok {
+			applied[s] = true
+		}
+	}
+	if !applied["workers"] || !applied["no_architect"] {
+		t.Errorf("expected applied to include workers and no_architect, got %v", appliedAny)
+	}
+
+	// Verify the in-memory Config mutated via Snapshot().
+	snap := dmn.Cfg.Snapshot()
+	if snap.Workers != 4 {
+		t.Errorf("expected cfg.Workers=4, got %d", snap.Workers)
+	}
+	if !snap.NoArchitect {
+		t.Errorf("expected cfg.NoArchitect=true")
+	}
+
+	// Verify persistence to .ralph/config.toml.
+	cfgPath := filepath.Join(tmpDir, ".ralph", "config.toml")
+	tomlBytes, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config.toml: %v", err)
+	}
+	tomlStr := string(tomlBytes)
+	if !strings.Contains(tomlStr, "workers = 4") {
+		t.Errorf("expected config.toml to contain 'workers = 4', got:\n%s", tomlStr)
+	}
+	if !strings.Contains(tomlStr, "no_architect = true") {
+		t.Errorf("expected config.toml to contain 'no_architect = true', got:\n%s", tomlStr)
+	}
+
+	// Verify a daemon_state SSE broadcast reflects the new settings.
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case evt, ok := <-evtCh:
+			if !ok {
+				t.Fatal("SSE channel closed before receiving updated state")
+			}
+			if evt.Type != daemon.EventDaemonState {
+				continue
+			}
+			var state daemon.DaemonStateEvent
+			if err := json.Unmarshal(evt.Data, &state); err != nil {
+				t.Fatalf("unmarshal state: %v", err)
+			}
+			if state.Settings.Workers == 4 && state.Settings.NoArchitect {
+				return // success
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for daemon_state broadcast reflecting new settings")
+		}
+	}
+}
+
+func TestApplySettings_InvalidWorkers(t *testing.T) {
+	dmn, _, _ := testDaemonShort(t)
+	startDaemon(t, dmn)
+	defer dmn.Shutdown()
+
+	code, body := postSettings(t, dmn.SocketPath(), `{"workers":0}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (body=%v)", code, body)
+	}
+	errs, ok := body["errors"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected errors map, got %T (%v)", body["errors"], body["errors"])
+	}
+	if errs["workers"] != "must be >= 1" {
+		t.Errorf("expected workers error 'must be >= 1', got %v", errs["workers"])
+	}
+
+	// Config must not have mutated on invalid input.
+	if snap := dmn.Cfg.Snapshot(); snap.Workers != 1 {
+		t.Errorf("expected cfg.Workers unchanged (=1), got %d", snap.Workers)
 	}
 }
 

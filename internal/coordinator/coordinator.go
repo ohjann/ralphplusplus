@@ -168,7 +168,12 @@ func (c *Coordinator) AddStory(story *prd.UserStory) {
 
 // ScheduleReady launches workers for stories whose dependencies are met.
 // Returns the number of new workers launched.
+//
+// Reads cfg.Workers / cfg.NoFusion / cfg.FusionWorkers through a fresh
+// Config snapshot per tick so live settings reload is respected.
 func (c *Coordinator) ScheduleReady(ctx context.Context) int {
+	snap := c.cfg.Snapshot()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -190,8 +195,13 @@ func (c *Coordinator) ScheduleReady(ctx context.Context) int {
 		available = append(available, id)
 	}
 
-	// Limit to available worker slots
-	slots := c.maxWorkers - len(c.inProgress)
+	// Limit to available worker slots. The per-tick Workers read lets live
+	// settings reload (RV-202) flow into dispatch decisions immediately.
+	workerCap := snap.Workers
+	if workerCap < 1 {
+		workerCap = 1
+	}
+	slots := workerCap - len(c.inProgress)
 	if slots <= 0 {
 		return 0
 	}
@@ -209,25 +219,25 @@ func (c *Coordinator) ScheduleReady(ctx context.Context) int {
 
 		// Check if this story should use fusion mode (competing implementations)
 		useFusion := false
-		if !c.cfg.NoFusion && c.cfg.FusionWorkers >= 2 && slots >= c.cfg.FusionWorkers {
-			useFusion = c.shouldUseFusionLocked(ctx, story)
+		if !snap.NoFusion && snap.FusionWorkers >= 2 && slots >= snap.FusionWorkers {
+			useFusion = c.shouldUseFusionLocked(ctx, story, snap.UtilityModel)
 		}
 
 		if useFusion {
 			fg := &fusion.FusionGroup{
 				StoryID:  storyID,
-				Expected: c.cfg.FusionWorkers,
+				Expected: snap.FusionWorkers,
 			}
 			c.fusionGroups[storyID] = fg
 			c.fusionMetrics.GroupsCreated++
 			c.inProgress[storyID] = 0 // reserve slot while architect runs
-			slots -= c.cfg.FusionWorkers
-			launched += c.cfg.FusionWorkers
-			c.iterationCount += c.cfg.FusionWorkers
+			slots -= snap.FusionWorkers
+			launched += snap.FusionWorkers
+			c.iterationCount += snap.FusionWorkers
 			go c.runFusionArchitectThenSpawn(ctx, storyID, story, fg)
-			debuglog.Log("fusion: launching shared architect then %d workers for %s", c.cfg.FusionWorkers, storyID)
+			debuglog.Log("fusion: launching shared architect then %d workers for %s", snap.FusionWorkers, storyID)
 		} else {
-			w := c.spawnWorkerLocked(ctx, storyID, story, "")
+			w := c.spawnWorkerLocked(ctx, storyID, story, "", snap.StoryTimeout)
 			go worker.Run(w, c.cfg, c.updateCh)
 			launched++
 			c.iterationCount++
@@ -239,11 +249,14 @@ func (c *Coordinator) ScheduleReady(ctx context.Context) int {
 }
 
 // spawnWorkerLocked creates and registers a new worker. Must be called with c.mu held.
-func (c *Coordinator) spawnWorkerLocked(ctx context.Context, storyID string, story *prd.UserStory, fusionSuffix string) *worker.Worker {
+// storyTimeoutMinutes is the caller-supplied StoryTimeout from a fresh Config
+// snapshot — passed in so spawn shares the same per-tick snapshot as the
+// scheduler that decided to launch this worker.
+func (c *Coordinator) spawnWorkerLocked(ctx context.Context, storyID string, story *prd.UserStory, fusionSuffix string, storyTimeoutMinutes int) *worker.Worker {
 	var wCtx context.Context
 	var wCancel context.CancelFunc
-	if c.cfg.StoryTimeout > 0 {
-		wCtx, wCancel = context.WithTimeout(ctx, time.Duration(c.cfg.StoryTimeout)*time.Minute)
+	if storyTimeoutMinutes > 0 {
+		wCtx, wCancel = context.WithTimeout(ctx, time.Duration(storyTimeoutMinutes)*time.Minute)
 	} else {
 		wCtx, wCancel = context.WithCancel(ctx)
 	}
@@ -267,14 +280,15 @@ func (c *Coordinator) spawnWorkerLocked(ctx context.Context, storyID string, sto
 
 // shouldUseFusionLocked checks whether a story is complex enough for fusion mode.
 // Uses cached results when available. Must be called with c.mu held.
-func (c *Coordinator) shouldUseFusionLocked(ctx context.Context, story *prd.UserStory) bool {
+// utilityModel is passed in from the caller's Config snapshot.
+func (c *Coordinator) shouldUseFusionLocked(ctx context.Context, story *prd.UserStory, utilityModel string) bool {
 	if cached, ok := c.complexityCache[story.ID]; ok {
 		return cached
 	}
 
 	// Release lock for the LLM call (can take a few seconds)
 	c.mu.Unlock()
-	complex, reason, err := fusion.AssessComplexity(ctx, story, c.cfg.UtilityModel)
+	complex, reason, err := fusion.AssessComplexity(ctx, story, utilityModel)
 	c.mu.Lock()
 
 	if err != nil {
@@ -295,16 +309,17 @@ func (c *Coordinator) shouldUseFusionLocked(ctx context.Context, story *prd.User
 // architect is run. If the architect produced nothing, workers fall back to
 // running their own architects.
 func (c *Coordinator) runFusionArchitectThenSpawn(ctx context.Context, storyID string, story *prd.UserStory, fg *fusion.FusionGroup) {
-	if !c.cfg.NoArchitect {
+	snap := c.cfg.Snapshot()
+	if !snap.NoArchitect {
 		c.runSharedArchitect(ctx, storyID)
 	}
 
 	// Spawn fusion workers
 	c.mu.Lock()
 	delete(c.inProgress, storyID) // remove placeholder
-	for fi := 0; fi < c.cfg.FusionWorkers; fi++ {
+	for fi := 0; fi < snap.FusionWorkers; fi++ {
 		suffix := fmt.Sprintf("-f%d", fi)
-		w := c.spawnWorkerLocked(ctx, storyID, story, suffix)
+		w := c.spawnWorkerLocked(ctx, storyID, story, suffix, snap.StoryTimeout)
 		fg.Workers = append(fg.Workers, w.ID)
 		go worker.Run(w, c.cfg, c.updateCh)
 	}
@@ -321,8 +336,9 @@ func (c *Coordinator) runFusionArchitectThenSpawn(ctx context.Context, storyID s
 // workspaces than the -arch dir. Sharing the plan.md artifact is both simpler
 // and robust to Claude CLI storage-format changes.
 func (c *Coordinator) runSharedArchitect(ctx context.Context, storyID string) {
+	snap := c.cfg.Snapshot()
 	c.jjMu.Lock()
-	ws, err := workspace.Create(ctx, c.cfg.ProjectDir, storyID, c.cfg.WorkspaceBase, "-arch")
+	ws, err := workspace.Create(ctx, snap.ProjectDir, storyID, snap.WorkspaceBase, "-arch")
 	c.jjMu.Unlock()
 	if err != nil {
 		debuglog.Log("fusion: architect workspace create failed for %s: %v", storyID, err)
@@ -331,11 +347,11 @@ func (c *Coordinator) runSharedArchitect(ctx context.Context, storyID string) {
 	defer func() {
 		wsName := workspace.WorkspaceName(storyID) + "-arch"
 		c.jjMu.Lock()
-		_ = workspace.Destroy(ctx, c.cfg.ProjectDir, wsName, ws.Dir)
+		_ = workspace.Destroy(ctx, snap.ProjectDir, wsName, ws.Dir)
 		c.jjMu.Unlock()
 	}()
 
-	if err := workspace.CopyState(c.cfg.ProjectDir, ws.Dir, storyID); err != nil {
+	if err := workspace.CopyState(snap.ProjectDir, ws.Dir, storyID); err != nil {
 		debuglog.Log("fusion: architect copy state failed for %s: %v", storyID, err)
 		return
 	}
@@ -346,9 +362,9 @@ func (c *Coordinator) runSharedArchitect(ctx context.Context, storyID string) {
 
 	wsPRD, _ := prd.Load(filepath.Join(ws.Dir, "prd.json"))
 
-	archParts, err := runner.BuildPrompt(c.cfg.RalphHome, ws.Dir, storyID, wsPRD, runner.BuildPromptOpts{
+	archParts, err := runner.BuildPrompt(snap.RalphHome, ws.Dir, storyID, wsPRD, runner.BuildPromptOpts{
 		Role:           roles.RoleArchitect,
-		MemoryDisabled: c.cfg.Memory.Disabled,
+		MemoryDisabled: snap.Memory.Disabled,
 	})
 	if err != nil {
 		debuglog.Log("fusion: architect prompt build failed for %s: %v", storyID, err)
@@ -370,7 +386,7 @@ func (c *Coordinator) runSharedArchitect(ctx context.Context, storyID string) {
 		debuglog.Log("fusion: architect run failed for %s: %v", storyID, err)
 	}
 
-	if err := workspace.ExportStoryState(ws.Dir, c.cfg.ProjectDir, storyID); err != nil {
+	if err := workspace.ExportStoryState(ws.Dir, snap.ProjectDir, storyID); err != nil {
 		debuglog.Log("fusion: architect export state failed for %s: %v", storyID, err)
 	}
 }
@@ -498,8 +514,9 @@ func (c *Coordinator) writeCheckpointLocked() {
 		}
 	}
 
+	snap := c.cfg.Snapshot()
 	// Recompute PRD hash from current file (it may have been modified during the run)
-	if hash, err := checkpoint.ComputePRDHash(c.cfg.PRDFile); err == nil {
+	if hash, err := checkpoint.ComputePRDHash(snap.PRDFile); err == nil {
 		c.prdHash = hash
 	}
 
@@ -518,7 +535,7 @@ func (c *Coordinator) writeCheckpointLocked() {
 		cp.CostData = &snap
 	}
 
-	if err := checkpoint.Save(c.cfg.ProjectDir, cp); err != nil {
+	if err := checkpoint.Save(snap.ProjectDir, cp); err != nil {
 		debuglog.Log("warning: failed to write checkpoint: %v", err)
 	}
 }
@@ -550,7 +567,7 @@ func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (
 	}
 
 	// Rebase onto main
-	result, mergeErr := workspace.MergeBack(ctx, c.cfg.ProjectDir, u.ChangeID)
+	result, mergeErr := workspace.MergeBack(ctx, c.cfg.Snapshot().ProjectDir, u.ChangeID)
 	if mergeErr != nil {
 		return false, fmt.Errorf("rebase: %w", mergeErr)
 	}
@@ -563,16 +580,18 @@ func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (
 		conflictsResolved = true
 	}
 
+	snap := c.cfg.Snapshot()
+
 	// Sync prd.json: read workspace's prd.json and update main's
 	wsPRD, prdErr := prd.Load(filepath.Join(w.Workspace, "prd.json"))
 	if prdErr == nil {
-		mainPRD, mainPrdErr := prd.Load(c.cfg.PRDFile)
+		mainPRD, mainPrdErr := prd.Load(snap.PRDFile)
 		if mainPrdErr == nil {
 			// Update the specific story's passes status
 			wsStory := wsPRD.FindStory(u.StoryID)
 			if wsStory != nil {
 				mainPRD.SetPasses(u.StoryID, wsStory.Passes)
-				_ = prd.Save(c.cfg.PRDFile, mainPRD)
+				_ = prd.Save(snap.PRDFile, mainPRD)
 			}
 		}
 	}
@@ -580,7 +599,7 @@ func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (
 	// Append workspace progress.md entries to main
 	wsProgress := filepath.Join(w.Workspace, "progress.md")
 	if data, readErr := os.ReadFile(wsProgress); readErr == nil && len(data) > 0 {
-		if f, openErr := os.OpenFile(c.cfg.ProgressFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); openErr == nil {
+		if f, openErr := os.OpenFile(snap.ProgressFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); openErr == nil {
 			defer f.Close()
 			if _, writeErr := f.Write(data); writeErr != nil {
 				debuglog.Log("coordinator: failed to append progress: %v", writeErr)
@@ -592,7 +611,7 @@ func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (
 	wsEvents := filepath.Join(w.Workspace, ".ralph", "events.jsonl")
 	if data, readErr := os.ReadFile(wsEvents); readErr == nil && len(data) > 0 {
 		if f, openErr := os.OpenFile(
-			filepath.Join(c.cfg.ProjectDir, ".ralph", "events.jsonl"),
+			filepath.Join(snap.ProjectDir, ".ralph", "events.jsonl"),
 			os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644,
 		); openErr == nil {
 			defer f.Close()
@@ -605,7 +624,7 @@ func (c *Coordinator) MergeAndSync(ctx context.Context, u worker.WorkerUpdate) (
 	// Sync story state directory from workspace to main
 	wsStoryDir := filepath.Join(w.Workspace, ".ralph", "stories", u.StoryID)
 	if info, statErr := os.Stat(wsStoryDir); statErr == nil && info.IsDir() {
-		mainStoryDir := filepath.Join(c.cfg.ProjectDir, ".ralph", "stories", u.StoryID)
+		mainStoryDir := filepath.Join(snap.ProjectDir, ".ralph", "stories", u.StoryID)
 		_ = os.MkdirAll(mainStoryDir, 0o755)
 		entries, readErr := os.ReadDir(wsStoryDir)
 		if readErr == nil {
@@ -650,11 +669,12 @@ INSTRUCTIONS:
 
 Be concise. Just fix the conflicts and stop.`, storyID, conflictedFiles)
 
-	logDir := filepath.Join(c.cfg.ProjectDir, ".ralph", "logs")
+	snap := c.cfg.Snapshot()
+	logDir := filepath.Join(snap.ProjectDir, ".ralph", "logs")
 	_ = os.MkdirAll(logDir, 0o755)
 	logPath := filepath.Join(logDir, fmt.Sprintf("conflict-resolution-%s.log", storyID))
 
-	if _, err := runner.RunClaudeForIteration(ctx, c.cfg, c.cfg.ProjectDir, prompt, logPath, runner.IterationOpts{
+	if _, err := runner.RunClaudeForIteration(ctx, c.cfg, snap.ProjectDir, prompt, logPath, runner.IterationOpts{
 		StoryID: storyID,
 		Role:    "conflict-resolution",
 		Iter:    0,
@@ -663,7 +683,7 @@ Be concise. Just fix the conflicts and stop.`, storyID, conflictedFiles)
 	}
 
 	// Advance @ past the now-resolved commit
-	return workspace.AdvanceAfterResolve(ctx, c.cfg.ProjectDir)
+	return workspace.AdvanceAfterResolve(ctx, snap.ProjectDir)
 }
 
 // FusionGroupReady returns the fusion group for a story if all workers have reported.
@@ -747,16 +767,18 @@ func (c *Coordinator) CleanupWorker(ctx context.Context, workerID worker.WorkerI
 		return
 	}
 
+	projectDir := c.cfg.Snapshot().ProjectDir
 	c.jjMu.Lock()
-	_ = workspace.Destroy(ctx, c.cfg.ProjectDir, w.WorkspaceName, w.Workspace)
+	_ = workspace.Destroy(ctx, projectDir, w.WorkspaceName, w.Workspace)
 	c.jjMu.Unlock()
 }
 
 // AbandonChange serialises jj abandon through jjMu to prevent concurrent
 // jj operations from creating sibling operations.
 func (c *Coordinator) AbandonChange(ctx context.Context, changeID string) {
+	projectDir := c.cfg.Snapshot().ProjectDir
 	c.jjMu.Lock()
-	_ = workspace.AbandonChange(ctx, c.cfg.ProjectDir, changeID)
+	_ = workspace.AbandonChange(ctx, projectDir, changeID)
 	c.jjMu.Unlock()
 }
 
@@ -786,7 +808,7 @@ func (c *Coordinator) preserveWorkerLogs(storyID string, workerID worker.WorkerI
 		return
 	}
 
-	dstDir := filepath.Join(c.cfg.ProjectDir, ".ralph", "logs")
+	dstDir := filepath.Join(c.cfg.Snapshot().ProjectDir, ".ralph", "logs")
 	_ = os.MkdirAll(dstDir, 0o755)
 	filename := fmt.Sprintf("worker-%s.log", storyID)
 	if suffix != "" {
@@ -946,10 +968,11 @@ func (c *Coordinator) CleanupAll(ctx context.Context) {
 	}
 	c.mu.Unlock()
 
+	projectDir := c.cfg.Snapshot().ProjectDir
 	for _, w := range workers {
 		if w.Workspace != "" {
 			c.jjMu.Lock()
-			_ = workspace.Destroy(ctx, c.cfg.ProjectDir, w.WorkspaceName, w.Workspace)
+			_ = workspace.Destroy(ctx, projectDir, w.WorkspaceName, w.Workspace)
 			c.jjMu.Unlock()
 		}
 	}

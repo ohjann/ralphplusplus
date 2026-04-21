@@ -28,7 +28,21 @@ type DaemonStateEvent struct {
 	FusionMetrics  costs.FusionMetrics               `json:"fusion_metrics"`
 	Uptime         string                            `json:"uptime"`
 	ClientCount    int                               `json:"client_count"`
+	Settings       SettingsSnapshot                  `json:"settings"`
 	Timestamp      time.Time                         `json:"timestamp"`
+}
+
+// SettingsSnapshot mirrors the tunable subset of config.Config on the wire,
+// so SPA clients can render the live values that ApplySettings updates.
+type SettingsSnapshot struct {
+	Workers         int  `json:"workers"`
+	NoArchitect     bool `json:"no_architect"`
+	JudgeEnabled    bool `json:"judge_enabled"`
+	FusionWorkers   int  `json:"fusion_workers"`
+	NoFusion        bool `json:"no_fusion"`
+	QualityReview   bool `json:"quality_review"`
+	QualityWorkers  int  `json:"quality_workers"`
+	QualityMaxIters int  `json:"quality_max_iterations"`
 }
 
 // WorkerStatus mirrors the fields the TUI reads from worker.Worker.

@@ -98,7 +98,7 @@ func TestNewFromCheckpoint_ScheduleSkipsCompletedAndFailed(t *testing.T) {
 func TestAddStory_SchedulesInteractiveTask(t *testing.T) {
 	// Start with an empty DAG and no stories
 	d := &dag.DAG{Nodes: make(map[string]*dag.StoryNode)}
-	c := New(&config.Config{PRDFile: "/dev/null"}, d, 2, nil)
+	c := New(&config.Config{PRDFile: "/dev/null", Workers: 2}, d, 2, nil)
 
 	// Dynamically add an interactive task story
 	story := &prd.UserStory{
@@ -126,7 +126,7 @@ func TestAddStory_SchedulesInteractiveTask(t *testing.T) {
 
 func TestAddStory_MultipleInteractiveTasksParallel(t *testing.T) {
 	d := &dag.DAG{Nodes: make(map[string]*dag.StoryNode)}
-	c := New(&config.Config{PRDFile: "/dev/null"}, d, 3, nil)
+	c := New(&config.Config{PRDFile: "/dev/null", Workers: 3}, d, 3, nil)
 
 	// Add multiple interactive tasks
 	for _, id := range []string{"T-001", "T-002", "T-003"} {
@@ -146,7 +146,7 @@ func TestAddStory_MultipleInteractiveTasksParallel(t *testing.T) {
 
 func TestAddStory_WithoutDAGNode_NotScheduled(t *testing.T) {
 	d := &dag.DAG{Nodes: make(map[string]*dag.StoryNode)}
-	c := New(&config.Config{PRDFile: "/dev/null"}, d, 2, nil)
+	c := New(&config.Config{PRDFile: "/dev/null", Workers: 2}, d, 2, nil)
 
 	// Add story to coordinator but NOT to DAG
 	story := &prd.UserStory{ID: "T-001", Title: "Test", DependsOn: []string{}, Priority: 0}

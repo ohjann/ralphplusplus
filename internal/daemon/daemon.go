@@ -133,6 +133,22 @@ func (d *Daemon) Shutdown() {
 	d.cancel()
 }
 
+// ApplySettings validates + applies the incoming settings to the live Config,
+// persists the result to .ralph/config.toml, and broadcasts a fresh
+// daemon_state event so SSE subscribers see the new values.
+func (d *Daemon) ApplySettings(tc *config.TomlConfig) (applied []string, fieldErrs map[string]string, err error) {
+	if fe := tc.Validate(); len(fe) > 0 {
+		return nil, fe, nil
+	}
+	applied = d.Cfg.ApplySettings(tc)
+	if saveErr := d.Cfg.SaveConfig(); saveErr != nil {
+		return applied, nil, fmt.Errorf("save config: %w", saveErr)
+	}
+	debuglog.Log("daemon: applied settings %v", applied)
+	d.broadcast(d.buildStateEvent())
+	return applied, nil, nil
+}
+
 // Context returns the daemon's context.
 func (d *Daemon) Context() context.Context {
 	return d.ctx
@@ -217,13 +233,14 @@ func (d *Daemon) eventLoop() {
 	var idleCh <-chan time.Time
 
 	checkIdle := func() {
-		if d.Cfg.IdleTimeout <= 0 {
+		snap := d.Cfg.Snapshot()
+		if snap.IdleTimeout <= 0 {
 			return
 		}
 		if d.Coord.AllDone() && d.TotalConnectedClients() == 0 {
 			if idleTimer == nil {
-				debuglog.Log("daemon: idle timeout started (%v)", d.Cfg.IdleTimeout)
-				idleTimer = time.NewTimer(d.Cfg.IdleTimeout)
+				debuglog.Log("daemon: idle timeout started (%v)", snap.IdleTimeout)
+				idleTimer = time.NewTimer(snap.IdleTimeout)
 				idleCh = idleTimer.C
 			}
 		} else if idleTimer != nil {
@@ -294,7 +311,7 @@ func (d *Daemon) handleWorkerUpdate(u worker.WorkerUpdate, mergeCh chan coordina
 
 	// Judge result broadcast
 	if u.JudgeResult != nil {
-		judge.AppendJudgeResult(d.Cfg.ProgressFile, u.StoryID, *u.JudgeResult)
+		judge.AppendJudgeResult(d.Cfg.Snapshot().ProgressFile, u.StoryID, *u.JudgeResult)
 	}
 
 	switch u.State {

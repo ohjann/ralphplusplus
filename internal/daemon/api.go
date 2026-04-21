@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ohjann/ralphplusplus/internal/config"
 	"github.com/ohjann/ralphplusplus/internal/debuglog"
 	"github.com/ohjann/ralphplusplus/internal/runner"
 	"github.com/ohjann/ralphplusplus/internal/worker"
@@ -271,8 +272,24 @@ func (a *APIServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
-	// Settings update is a placeholder for future expansion.
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+
+	var tc config.TomlConfig
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := json.NewDecoder(r.Body).Decode(&tc); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	applied, fieldErrs, err := a.daemon.ApplySettings(&tc)
+	if len(fieldErrs) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"errors": fieldErrs})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "applied": applied})
 }
 
 func (a *APIServer) handleClarify(w http.ResponseWriter, r *http.Request) {
@@ -358,6 +375,8 @@ func (d *Daemon) BuildStateSnapshot() DaemonStateEvent {
 
 	uptime := time.Since(d.startTime).Truncate(time.Second).String()
 
+	snap := d.Cfg.Snapshot()
+
 	return DaemonStateEvent{
 		Workers:        workerStatuses,
 		Stories:        storyStatuses,
@@ -380,7 +399,17 @@ func (d *Daemon) BuildStateSnapshot() DaemonStateEvent {
 			Score:          pq.Score(),
 		},
 		FusionMetrics: d.Coord.GetFusionMetrics(),
-		Timestamp:     time.Now(),
+		Settings: SettingsSnapshot{
+			Workers:         snap.Workers,
+			NoArchitect:     snap.NoArchitect,
+			JudgeEnabled:    snap.JudgeEnabled,
+			FusionWorkers:   snap.FusionWorkers,
+			NoFusion:        snap.NoFusion,
+			QualityReview:   snap.QualityReview,
+			QualityWorkers:  snap.QualityWorkers,
+			QualityMaxIters: snap.QualityMaxIters,
+		},
+		Timestamp: time.Now(),
 	}
 }
 

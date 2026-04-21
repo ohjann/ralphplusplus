@@ -130,21 +130,22 @@ func shouldRunArchitect(storyID string, iteration int, workspaceDir string, p *p
 // ResolveModel determines the model to use for a given role by applying the
 // override precedence: config role-specific override > config global override > role default.
 func ResolveModel(role roles.Role, cfg *config.Config) string {
+	snap := cfg.Snapshot()
 	// Check role-specific CLI overrides first
 	switch role {
 	case roles.RoleArchitect:
-		if cfg.ArchitectModel != "" {
-			return cfg.ArchitectModel
+		if snap.ArchitectModel != "" {
+			return snap.ArchitectModel
 		}
 	case roles.RoleImplementer:
-		if cfg.ImplementerModel != "" {
-			return cfg.ImplementerModel
+		if snap.ImplementerModel != "" {
+			return snap.ImplementerModel
 		}
 	}
 
 	// Then global override
-	if cfg.ModelOverride != "" {
-		return cfg.ModelOverride
+	if snap.ModelOverride != "" {
+		return snap.ModelOverride
 	}
 
 	// Fall back to role default
@@ -154,7 +155,7 @@ func ResolveModel(role roles.Role, cfg *config.Config) string {
 // shouldRunSimplify returns true when the simplify phase should run for a story.
 // Skips for FIX- stories (targeted fixes) and when disabled via config.
 func shouldRunSimplify(storyID string, cfg *config.Config) bool {
-	if cfg.NoSimplify {
+	if cfg.Snapshot().NoSimplify {
 		return false
 	}
 	if strings.HasPrefix(storyID, "FIX-") {
@@ -177,6 +178,7 @@ Just implement your story, commit, update progress.md, and stop.`, storyID)
 
 // Run executes the full worker lifecycle in the workspace.
 func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
+	snap := cfg.Snapshot()
 	var claudeUsage *costs.TokenUsage       // captured from RunClaude, forwarded in updates
 	var latestRateLimit *costs.RateLimitInfo // latest rate limit info from Claude CLI
 
@@ -211,7 +213,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	if w.JJMu != nil {
 		w.JJMu.Lock()
 	}
-	ws, err := workspace.Create(w.Ctx, cfg.ProjectDir, w.StoryID, cfg.WorkspaceBase, w.FusionSuffix)
+	ws, err := workspace.Create(w.Ctx, snap.ProjectDir, w.StoryID, snap.WorkspaceBase, w.FusionSuffix)
 	if w.JJMu != nil {
 		w.JJMu.Unlock()
 	}
@@ -224,7 +226,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	w.BaseChangeID = ws.BaseChangeID
 
 	// Copy state files into workspace
-	if err := workspace.CopyState(cfg.ProjectDir, ws.Dir, w.StoryID); err != nil {
+	if err := workspace.CopyState(snap.ProjectDir, ws.Dir, w.StoryID); err != nil {
 		send(WorkerFailed, "", fmt.Errorf("copy state: %w", err), false, "")
 		return
 	}
@@ -257,10 +259,10 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	// shouldRunArchitect returns false when plan.md already exists in the
 	// workspace — fusion workers inherit the shared architect's plan via
 	// CopyState, so this naturally skips the per-worker architect.
-	if !cfg.NoArchitect && shouldRunArchitect(w.StoryID, w.Iteration, ws.Dir, wsPRD) {
+	if !snap.NoArchitect && shouldRunArchitect(w.StoryID, w.Iteration, ws.Dir, wsPRD) {
 		send(WorkerRunning, roles.RoleArchitect, nil, false, "")
 
-		archParts, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleArchitect, MemoryDisabled: cfg.Memory.Disabled, AntiPatterns: w.AntiPatterns})
+		archParts, err := runner.BuildPrompt(snap.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleArchitect, MemoryDisabled: snap.Memory.Disabled, AntiPatterns: w.AntiPatterns})
 		if err != nil {
 			send(WorkerFailed, roles.RoleArchitect, fmt.Errorf("build architect prompt: %w", err), false, "")
 			return
@@ -317,12 +319,12 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 		// re-run the architect once with the rejection reason appended; if still FAIL,
 		// the worker fails.
 		storyForGate := wsPRD.FindStory(w.StoryID)
-		pass, reason, gateErr := validatePlan(w.Ctx, plan, storyForGate, cfg.UtilityModel)
+		pass, reason, gateErr := validatePlan(w.Ctx, plan, storyForGate, snap.UtilityModel)
 		if gateErr != nil {
 			debuglog.Log("plan gate error for %s: %v — allowing through", w.StoryID, gateErr)
 		} else if !pass {
 			debuglog.Log("plan gate FAIL for %s: %s — re-running architect", w.StoryID, reason)
-			retryParts, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleArchitect, MemoryDisabled: cfg.Memory.Disabled, AntiPatterns: w.AntiPatterns})
+			retryParts, err := runner.BuildPrompt(snap.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleArchitect, MemoryDisabled: snap.Memory.Disabled, AntiPatterns: w.AntiPatterns})
 			if err != nil {
 				send(WorkerFailed, roles.RoleArchitect, fmt.Errorf("build architect retry prompt: %w", err), false, "")
 				return
@@ -354,7 +356,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 				return
 			}
 			plan, _ = storystate.LoadPlan(ws.Dir, w.StoryID)
-			pass2, reason2, gateErr2 := validatePlan(w.Ctx, plan, storyForGate, cfg.UtilityModel)
+			pass2, reason2, gateErr2 := validatePlan(w.Ctx, plan, storyForGate, snap.UtilityModel)
 			if gateErr2 != nil {
 				debuglog.Log("plan gate retry error for %s: %v — allowing through", w.StoryID, gateErr2)
 			} else if !pass2 {
@@ -371,7 +373,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	}
 	send(WorkerRunning, implRole, nil, false, "")
 
-	implParts, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: implRole, MemoryDisabled: cfg.Memory.Disabled, AntiPatterns: w.AntiPatterns})
+	implParts, err := runner.BuildPrompt(snap.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: implRole, MemoryDisabled: snap.Memory.Disabled, AntiPatterns: w.AntiPatterns})
 	if err != nil {
 		send(WorkerFailed, implRole, fmt.Errorf("build prompt: %w", err), false, "")
 		return
@@ -496,7 +498,7 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	if shouldRunSimplify(w.StoryID, cfg) {
 		send(WorkerSimplifying, roles.RoleSimplify, nil, false, "")
 
-		simplifyParts, err := runner.BuildPrompt(cfg.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleSimplify, MemoryDisabled: cfg.Memory.Disabled})
+		simplifyParts, err := runner.BuildPrompt(snap.RalphHome, ws.Dir, w.StoryID, wsPRD, runner.BuildPromptOpts{Role: roles.RoleSimplify, MemoryDisabled: snap.Memory.Disabled})
 		if err != nil {
 			// Non-fatal: skip simplify if prompt build fails
 			w.State = WorkerRunning
@@ -565,12 +567,12 @@ func Run(w *Worker, cfg *config.Config, updateCh chan<- WorkerUpdate) {
 	}
 
 	// 6. Run judge if enabled and story passed
-	if cfg.JudgeEnabled && passed {
+	if snap.JudgeEnabled && passed {
 		send(WorkerJudging, "", nil, false, changeID)
 
 		// Capture revs for judge: diff from base to squashed commit
 		preRevs := []judge.DirRev{{Dir: ws.Dir, Rev: w.BaseChangeID, ToRev: changeID}}
-		result := judge.RunJudge(w.Ctx, cfg.RalphHome, ws.Dir, filepath.Join(ws.Dir, "prd.json"), w.StoryID, preRevs)
+		result := judge.RunJudge(w.Ctx, snap.RalphHome, ws.Dir, filepath.Join(ws.Dir, "prd.json"), w.StoryID, preRevs)
 		if !result.Passed {
 			passed = false
 		}
