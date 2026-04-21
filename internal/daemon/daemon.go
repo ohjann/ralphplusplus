@@ -23,6 +23,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/judge"
 	"github.com/ohjann/ralphplusplus/internal/lockfile"
 	"github.com/ohjann/ralphplusplus/internal/notify"
+	"github.com/ohjann/ralphplusplus/internal/summary"
 	"github.com/ohjann/ralphplusplus/internal/worker"
 )
 
@@ -77,6 +78,10 @@ type Daemon struct {
 	// Coordination state
 	totalStories     int
 	completedStories int
+
+	// summaryGenerated guards summary.Generate so it runs at most once
+	// per daemon lifetime when all stories complete.
+	summaryGenerated atomic.Bool
 }
 
 // DaemonOpts holds optional configuration for the daemon.
@@ -521,6 +526,23 @@ func (d *Daemon) checkCompletion() {
 		}
 		d.Notifier.RunComplete(d.ctx, d.completedStories, d.totalStories, cost)
 	}
+
+	if d.completedStories > 0 && d.summaryGenerated.CompareAndSwap(false, true) {
+		go d.generateSummary()
+	}
+}
+
+// generateSummary runs summary.Generate in the background after completion.
+// It is gated by d.summaryGenerated so it fires at most once per daemon run.
+func (d *Daemon) generateSummary() {
+	d.broadcastLogLine("Generating SUMMARY.md...")
+	if _, err := summary.Generate(d.ctx, d.Cfg); err != nil {
+		debuglog.Log("daemon: summary generation failed: %v", err)
+		d.broadcastLogLine(fmt.Sprintf("SUMMARY.md generation failed: %v", err))
+		return
+	}
+	debuglog.Log("daemon: SUMMARY.md generated")
+	d.broadcastLogLine("SUMMARY.md ready")
 }
 
 // mergeBack runs MergeAndSync and sends the result to mergeCh.

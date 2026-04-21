@@ -29,6 +29,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/roles"
 	"github.com/ohjann/ralphplusplus/internal/runner"
 	"github.com/ohjann/ralphplusplus/internal/storystate"
+	"github.com/ohjann/ralphplusplus/internal/summary"
 	"github.com/ohjann/ralphplusplus/internal/worker"
 )
 
@@ -606,49 +607,8 @@ func qualityFixCmd(ctx context.Context, cfg *config.Config, assessment quality.A
 
 func generateSummaryCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
 	return safeCmd(func() tea.Msg {
-		// Remove stale SUMMARY.md so Claude generates a fresh one from current state
-		summaryPath := filepath.Join(cfg.ProjectDir, "SUMMARY.md")
-		_ = os.Remove(summaryPath)
-
-		// Read PRD for context
-		prdData, _ := os.ReadFile(cfg.PRDFile)
-		// Read progress for context
-		progressData, _ := os.ReadFile(cfg.ProgressFile)
-
-		prompt := fmt.Sprintf(`You have just completed implementing all stories in a project. Generate a comprehensive summary of everything that was done.
-
-Write this summary to a file called SUMMARY.md in the current working directory using the Write tool.
-
-The summary should include:
-1. **Overview** - What was built/changed (one paragraph)
-2. **Stories Completed** - Brief summary of each story and what it involved
-3. **Files Changed** - Key files that were added or modified (explore the recent changes)
-4. **Configuration** - Any new configuration, environment variables, or setup needed
-5. **Build & Run** - How to build and run the project (check for Makefile, package.json, etc.)
-6. **Testing** - How to run tests, any new test files added
-7. **Notes** - Any caveats, known issues, or things that need human review
-
-Be concise but thorough. Focus on actionable information the developer needs to know.
-
-## PRD (what was planned)
-%s
-
-## Progress Log
-%s
-`, string(prdData), string(progressData))
-
-		logPath := filepath.Join(cfg.LogDir, "summary.log")
-		result, err := runner.RunClaudeForIteration(ctx, cfg, cfg.ProjectDir, prompt, logPath, runner.IterationOpts{
-			StoryID: "_summary",
-			Role:    "summary",
-			Iter:    1,
-		})
-		_ = result
-
-		// Read the generated summary
-		content, _ := os.ReadFile(summaryPath)
-
-		return summaryDoneMsg{Content: string(content), Err: err}
+		content, err := summary.Generate(ctx, cfg)
+		return summaryDoneMsg{Content: content, Err: err}
 	})
 }
 
