@@ -7,19 +7,23 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
 	"github.com/ohjann/ralphplusplus/internal/viewer"
 )
 
-// runViewer implements `ralph viewer [--port N]`. Follows the install-skill
-// dispatch pattern: it runs before config.Parse so it needs no prd.json and
-// works in any cwd.
+// runViewer implements `ralph viewer [--port N] [--no-open]`. Follows the
+// install-skill dispatch pattern: it runs before config.Parse so it needs no
+// prd.json and works in any cwd. Defaults: --port 0 (OS-chosen), --no-open
+// false (auto-open the URL in the user's default browser).
 func runViewer(args []string) error {
 	fs := flag.NewFlagSet("viewer", flag.ContinueOnError)
 	port := fs.Int("port", 0, "TCP port to bind on 127.0.0.1 (0 = OS-chosen)")
+	noOpen := fs.Bool("no-open", false, "Don't auto-open the URL in a browser")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -33,7 +37,11 @@ func runViewer(args []string) error {
 		if tokErr != nil {
 			return fmt.Errorf("read token: %w", tokErr)
 		}
-		fmt.Printf("http://127.0.0.1:%d/?token=%s\n", existing.Port, token)
+		url := fmt.Sprintf("http://127.0.0.1:%d/?token=%s", existing.Port, token)
+		printAlreadyRunning(url, !*noOpen)
+		if !*noOpen {
+			_ = openBrowser(url)
+		}
 		return nil
 	}
 	defer viewer.Release(lockF)
@@ -83,7 +91,11 @@ func runViewer(args []string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	fmt.Printf("http://127.0.0.1:%d/?token=%s\n", actualPort, token)
+	url := fmt.Sprintf("http://127.0.0.1:%d/?token=%s", actualPort, token)
+	printStartedBanner(url, !*noOpen)
+	if !*noOpen {
+		_ = openBrowser(url)
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -109,4 +121,52 @@ func runViewer(args []string) error {
 	defer cancel()
 	_ = srv.Shutdown(shutCtx)
 	return nil
+}
+
+// printStartedBanner writes the post-start info. The URL is on its own line
+// of stdout so existing tooling that scrapes the first line (the historical
+// contract) keeps working. The friendly banner goes to stderr.
+func printStartedBanner(url string, willOpen bool) {
+	fmt.Println(url)
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "  Ralph Viewer is up.")
+	if willOpen {
+		fmt.Fprintln(os.Stderr, "  Opening in your default browser…  (use --no-open to skip)")
+	} else {
+		fmt.Fprintln(os.Stderr, "  Open the URL above in your browser to log in.")
+	}
+	fmt.Fprintln(os.Stderr, "  Press Ctrl+C to stop.")
+	fmt.Fprintln(os.Stderr)
+}
+
+func printAlreadyRunning(url string, willOpen bool) {
+	fmt.Println(url)
+	fmt.Fprintln(os.Stderr)
+	if willOpen {
+		fmt.Fprintln(os.Stderr, "  Ralph Viewer is already running. Reopening in your default browser.")
+		fmt.Fprintln(os.Stderr, "  (Use --no-open to suppress.)")
+	} else {
+		fmt.Fprintln(os.Stderr, "  Ralph Viewer is already running. Open the URL above in your browser.")
+	}
+	fmt.Fprintln(os.Stderr)
+}
+
+// openBrowser launches the OS's default URL handler. Errors are surfaced to
+// the caller (usually swallowed — failure to auto-open should never block
+// the viewer from starting).
+func openBrowser(url string) error {
+	var cmd string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = "open"
+		args = []string{url}
+	case "windows":
+		cmd = "rundll32"
+		args = []string{"url.dll,FileProtocolHandler", url}
+	default:
+		cmd = "xdg-open"
+		args = []string{url}
+	}
+	return exec.Command(cmd, args...).Start()
 }
