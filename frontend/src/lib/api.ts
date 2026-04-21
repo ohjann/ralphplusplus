@@ -79,6 +79,7 @@ export interface StoryRecord {
 export interface Manifest {
   schema_version: number;
   run_id: string;
+  display_name?: string;
   kind: string;
   repo_fp: string;
   repo_path: string;
@@ -163,6 +164,7 @@ export interface RepoMetaResponse {
 
 export interface RunListItem {
   runId: string;
+  displayName?: string;
   kind: string;
   status: string;
   startTime: string;

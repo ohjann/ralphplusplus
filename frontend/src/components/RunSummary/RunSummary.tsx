@@ -118,7 +118,9 @@ export function RunSummary({ fp, runId }: { fp: string; runId: string }) {
           <span style={{ color: 'var(--fg-ghost)' }}>/</span>
           <span>{m.repo_name || m.repo_path}</span>
           <span style={{ color: 'var(--fg-ghost)' }}>/</span>
-          <span style={{ color: 'var(--fg)' }}>{short(m.run_id, 8)}</span>
+          <span style={{ color: 'var(--fg)' }}>
+            {m.display_name || short(m.run_id, 8)}
+          </span>
         </div>
 
         {/* Header */}
@@ -149,8 +151,19 @@ export function RunSummary({ fp, runId }: { fp: string; runId: string }) {
                   color: 'var(--fg)',
                 }}
               >
-                {m.repo_name || m.repo_path}
+                {m.display_name || m.repo_name || m.repo_path}
               </h1>
+              {m.display_name && (
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: 'var(--fg-faint)',
+                  }}
+                  title="Repository name"
+                >
+                  · {m.repo_name || m.repo_path}
+                </span>
+              )}
               <span class="pill indigo">{m.kind}</span>
               <StatusPill status={m.status} />
             </div>

@@ -611,10 +611,17 @@ function RunRow({ fp, run }: { fp: string; run: RunListItem }) {
     >
       <span class={dotClass} title={dotTitle} />
       <span
-        class="mono"
-        style={{ fontSize: 11, color: 'var(--sidebar-fg)' }}
+        style={{
+          fontSize: 11.5,
+          color: 'var(--sidebar-fg)',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          maxWidth: 110,
+        }}
+        title={run.runId}
       >
-        {run.runId.slice(0, 7)}
+        {run.displayName || run.runId.slice(0, 12)}
       </span>
       <span
         style={{

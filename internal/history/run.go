@@ -76,6 +76,7 @@ type StoryRecord struct {
 type Manifest struct {
 	SchemaVersion int               `json:"schema_version"`
 	RunID         string            `json:"run_id"`
+	DisplayName   string            `json:"display_name,omitempty"`
 	Kind          string            `json:"kind"`
 	RepoFP        string            `json:"repo_fp"`
 	RepoPath      string            `json:"repo_path"`
@@ -155,6 +156,7 @@ func OpenRun(projectDir, prdFile, version string, opts RunOpts) (*Run, error) {
 	m := Manifest{
 		SchemaVersion: ManifestSchemaVersion,
 		RunID:         id,
+		DisplayName:   DisplayNameFor(id),
 		Kind:          kind,
 		RepoFP:        fp,
 		RepoPath:      meta.Path,

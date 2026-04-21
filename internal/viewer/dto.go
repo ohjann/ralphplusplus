@@ -55,10 +55,11 @@ type RepoDetail struct {
 // Finalize) manifest has no matching RunSummary yet. The list is flat; the
 // UI groups by Kind client-side.
 type RunListItem struct {
-	RunID      string     `json:"runId"`
-	Kind       string     `json:"kind"`
-	Status     string     `json:"status"`
-	StartTime  time.Time  `json:"startTime"`
+	RunID       string     `json:"runId"`
+	DisplayName string     `json:"displayName,omitempty"`
+	Kind        string     `json:"kind"`
+	Status      string     `json:"status"`
+	StartTime   time.Time  `json:"startTime"`
 	EndTime    *time.Time `json:"endTime,omitempty"`
 	GitBranch  string     `json:"gitBranch,omitempty"`
 	GitHeadSHA string     `json:"gitHeadSha,omitempty"`

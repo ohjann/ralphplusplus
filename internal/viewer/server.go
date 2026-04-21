@@ -171,6 +171,7 @@ func (s *Server) handleRunsList(w http.ResponseWriter, r *http.Request) {
 		}
 		item := RunListItem{
 			RunID:        m.RunID,
+			DisplayName:  displayName(m),
 			Kind:         m.Kind,
 			Status:       m.Status,
 			StartTime:    m.StartTime,
@@ -226,6 +227,9 @@ func (s *Server) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	if m.DisplayName == "" {
+		m.DisplayName = history.DisplayNameFor(m.RunID)
+	}
 	writeJSON(w, http.StatusOK, RunDetail{Manifest: *m, Summary: summary})
 }
 
@@ -272,6 +276,16 @@ func (s *Server) handlePRD(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// displayName returns the manifest's stored DisplayName, backfilling from the
+// run id for manifests written before the field existed. Ensures every run
+// row in the sidebar has a name without a data migration.
+func displayName(m history.Manifest) string {
+	if m.DisplayName != "" {
+		return m.DisplayName
+	}
+	return history.DisplayNameFor(m.RunID)
 }
 
 func aggregate(runs []costs.RunSummary) AggCosts {
