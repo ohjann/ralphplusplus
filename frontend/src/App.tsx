@@ -6,6 +6,7 @@ import { RunRoute } from './routes/RunRoute';
 import { IterRoute } from './routes/IterRoute';
 import { SettingsRoute } from './routes/SettingsRoute';
 import { RepoMetaRoute } from './routes/RepoMetaRoute';
+import { PRDEditorRoute } from './routes/PRDEditorRoute';
 import { ToastStack } from './components/Toast';
 import { TweaksPanel } from './components/TweaksPanel';
 import {
@@ -119,6 +120,7 @@ export function App() {
                 <Route path="/repos/:fp/runs/:runId" component={RunRoute} />
                 <Route path="/repos/:fp/settings" component={SettingsRoute} />
                 <Route path="/repos/:fp/meta" component={RepoMetaRoute} />
+                <Route path="/repos/:fp/prd" component={PRDEditorRoute} />
                 <Route default component={Home} />
               </Router>
             </div>

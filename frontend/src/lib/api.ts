@@ -3,7 +3,14 @@
 // Throws ApiError on non-2xx so callers can branch on status.
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  // `body` is the parsed JSON response body when one was produced. The SPA
+  // relies on this to surface validation-error details (field map) and the
+  // current hash from a 409 conflict without triggering another round-trip.
+  constructor(
+    public status: number,
+    message: string,
+    public body?: unknown,
+  ) {
     super(message);
     this.name = 'ApiError';
   }
@@ -13,22 +20,47 @@ function token(): string {
   return sessionStorage.getItem('ralph.token') ?? '';
 }
 
+async function parseBody(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { 'X-Ralph-Token': token() } });
-  if (!res.ok) throw new ApiError(res.status, `${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const body = await parseBody(res);
+    throw new ApiError(res.status, `${res.status} ${res.statusText}`, body);
+  }
   return res.json() as Promise<T>;
 }
 
-export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+export async function apiPost<T>(
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<T> {
   const res = await fetch(path, {
     method: 'POST',
     headers: {
       'X-Ralph-Token': token(),
       'Content-Type': 'application/json',
+      ...(headers ?? {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!res.ok) throw new ApiError(res.status, `${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const errBody = await parseBody(res);
+    throw new ApiError(
+      res.status,
+      `${res.status} ${res.statusText}`,
+      errBody,
+    );
+  }
   return res.json() as Promise<T>;
 }
 
@@ -125,6 +157,43 @@ export interface PRDResponse {
   hash: string;
   content: unknown;
   matchesRunSnapshot?: boolean;
+}
+
+// PRD user story — mirrors internal/prd.UserStory. `passes` is daemon-owned
+// and read-only in the editor; other fields are user-editable.
+export interface PRDUserStory {
+  id: string;
+  title: string;
+  description: string;
+  acceptanceCriteria: string[];
+  priority: number;
+  passes: boolean;
+  notes: string;
+  dependsOn?: string[];
+  approach?: string;
+}
+
+export interface PRDDocument {
+  project: string;
+  branchName?: string;
+  description?: string;
+  buildCommand?: string;
+  repos?: string[];
+  constraints?: string[];
+  userStories: PRDUserStory[];
+}
+
+// Body of a 400 validation_failed response.
+export interface PRDValidationError {
+  error: 'validation_failed';
+  fields: Record<string, string>;
+}
+
+// Body of a 409 hash_mismatch response — surfaces the current server-side
+// hash so the SPA can prompt the user to reload.
+export interface PRDHashMismatchError {
+  error: 'hash_mismatch';
+  currentHash: string;
 }
 
 // Matches internal/viewer/dto.go SettingsResponse. Exactly one of state
