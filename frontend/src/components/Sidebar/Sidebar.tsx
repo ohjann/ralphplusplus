@@ -6,6 +6,7 @@ import { probeReach } from '../../lib/live';
 import { themeMode, setThemeMode, type ThemeMode } from '../../lib/theme';
 import { PalettePicker } from './PalettePicker';
 import { closeMobileNav } from '../../lib/mobileNav';
+import { StartRunModal } from '../StartRunModal';
 import ralphPortrait from '../../assets/ralph-portrait.png';
 
 const HEARTBEAT_MS = 15_000;
@@ -17,6 +18,7 @@ const filterText = signal<string>('');
 const loadingRuns = signal<Set<string>>(new Set());
 const repoError = signal<string>('');
 const reachByFP = signal<Record<string, boolean>>({});
+const startRunOpen = signal<boolean>(false);
 
 const filtered = computed(() => {
   const q = filterText.value.trim().toLowerCase();
@@ -188,7 +190,16 @@ export function Sidebar() {
       }}
     >
       <Brand />
+      <StartRunButton />
       <FilterInput />
+      {startRunOpen.value && (
+        <StartRunModal
+          onClose={() => {
+            startRunOpen.value = false;
+            void loadRepos().then(probeAllRepos);
+          }}
+        />
+      )}
       <nav
         style={{
           flex: 1,
@@ -290,6 +301,33 @@ function Brand() {
           Autonomous agent runner
         </div>
       </div>
+    </div>
+  );
+}
+
+function StartRunButton() {
+  return (
+    <div style={{ padding: '0 4px 8px 4px' }}>
+      <button
+        onClick={() => (startRunOpen.value = true)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 6,
+          padding: '6px 10px',
+          fontSize: 12,
+          fontWeight: 600,
+          border: '1px solid var(--accent-border)',
+          borderRadius: 6,
+          background: 'var(--accent-soft)',
+          color: 'var(--accent-ink)',
+        }}
+      >
+        <span style={{ fontSize: 13, lineHeight: 1 }}>＋</span>
+        Start a run
+      </button>
     </div>
   );
 }

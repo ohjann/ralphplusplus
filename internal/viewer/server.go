@@ -62,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/live/{fp}/hint", s.handleLiveCommand("hint"))
 	mux.HandleFunc("/api/live/{fp}/clarify", s.handleLiveCommand("clarify"))
 	mux.HandleFunc("/api/live/{fp}/quit", s.handleLiveCommand("quit"))
+	mux.HandleFunc("/api/spawn-daemon", s.handleSpawnDaemon)
 	mux.HandleFunc("/", s.handleRoot)
 	return AuthMiddleware(s.Token, mux)
 }
