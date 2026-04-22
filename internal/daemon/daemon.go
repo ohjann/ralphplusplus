@@ -18,12 +18,16 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/coordinator"
 	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/debuglog"
+	"github.com/ohjann/ralphplusplus/internal/events"
 	rexec "github.com/ohjann/ralphplusplus/internal/exec"
 	"github.com/ohjann/ralphplusplus/internal/fusion"
+	"github.com/ohjann/ralphplusplus/internal/history"
 	"github.com/ohjann/ralphplusplus/internal/judge"
 	"github.com/ohjann/ralphplusplus/internal/lockfile"
 	"github.com/ohjann/ralphplusplus/internal/notify"
-	"github.com/ohjann/ralphplusplus/internal/summary"
+	"github.com/ohjann/ralphplusplus/internal/postcompletion"
+	"github.com/ohjann/ralphplusplus/internal/prd"
+	"github.com/ohjann/ralphplusplus/internal/runner"
 	"github.com/ohjann/ralphplusplus/internal/worker"
 )
 
@@ -79,9 +83,11 @@ type Daemon struct {
 	totalStories     int
 	completedStories int
 
-	// summaryGenerated guards summary.Generate so it runs at most once
-	// per daemon lifetime when all stories complete.
-	summaryGenerated atomic.Bool
+	// postCompletionRan guards runPostCompletion so it fires at most
+	// once per daemon lifetime. The on-disk sentinel
+	// (.ralph/post-run-complete.json) provides additional
+	// cross-restart guarding.
+	postCompletionRan atomic.Bool
 }
 
 // DaemonOpts holds optional configuration for the daemon.
@@ -527,22 +533,95 @@ func (d *Daemon) checkCompletion() {
 		d.Notifier.RunComplete(d.ctx, d.completedStories, d.totalStories, cost)
 	}
 
-	if d.completedStories > 0 && d.summaryGenerated.CompareAndSwap(false, true) {
-		go d.generateSummary()
+	if d.completedStories > 0 && d.postCompletionRan.CompareAndSwap(false, true) {
+		go d.runPostCompletion()
 	}
 }
 
-// generateSummary runs summary.Generate in the background after completion.
-// It is gated by d.summaryGenerated so it fires at most once per daemon run.
-func (d *Daemon) generateSummary() {
-	d.broadcastLogLine("Generating SUMMARY.md...")
-	if _, err := summary.Generate(d.ctx, d.Cfg); err != nil {
-		debuglog.Log("daemon: summary generation failed: %v", err)
-		d.broadcastLogLine(fmt.Sprintf("SUMMARY.md generation failed: %v", err))
-		return
+// runPostCompletion executes the full post-run pipeline in a
+// background goroutine: quality review, memory synthesis, dream
+// consolidation, checkpoint cleanup, SUMMARY.md, retrospective,
+// run-history persist. It is gated by d.postCompletionRan so it fires
+// at most once per daemon lifetime; the on-disk sentinel written at
+// the end short-circuits re-runs across daemon restarts.
+func (d *Daemon) runPostCompletion() {
+	defer func() {
+		if r := recover(); r != nil {
+			debuglog.Log("daemon: runPostCompletion panic: %v", r)
+			d.broadcastLogLine(fmt.Sprintf("Post-run pipeline panic: %v", r))
+		}
+	}()
+
+	inputs := d.buildPostCompletionInputs()
+	if err := postcompletion.Run(d.ctx, d.Cfg, inputs); err != nil {
+		debuglog.Log("daemon: post-run pipeline error: %v", err)
+		d.broadcastLogLine(fmt.Sprintf("Post-run pipeline error: %v", err))
 	}
-	debuglog.Log("daemon: SUMMARY.md generated")
-	d.broadcastLogLine("SUMMARY.md ready")
+}
+
+// buildPostCompletionInputs gathers the state postcompletion.Run needs
+// from the daemon's live coordinator, cost tracker, and events log.
+func (d *Daemon) buildPostCompletionInputs() postcompletion.Inputs {
+	p, _ := prd.Load(d.Cfg.PRDFile)
+
+	pq := d.Coord.GetPlanQuality()
+	var firstPassRate float64
+	if pq.TotalStories > 0 {
+		firstPassRate = float64(pq.FirstPassCount) / float64(pq.TotalStories)
+	}
+
+	evts, _ := events.Load(d.Cfg.ProjectDir)
+
+	fm := d.Coord.GetFusionMetrics()
+	var fmPtr *costs.FusionMetrics
+	if fm.GroupsCreated > 0 {
+		fmPtr = &fm
+	}
+
+	return postcompletion.Inputs{
+		BuildInputs: costs.BuildInputs{
+			PRD:             p,
+			TotalIterations: d.Coord.IterationCount(),
+			FailedCount:     d.Coord.FailedCount(),
+			FirstPassRate:   firstPassRate,
+			RunCosting:      d.RunCosting,
+			Events:          evts,
+			FusionMetrics:   fmPtr,
+			StartTime:       d.startTime,
+			Workers:         d.Cfg.Workers,
+			NoArchitect:     d.Cfg.NoArchitect,
+			NoFusion:        d.Cfg.NoFusion,
+			NoSimplify:      d.Cfg.NoSimplify,
+			QualityReview:   d.Cfg.QualityReview,
+			FusionWorkers:   d.Cfg.FusionWorkers,
+			Kind:            history.KindDaemon,
+		},
+		UtilityRunClaude: runner.UtilityClaude(d.Cfg),
+		Reporter:         daemonReporter{d: d},
+	}
+}
+
+// daemonReporter bridges postcompletion.Reporter onto the daemon's SSE
+// broadcast primitives.
+type daemonReporter struct{ d *Daemon }
+
+func (r daemonReporter) Log(s string) { r.d.broadcastLogLine(s) }
+
+func (r daemonReporter) Phase(name, status, message string, iter int) {
+	r.d.broadcastPostRunPhase(PostRunPhaseEvent{
+		Phase:     name,
+		Status:    status,
+		Message:   message,
+		Iteration: iter,
+		Timestamp: time.Now(),
+	})
+	// Also emit a log line so viewers not yet rendering the typed
+	// phase event still see the transition in their feed.
+	line := fmt.Sprintf("[post-run] %s: %s", name, status)
+	if message != "" {
+		line += " — " + message
+	}
+	r.d.broadcastLogLine(line)
 }
 
 // mergeBack runs MergeAndSync and sends the result to mergeCh.
@@ -618,6 +697,20 @@ func (d *Daemon) broadcastLogLine(line string) {
 	}
 	d.broadcast(DaemonEvent{
 		Type: EventLogLine,
+		Data: data,
+	})
+}
+
+// broadcastPostRunPhase sends a post-run phase event to all SSE
+// subscribers. Used by daemonReporter from the post-completion goroutine.
+func (d *Daemon) broadcastPostRunPhase(evt PostRunPhaseEvent) {
+	data, err := json.Marshal(evt)
+	if err != nil {
+		debuglog.Log("daemon: broadcastPostRunPhase marshal error: %v", err)
+		return
+	}
+	d.broadcast(DaemonEvent{
+		Type: EventPostRunPhase,
 		Data: data,
 	})
 }
