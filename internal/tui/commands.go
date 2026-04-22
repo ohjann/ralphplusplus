@@ -622,31 +622,16 @@ func retroCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
 func synthesisCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
 	return safeCmd(func() tea.Msg {
 		p, _ := prd.Load(cfg.PRDFile)
-		runClaude := utilityRunClaude(cfg)
-		err := memory.SynthesizeRun(ctx, cfg.ProjectDir, cfg.RalphHome, cfg.LogDir, p, runClaude)
+		err := memory.SynthesizeRun(ctx, cfg.ProjectDir, cfg.RalphHome, cfg.LogDir, p, runner.UtilityClaude(cfg))
 		return synthesisDoneMsg{Err: err}
 	})
 }
 
 func dreamCmd(ctx context.Context, cfg *config.Config) tea.Cmd {
 	return safeCmd(func() tea.Msg {
-		runClaude := utilityRunClaude(cfg)
-		err := memory.RunDream(ctx, cfg.ProjectDir, cfg.RalphHome, cfg.LogDir, cfg.Memory.MaxEntries, cfg.Memory.DreamEveryNRuns, runClaude)
+		err := memory.RunDream(ctx, cfg.ProjectDir, cfg.RalphHome, cfg.LogDir, cfg.Memory.MaxEntries, cfg.Memory.DreamEveryNRuns, runner.UtilityClaude(cfg))
 		return dreamDoneMsg{Err: err}
 	})
-}
-
-func utilityRunClaude(cfg *config.Config) func(context.Context, string, string, string) error {
-	return func(ctx context.Context, projectDir, prompt, logFilePath string) error {
-		iter := int(cfg.UtilityIter.Add(1))
-		_, err := runner.RunClaudeForIteration(ctx, cfg, projectDir, prompt, logFilePath, runner.IterationOpts{
-			StoryID: "_utility",
-			Role:    "utility",
-			Iter:    iter,
-			Model:   cfg.UtilityModel,
-		})
-		return err
-	}
 }
 
 // --- Daemon client commands ---
