@@ -178,11 +178,12 @@ type daemonDisconnectedMsg struct {
 
 // daemonEventMsg wraps a decoded daemon event received via SSE.
 type daemonEventMsg struct {
-	State       *daemon.DaemonStateEvent
-	WorkerLog   *daemon.WorkerLogEvent
-	LogLine     *daemon.LogLineEvent
-	MergeResult *daemon.MergeResultEvent
-	StuckAlert  *daemon.StuckAlertEvent
+	State        *daemon.DaemonStateEvent
+	WorkerLog    *daemon.WorkerLogEvent
+	LogLine      *daemon.LogLineEvent
+	MergeResult  *daemon.MergeResultEvent
+	StuckAlert   *daemon.StuckAlertEvent
+	PostRunPhase *daemon.PostRunPhaseEvent
 }
 
 // daemonQuitDoneMsg signals that the daemon quit POST completed.

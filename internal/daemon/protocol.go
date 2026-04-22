@@ -123,15 +123,28 @@ type StuckAlertEvent struct {
 	StuckReason string          `json:"stuck_reason"`
 }
 
+// PostRunPhaseEvent reports the start/end of a post-completion phase
+// (quality review, memory synthesis, SUMMARY.md, retro, history,
+// done). Viewers use this for first-class phase chips; a log_line
+// with human detail is usually emitted alongside.
+type PostRunPhaseEvent struct {
+	Phase     string    `json:"phase"`             // see postcompletion.Phase* constants
+	Status    string    `json:"status"`            // started, complete, error, skipped
+	Message   string    `json:"message,omitempty"` // free-form detail (error text, iteration count)
+	Iteration int       `json:"iteration,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // --- Envelope for polymorphic event deserialization ---
 
 // Event type constants.
 const (
-	EventDaemonState = "daemon_state"
-	EventWorkerLog   = "worker_log"
-	EventLogLine     = "log_line"
-	EventMergeResult = "merge_result"
-	EventStuckAlert  = "stuck_alert"
+	EventDaemonState   = "daemon_state"
+	EventWorkerLog     = "worker_log"
+	EventLogLine       = "log_line"
+	EventMergeResult   = "merge_result"
+	EventStuckAlert    = "stuck_alert"
+	EventPostRunPhase  = "post_run_phase"
 )
 
 // DaemonEvent is the envelope sent over the wire. Type identifies the payload

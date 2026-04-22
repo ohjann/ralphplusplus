@@ -681,6 +681,11 @@ func listenDaemonEventCmd(eventCh <-chan daemon.DaemonEvent) tea.Cmd {
 			if err := json.Unmarshal(evt.Data, &a); err == nil {
 				msg.StuckAlert = &a
 			}
+		case daemon.EventPostRunPhase:
+			var p daemon.PostRunPhaseEvent
+			if err := json.Unmarshal(evt.Data, &p); err == nil {
+				msg.PostRunPhase = &p
+			}
 		case "error":
 			return daemonDisconnectedMsg{Err: fmt.Errorf("daemon SSE error")}
 		}
