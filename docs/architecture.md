@@ -27,8 +27,8 @@ internal/
   interactive/      Dynamic story creation and session persistence for interactive tasks
   memory/           Markdown-based cross-run memory, dream consolidation, size monitoring
   costs/            Token usage tracking, pricing, run history
-  notify/           Push notifications via ntfy.sh
-  viewer/           Singleton localhost web viewer (fcntl lock + JSON/SSE API)
+  notify/           Push notifications via ntfy.sh (ntfy Click header deep-links into viewer)
+  viewer/           Singleton web viewer (fcntl lock + JSON/SSE API; loopback + optional tsnet tailnet frontdoor)
   daemon/           Background daemon (event loop, HTTP API over Unix socket, client library, IPC protocol)
 ralph-prompt.md     Prompt template for Claude Code iterations
 judge-prompt.md     Review template for judge verification

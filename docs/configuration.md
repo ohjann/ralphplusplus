@@ -137,8 +137,37 @@ ralph --web
 You can also start the viewer directly and leave it running across runs:
 
 ```bash
-ralph viewer
+ralph viewer                        # loopback, auto-opens browser
+ralph viewer --port 8123            # pin a specific port
+ralph viewer --no-open              # print URL only
 ```
+
+The loopback URL binds to `127.0.0.1` and is gated by a per-user token at
+`<userdata>/ralph/viewer.token` (mode `0600`). The URL printed on start
+includes the token as a `?token=...` query parameter.
+
+### Remote access via Tailscale
+
+To reach the viewer from your phone or another machine without typing a
+token, add `--tailscale`. The viewer joins your tailnet as a node (named
+`ralph` by default) via tsnet, and peers on the tailnet reach it at
+`http://ralph/` — Tailscale's mutual auth is the access boundary.
+
+```bash
+ralph viewer --tailscale
+ralph viewer --tailscale --tailscale-hostname myralph
+ralph viewer --tailscale --tailscale-port 8080
+```
+
+First launch prints a Tailscale login link to authorize the node; state
+persists under `<userdata>/ralph/tsnet/<hostname>/` so subsequent launches
+reconnect silently. The loopback listener keeps running in parallel, so
+local browsers still use the token-gated URL.
+
+Push notifications (`--notify`) include a `Click` header pointing at the
+viewer's `/repos/<fp>` page — tailnet URL when `--tailscale` is on,
+loopback URL otherwise. Tapping a notification on your phone opens the
+relevant repo directly.
 
 ### Putting it together
 
