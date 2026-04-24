@@ -1,77 +1,73 @@
-// Integration toggle + URL state for ntfy.sh + Tailscale.
+// Integration state for ntfy.sh + Tailscale.
 //
-// In the design prototype these lived in an edit-mode block. In
-// production, enabled state persists to localStorage and URLs come from
-// the daemon config (not yet wired — placeholders until a daemon
-// /api/integrations endpoint lands).
+// Server-authoritative: /api/integrations probes reality (tailnet listener
+// up, RALPH_NOTIFY_TOPIC set) and the UI mirrors that. No local toggle —
+// the chips reflect what's actually running.
 
 import { signal } from '@preact/signals';
+import { apiGet } from './api';
 
 export interface Integration {
   enabled: boolean;
   label: string;
   desc: string;
   url: string;
+  hint: string;
 }
 
-const STORAGE_KEY = 'ralph.integrations';
+interface IntegrationStatusDTO {
+  label: string;
+  desc: string;
+  enabled: boolean;
+  url?: string;
+  hint?: string;
+}
 
-const DEFAULTS: Record<string, Integration> = {
+interface IntegrationsResponse {
+  tailscale: IntegrationStatusDTO;
+  ntfy: IntegrationStatusDTO;
+}
+
+function fromDTO(d: IntegrationStatusDTO): Integration {
+  return {
+    enabled: !!d.enabled,
+    label: d.label,
+    desc: d.desc,
+    url: d.url ?? '',
+    hint: d.hint ?? '',
+  };
+}
+
+// Shown before the first fetch completes and as fallback if the request
+// fails. Disabled + empty URLs avoid misleading users.
+const PLACEHOLDER: Record<string, Integration> = {
   ntfy: {
     enabled: false,
     label: 'ntfy.sh',
-    desc:
-      'Push notifications when Ralph finishes a story, gets stuck, or ' +
-      'completes a run. Subscribe to the topic URL on any device.',
-    url: 'https://ntfy.sh/ralph-not-configured',
+    desc: 'Push notifications when Ralph finishes, gets stuck, or needs input.',
+    url: '',
+    hint: 'Loading…',
   },
   tailscale: {
     enabled: false,
     label: 'Tailscale',
-    desc:
-      'Expose this viewer through your tailnet so other devices can ' +
-      'open the same URL. Uses `tailscale serve` / `funnel` under the hood.',
-    url: 'https://ralph.tail-not-configured.ts.net/',
+    desc: 'Peers on your tailnet can open this viewer without a token.',
+    url: '',
+    hint: 'Loading…',
   },
 };
 
-function readPersisted(): Record<string, Integration> {
+export const integrations = signal<Record<string, Integration>>(PLACEHOLDER);
+
+export async function refreshIntegrations(): Promise<void> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULTS;
-    const parsed = JSON.parse(raw) as Record<string, { enabled?: boolean }>;
-    return {
-      ntfy: { ...DEFAULTS.ntfy, enabled: !!parsed?.ntfy?.enabled },
-      tailscale: {
-        ...DEFAULTS.tailscale,
-        enabled: !!parsed?.tailscale?.enabled,
-      },
+    const r = await apiGet<IntegrationsResponse>('/api/integrations');
+    integrations.value = {
+      ntfy: fromDTO(r.ntfy),
+      tailscale: fromDTO(r.tailscale),
     };
   } catch {
-    return DEFAULTS;
-  }
-}
-
-export const integrations = signal<Record<string, Integration>>(readPersisted());
-
-export function toggleIntegration(key: string) {
-  const current = integrations.value;
-  const integ = current[key];
-  if (!integ) return;
-  const next = {
-    ...current,
-    [key]: { ...integ, enabled: !integ.enabled },
-  };
-  integrations.value = next;
-  try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        ntfy: { enabled: next.ntfy.enabled },
-        tailscale: { enabled: next.tailscale.enabled },
-      }),
-    );
-  } catch {
-    /* quota / disabled storage — fall through */
+    // Leave placeholder in place — a stale disabled state is better than
+    // a confusing partial update.
   }
 }

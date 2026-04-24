@@ -2,20 +2,18 @@ import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import {
   integrations,
-  toggleIntegration,
+  refreshIntegrations,
   type Integration,
 } from '../lib/integrations';
 
 export function IntegrationsRow() {
+  useEffect(() => {
+    void refreshIntegrations();
+  }, []);
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+      <IntegrationChip icon={<BellIcon />} integ={integrations.value.ntfy} />
       <IntegrationChip
-        id="ntfy"
-        icon={<BellIcon />}
-        integ={integrations.value.ntfy}
-      />
-      <IntegrationChip
-        id="tailscale"
         icon={<TailscaleIcon />}
         integ={integrations.value.tailscale}
       />
@@ -24,11 +22,9 @@ export function IntegrationsRow() {
 }
 
 function IntegrationChip({
-  id,
   icon,
   integ,
 }: {
-  id: string;
   icon: preact.ComponentChildren;
   integ: Integration;
 }) {
@@ -57,17 +53,7 @@ function IntegrationChip({
       <button
         ref={btnRef}
         type="button"
-        onClick={(e) => {
-          if ((e as MouseEvent).shiftKey) {
-            toggleIntegration(id);
-            return;
-          }
-          setOpen((o) => !o);
-        }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          toggleIntegration(id);
-        }}
+        onClick={() => setOpen((o) => !o)}
         title={`${integ.label} · ${integ.enabled ? 'enabled' : 'disabled'}`}
         style={{
           width: 30,
@@ -99,7 +85,6 @@ function IntegrationChip({
 
       {open && (
         <IntegrationPopover
-          id={id}
           integ={integ}
           anchorRef={btnRef}
           onClose={() => setOpen(false)}
@@ -110,12 +95,10 @@ function IntegrationChip({
 }
 
 function IntegrationPopover({
-  id,
   integ,
   anchorRef,
   onClose,
 }: {
-  id: string;
   integ: Integration;
   anchorRef: { current: HTMLButtonElement | null };
   onClose: () => void;
@@ -192,10 +175,7 @@ function IntegrationPopover({
         }}
       >
         <span style={{ fontWeight: 600, fontSize: 12 }}>{integ.label}</span>
-        <button
-          type="button"
-          onClick={() => toggleIntegration(id)}
-          title="Click to toggle"
+        <span
           style={{
             fontSize: 10,
             padding: '2px 8px',
@@ -209,7 +189,7 @@ function IntegrationPopover({
           }}
         >
           {integ.enabled ? 'enabled' : 'disabled'}
-        </button>
+        </span>
       </div>
       <div
         style={{
@@ -220,7 +200,7 @@ function IntegrationPopover({
       >
         {integ.desc}
       </div>
-      {integ.enabled ? (
+      {integ.enabled && integ.url ? (
         <div
           style={{
             display: 'flex',
@@ -233,8 +213,11 @@ function IntegrationPopover({
             minWidth: 0,
           }}
         >
-          <span
+          <a
             class="mono"
+            href={integ.url}
+            target="_blank"
+            rel="noopener noreferrer"
             title={integ.url}
             style={{
               flex: 1,
@@ -245,10 +228,11 @@ function IntegrationPopover({
               fontSize: 10.5,
               color: 'var(--fg)',
               userSelect: 'all',
+              textDecoration: 'none',
             }}
           >
             {integ.url}
-          </span>
+          </a>
           <button
             type="button"
             onClick={copy}
@@ -274,20 +258,17 @@ function IntegrationPopover({
         <div
           style={{
             fontSize: 11,
-            color: 'var(--fg-ghost)',
-            fontStyle: 'italic',
+            color: 'var(--fg-faint)',
             padding: '7px 10px',
             background: 'var(--bg-sunken)',
             borderRadius: 6,
             border: '1px dashed var(--border)',
+            lineHeight: 1.45,
           }}
         >
-          URL hidden while disabled.
+          {integ.hint || 'Not configured.'}
         </div>
       )}
-      <div style={{ fontSize: 10.5, color: 'var(--fg-ghost)' }}>
-        shift-click the icon to toggle · esc to close
-      </div>
       <div
         style={{
           position: 'absolute',
@@ -301,8 +282,6 @@ function IntegrationPopover({
           transform: 'rotate(45deg)',
         }}
       />
-      {/* onClose is called by the chip when the user clicks off — exported
-          as a no-op receiver here to keep the types happy. */}
       <span style={{ display: 'none' }} aria-hidden onClick={onClose} />
     </div>
   );
@@ -329,9 +308,6 @@ function BellIcon() {
 }
 
 function TailscaleIcon() {
-  // 3×3 dot grid with opacity variations — the design handoff calls out
-  // that this is hand-rolled because no icon library ships a tailscale
-  // mark. Matches the spec in README.md.
   const dot = (op: number) => (
     <circle cx="0" cy="0" r="1.6" fill="currentColor" opacity={op} />
   );

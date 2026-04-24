@@ -156,6 +156,10 @@ func runViewer(args []string) error {
 		}
 	}
 
+	// Now that tailnet bring-up is settled, expose the tailnet URL to the
+	// viewer's /api/integrations probe so the UI reflects reality.
+	vs.TailscaleURL = tailURL
+
 	// The hint file feeds the daemon's notifier so push notifications open
 	// the right URL on tap. Tailnet URL preferred — it works on phones and
 	// has no embedded token to leak through ntfy.sh transit.

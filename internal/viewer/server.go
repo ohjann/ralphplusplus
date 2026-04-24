@@ -23,6 +23,10 @@ type Server struct {
 	Token   string
 	Version string
 	Index   *projects.Index
+	// TailscaleURL is set by the viewer command when a tailnet listener is
+	// up (http://<hostname>[:port]/). Empty when --tailscale was not used
+	// or tsnet bring-up failed. Surfaced via /api/integrations.
+	TailscaleURL string
 }
 
 // NewServer builds a Server and starts its fsnotify-backed project index.
@@ -63,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/live/{fp}/quit", s.handleLiveCommand("quit"))
 	mux.HandleFunc("/api/spawn-daemon", s.handleSpawnDaemon)
 	mux.HandleFunc("POST /api/spawn/retro/{fp}", s.handleSpawnRetro)
+	mux.HandleFunc("GET /api/integrations", s.handleIntegrations)
 	mux.HandleFunc("/", s.handleRoot)
 	return AuthMiddleware(s.Token, mux)
 }

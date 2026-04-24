@@ -82,6 +82,24 @@ type RunDetail struct {
 	Summary  *costs.RunSummary `json:"summary,omitempty"`
 }
 
+// IntegrationStatus reflects one optional external integration. URL is the
+// canonical address the user can open when Enabled is true; Hint is a short
+// instruction shown when Enabled is false.
+type IntegrationStatus struct {
+	Label   string `json:"label"`
+	Desc    string `json:"desc"`
+	Enabled bool   `json:"enabled"`
+	URL     string `json:"url,omitempty"`
+	Hint    string `json:"hint,omitempty"`
+}
+
+// IntegrationsResponse is GET /api/integrations. Probes are cheap and run
+// per-request; UI refreshes at mount time and after known state transitions.
+type IntegrationsResponse struct {
+	Tailscale IntegrationStatus `json:"tailscale"`
+	Ntfy      IntegrationStatus `json:"ntfy"`
+}
+
 // SettingsResponse is GET /api/live/:fp/settings. When the daemon socket is
 // reachable, Source is "daemon" and State holds the daemon's /api/state
 // snapshot verbatim. When unreachable, Source is "file" and Config holds the
