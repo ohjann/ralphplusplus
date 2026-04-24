@@ -233,6 +233,56 @@ pre.code {
   text-align: center;
 }
 
+/* Rendered markdown for the Docs page. Kept simple and theme-aware. */
+.docs-prose h1, .docs-prose h2, .docs-prose h3, .docs-prose h4 {
+  color: var(--fg);
+  margin: 1.4em 0 0.5em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.docs-prose h1 { font-size: 1.7em; margin-top: 0; }
+.docs-prose h2 { font-size: 1.3em; }
+.docs-prose h3 { font-size: 1.1em; }
+.docs-prose p { margin: 0.6em 0; color: var(--fg); }
+.docs-prose ul, .docs-prose ol { padding-left: 1.4em; margin: 0.5em 0; }
+.docs-prose li { margin: 0.2em 0; }
+.docs-prose a { color: var(--accent-ink); text-decoration: underline; }
+.docs-prose code:not(pre code) {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-soft);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-size: 0.9em;
+  font-family: var(--font-mono);
+}
+.docs-prose pre {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.55;
+  margin: 0.8em 0;
+}
+.docs-prose blockquote {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 0.9em;
+  color: var(--fg-muted);
+  margin: 0.6em 0;
+}
+.docs-prose hr { border: none; border-top: 1px solid var(--border); margin: 1.4em 0; }
+.docs-prose table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin: 0.6em 0;
+}
+.docs-prose th, .docs-prose td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+}
+.docs-prose th { background: var(--bg-sunken); font-weight: 600; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0s !important;

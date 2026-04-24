@@ -608,6 +608,18 @@ function RepoRow({ repo }: { repo: RepoSummary }) {
             >
               PRD
             </a>
+            <a
+              href={`/repos/${repo.fp}/docs`}
+              style={{
+                fontSize: 10,
+                color: 'var(--sidebar-fg-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+                textDecoration: 'none',
+              }}
+            >
+              Docs
+            </a>
           </div>
           {loading && !runs && (
             <div

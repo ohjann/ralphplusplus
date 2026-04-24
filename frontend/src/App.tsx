@@ -7,6 +7,7 @@ import { IterRoute } from './routes/IterRoute';
 import { SettingsRoute } from './routes/SettingsRoute';
 import { RepoMetaRoute } from './routes/RepoMetaRoute';
 import { PRDEditorRoute } from './routes/PRDEditorRoute';
+import { DocsRoute } from './routes/DocsRoute';
 import { ToastStack } from './components/Toast';
 import { TweaksPanel } from './components/TweaksPanel';
 import {
@@ -121,6 +122,7 @@ export function App() {
                 <Route path="/repos/:fp/settings" component={SettingsRoute} />
                 <Route path="/repos/:fp/meta" component={RepoMetaRoute} />
                 <Route path="/repos/:fp/prd" component={PRDEditorRoute} />
+                <Route path="/repos/:fp/docs" component={DocsRoute} />
                 <Route default component={Home} />
               </Router>
             </div>

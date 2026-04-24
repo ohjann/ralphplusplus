@@ -68,6 +68,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/spawn-daemon", s.handleSpawnDaemon)
 	mux.HandleFunc("POST /api/spawn/retro/{fp}", s.handleSpawnRetro)
 	mux.HandleFunc("GET /api/integrations", s.handleIntegrations)
+	mux.HandleFunc("GET /api/repos/{fp}/docs", s.handleDocsList)
+	mux.HandleFunc("GET /api/repos/{fp}/docs/raw", s.handleDocsRaw)
 	mux.HandleFunc("/", s.handleRoot)
 	return AuthMiddleware(s.Token, mux)
 }
