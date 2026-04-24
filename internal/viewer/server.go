@@ -70,6 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/integrations", s.handleIntegrations)
 	mux.HandleFunc("GET /api/repos/{fp}/docs", s.handleDocsList)
 	mux.HandleFunc("GET /api/repos/{fp}/docs/raw", s.handleDocsRaw)
+	mux.HandleFunc("GET /api/stats/global", s.handleGlobalStats)
 	mux.HandleFunc("/", s.handleRoot)
 	return AuthMiddleware(s.Token, mux)
 }

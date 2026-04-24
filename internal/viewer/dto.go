@@ -82,6 +82,51 @@ type RunDetail struct {
 	Summary  *costs.RunSummary `json:"summary,omitempty"`
 }
 
+// GlobalStatsResponse is GET /api/stats/global — rollups across every repo
+// Ralph has run against on this host. Callers render the top-line numbers,
+// the activity sparkline, and the per-repo breakdown on Home.
+type GlobalStatsResponse struct {
+	Totals        GlobalStatsTotals  `json:"totals"`
+	RunsByKind    map[string]int     `json:"runsByKind"`
+	ActivityByDay []ActivityPoint    `json:"activityByDay"`
+	ByRepo        []RepoStatsSummary `json:"byRepo"`
+}
+
+// GlobalStatsTotals aggregates numeric fields across all repos. Cost,
+// iteration, and story totals sum directly; FirstPassRate is the
+// stories-weighted average across runs (not simply mean of means).
+type GlobalStatsTotals struct {
+	Repos            int     `json:"repos"`
+	Runs             int     `json:"runs"`
+	TotalCost        float64 `json:"totalCost"`
+	DurationMinutes  float64 `json:"durationMinutes"`
+	TotalIterations  int     `json:"totalIterations"`
+	StoriesTotal     int     `json:"storiesTotal"`
+	StoriesCompleted int     `json:"storiesCompleted"`
+	StoriesFailed    int     `json:"storiesFailed"`
+	FirstPassRate    float64 `json:"firstPassRate"`
+}
+
+// ActivityPoint is one day's rollup in the Home sparkline. Date is
+// YYYY-MM-DD in the server's local timezone.
+type ActivityPoint struct {
+	Date string  `json:"date"`
+	Runs int     `json:"runs"`
+	Cost float64 `json:"cost"`
+}
+
+// RepoStatsSummary is the compact per-repo card shown on Home.
+type RepoStatsSummary struct {
+	FP               string    `json:"fp"`
+	Name             string    `json:"name"`
+	Path             string    `json:"path"`
+	Runs             int       `json:"runs"`
+	TotalCost        float64   `json:"totalCost"`
+	StoriesCompleted int       `json:"storiesCompleted"`
+	StoriesFailed    int       `json:"storiesFailed"`
+	LastSeen         time.Time `json:"lastSeen"`
+}
+
 // IntegrationStatus reflects one optional external integration. URL is the
 // canonical address the user can open when Enabled is true; Hint is a short
 // instruction shown when Enabled is false.
