@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { pushToast } from '../lib/toast';
-import { ApiError } from '../lib/api';
+import { apiGet, ApiError, type RepoSummary } from '../lib/api';
+
+// Curated list of currently-supported Claude models. Keeps the dropdown
+// short; the input is still free-text so any valid model ID works.
+const MODEL_SUGGESTIONS: Array<{ id: string; label: string }> = [
+  { id: 'claude-opus-4-7', label: 'Opus 4.7 (most capable)' },
+  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6 (balanced)' },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5 (fast, cheap)' },
+];
 
 // POST /api/spawn-daemon body shape — mirrors internal/viewer/spawner.go.
 interface SpawnRequest {
@@ -85,10 +93,17 @@ export function StartRunModal({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>('');
   const [pendingWarn, setPendingWarn] = useState<SpawnWarn | null>(null);
+  const [knownRepos, setKnownRepos] = useState<RepoSummary[]>([]);
   const pathRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     pathRef.current?.focus();
+    // Non-blocking — modal is usable even if this fails.
+    void apiGet<RepoSummary[]>('/api/repos')
+      .then(setKnownRepos)
+      .catch(() => {
+        /* no suggestions is fine */
+      });
   }, []);
 
   useEffect(() => {
@@ -210,10 +225,18 @@ export function StartRunModal({ onClose }: { onClose: () => void }) {
         </header>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>Repo path</span>
+          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+            Repo path
+            {knownRepos.length > 0 && (
+              <span style={{ color: 'var(--fg-ghost)' }}>
+                {' '}· pick a known repo or type a new path
+              </span>
+            )}
+          </span>
           <input
             ref={pathRef}
             type="text"
+            list="rv-known-repos"
             value={form.repoPath}
             placeholder="/Users/you/code/my-repo"
             onInput={(e) =>
@@ -232,6 +255,13 @@ export function StartRunModal({ onClose }: { onClose: () => void }) {
               fontSize: 12,
             }}
           />
+          <datalist id="rv-known-repos">
+            {knownRepos.map((r) => (
+              <option key={r.fp} value={r.path}>
+                {r.name}
+              </option>
+            ))}
+          </datalist>
         </label>
 
         <fieldset
@@ -301,6 +331,7 @@ export function StartRunModal({ onClose }: { onClose: () => void }) {
             <span style={{ fontSize: 12, minWidth: 80 }}>Model</span>
             <input
               type="text"
+              list="rv-known-models"
               value={form.model}
               placeholder="(default)"
               onInput={(e) =>
@@ -320,6 +351,13 @@ export function StartRunModal({ onClose }: { onClose: () => void }) {
                 fontFamily: 'var(--font-mono)',
               }}
             />
+            <datalist id="rv-known-models">
+              {MODEL_SUGGESTIONS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </datalist>
           </div>
         </fieldset>
 
