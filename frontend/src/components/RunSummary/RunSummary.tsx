@@ -337,6 +337,7 @@ export function RunSummary({ fp, runId }: { fp: string; runId: string }) {
             fp={fp}
             runId={runId}
             stories={m.stories ?? []}
+            runStatus={effectiveStatus}
           />
         </Section>
       </div>
@@ -564,14 +565,31 @@ function PRDBlock({ fp, prd }: { fp: string; prd: PRDResponse }) {
   );
 }
 
+// deriveStoryStatus picks the best label from the data in the manifest.
+// Prefers the explicit `final_status` when present (set by SetStoryFinal).
+// Otherwise falls back to a heuristic based on iteration shape + run status
+// so archived runs display something more useful than a blank dash.
+function deriveStoryStatus(st: StoryRecord, runStatus: string): string {
+  if (st.final_status) return st.final_status;
+  const iters = st.iterations ?? [];
+  if (runStatus === 'running') {
+    return iters.length === 0 ? 'queued' : 'in-progress';
+  }
+  if (iters.length === 0) return '';
+  if (runStatus === 'interrupted') return 'partial';
+  return 'complete';
+}
+
 function StoriesList({
   fp,
   runId,
   stories,
+  runStatus,
 }: {
   fp: string;
   runId: string;
   stories: StoryRecord[];
+  runStatus: string;
 }) {
   if (stories.length === 0) {
     return (
@@ -614,7 +632,7 @@ function StoriesList({
             {st.story_id}
           </span>
           <span>
-            <StoryStatus status={st.final_status ?? ''} />
+            <StoryStatus status={deriveStoryStatus(st, runStatus)} />
           </span>
           <span style={{ fontSize: 13.5, color: 'var(--fg)' }}>
             {st.title || ''}
@@ -674,6 +692,8 @@ function StoryStatus({ status }: { status: string }) {
         in progress
       </span>
     );
+  if (status === 'queued') return <span class="chip">queued</span>;
+  if (status === 'partial') return <span class="chip warn">partial</span>;
   return <span class="chip">{status}</span>;
 }
 
