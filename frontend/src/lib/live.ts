@@ -44,7 +44,8 @@ export interface FusionMetrics {
 
 // SettingsSnapshot mirrors internal/daemon/protocol.go SettingsSnapshot —
 // the live tunable values the daemon emits in every daemon_state event.
-// Used by the SettingsRoute editor to seed inputs when source==='daemon'.
+// Consumed by the live Run page's StatusPanel so the UI reflects the
+// values the daemon is actually running with.
 export interface SettingsSnapshot {
   judge_enabled: boolean;
   judge_max_rejections: number;

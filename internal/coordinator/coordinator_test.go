@@ -7,8 +7,57 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/checkpoint"
 	"github.com/ohjann/ralphplusplus/internal/config"
 	"github.com/ohjann/ralphplusplus/internal/dag"
+	"github.com/ohjann/ralphplusplus/internal/history"
 	"github.com/ohjann/ralphplusplus/internal/prd"
 )
+
+// TestRecordStoryFinal_PersistsToManifest proves terminal story statuses
+// stamped by the coordinator actually land on the history manifest — the
+// UI was previously deriving them from iteration shape because the
+// coordinator never persisted them.
+func TestRecordStoryFinal_PersistsToManifest(t *testing.T) {
+	t.Setenv("RALPH_DATA_DIR", t.TempDir())
+	hr, err := history.OpenRun(t.TempDir(), "", "test", history.RunOpts{Kind: history.KindAdHoc})
+	if err != nil {
+		t.Fatalf("OpenRun: %v", err)
+	}
+	cfg := &config.Config{PRDFile: "/dev/null", HistoryRun: hr}
+	c := New(cfg, &dag.DAG{Nodes: map[string]*dag.StoryNode{"S-1": {StoryID: "S-1"}}}, 1, []prd.UserStory{{ID: "S-1"}})
+
+	c.recordStoryFinal("S-1", history.StatusComplete)
+
+	m, err := history.ReadManifest(hr.RepoFP(), hr.ID())
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	var got string
+	for _, s := range m.Stories {
+		if s.StoryID == "S-1" {
+			got = s.FinalStatus
+			break
+		}
+	}
+	if got != history.StatusComplete {
+		t.Fatalf("manifest final_status for S-1 = %q, want %q", got, history.StatusComplete)
+	}
+
+	c.recordStoryFinal("S-1", history.StatusFailed)
+	m2, _ := history.ReadManifest(hr.RepoFP(), hr.ID())
+	for _, s := range m2.Stories {
+		if s.StoryID == "S-1" && s.FinalStatus != history.StatusFailed {
+			t.Fatalf("second write didn't overwrite: got %q", s.FinalStatus)
+		}
+	}
+}
+
+// TestRecordStoryFinal_NoopWithoutHistoryRun guards the nil-guard: the
+// coordinator must stay useful in test and memory-consolidate paths where
+// cfg.HistoryRun is intentionally unset.
+func TestRecordStoryFinal_NoopWithoutHistoryRun(t *testing.T) {
+	c := New(&config.Config{PRDFile: "/dev/null"}, &dag.DAG{Nodes: map[string]*dag.StoryNode{"S-1": {StoryID: "S-1"}}}, 1, []prd.UserStory{{ID: "S-1"}})
+	// Should not panic or error — just return.
+	c.recordStoryFinal("S-1", history.StatusComplete)
+}
 
 func TestNewFromCheckpoint(t *testing.T) {
 	d := &dag.DAG{Nodes: map[string]*dag.StoryNode{

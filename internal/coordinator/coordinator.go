@@ -18,6 +18,7 @@ import (
 	"github.com/ohjann/ralphplusplus/internal/costs"
 	"github.com/ohjann/ralphplusplus/internal/dag"
 	"github.com/ohjann/ralphplusplus/internal/fusion"
+	"github.com/ohjann/ralphplusplus/internal/history"
 	"github.com/ohjann/ralphplusplus/internal/memory"
 	"github.com/ohjann/ralphplusplus/internal/notify"
 	"github.com/ohjann/ralphplusplus/internal/prd"
@@ -141,6 +142,20 @@ func (c *Coordinator) SetRunCosting(rc *costs.RunCosting) {
 // SetNotifier configures optional push notification support.
 func (c *Coordinator) SetNotifier(n *notify.Notifier) {
 	c.notifier = n
+}
+
+// recordStoryFinal persists a terminal story status on the active history
+// manifest when one is attached via cfg.HistoryRun. Best-effort: failures
+// are logged, not returned, so persistence never blocks the coordinator's
+// critical path. Called with c.mu held — SetStoryFinal takes its own lock
+// on the Run so there's no deadlock (no shared mutex between the two).
+func (c *Coordinator) recordStoryFinal(storyID, status string) {
+	if c.cfg == nil || c.cfg.HistoryRun == nil {
+		return
+	}
+	if err := c.cfg.HistoryRun.SetStoryFinal(storyID, status); err != nil {
+		debuglog.Log("history: SetStoryFinal(%s,%s) failed: %v", storyID, status, err)
+	}
 }
 
 // SetDAG installs the dependency DAG after construction. Used when DAG
@@ -426,6 +441,7 @@ func (c *Coordinator) HandleUpdate(u worker.WorkerUpdate) bool {
 			if c.retries[u.StoryID] == 0 && c.storyRetries[u.StoryID] == 0 {
 				c.firstPass[u.StoryID] = true
 			}
+			c.recordStoryFinal(u.StoryID, history.StatusComplete)
 		} else {
 			// Always retry — the judge auto-pass (--judge-max-rejections) is the
 			// safety valve that guarantees eventual completion.
@@ -472,6 +488,7 @@ func (c *Coordinator) HandleUpdate(u worker.WorkerUpdate) bool {
 		} else {
 			c.failed[u.StoryID] = true
 			c.failedErrors[u.StoryID] = errMsg
+			c.recordStoryFinal(u.StoryID, history.StatusFailed)
 		}
 	}
 
@@ -711,6 +728,7 @@ func (c *Coordinator) CompleteFusion(storyID string, passed bool) {
 		if c.retries[storyID] == 0 && c.storyRetries[storyID] == 0 {
 			c.firstPass[storyID] = true
 		}
+		c.recordStoryFinal(storyID, history.StatusComplete)
 	} else {
 		c.storyRetries[storyID]++
 		c.failedErrors[storyID] = "all fusion implementations failed"

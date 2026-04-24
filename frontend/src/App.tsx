@@ -4,7 +4,6 @@ import { MainTopBar } from './components/MainTopBar';
 import { Home } from './routes/Home';
 import { RunRoute } from './routes/RunRoute';
 import { IterRoute } from './routes/IterRoute';
-import { SettingsRoute } from './routes/SettingsRoute';
 import { GlobalSettingsRoute } from './routes/GlobalSettingsRoute';
 import { RepoMetaRoute } from './routes/RepoMetaRoute';
 import { PRDEditorRoute } from './routes/PRDEditorRoute';
@@ -121,7 +120,6 @@ export function App() {
                   component={IterRoute}
                 />
                 <Route path="/repos/:fp/runs/:runId" component={RunRoute} />
-                <Route path="/repos/:fp/settings" component={SettingsRoute} />
                 <Route path="/repos/:fp/meta" component={RepoMetaRoute} />
                 <Route path="/repos/:fp/prd" component={PRDEditorRoute} />
                 <Route path="/repos/:fp/docs" component={DocsRoute} />
