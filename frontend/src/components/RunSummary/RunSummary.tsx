@@ -6,8 +6,14 @@ import {
   type PRDResponse,
   type StoryRecord,
 } from '../../lib/api';
-import { probeReach } from '../../lib/live';
+import {
+  openLive,
+  probeReach,
+  type DaemonStateEvent,
+  type WorkerStatus,
+} from '../../lib/live';
 import { StatusPanel } from '../StatusPanel/StatusPanel';
+import { ChatStream } from '../ChatView/ChatView';
 
 const loading = signal<boolean>(false);
 const error = signal<string>('');
@@ -15,15 +21,20 @@ const detail = signal<RunDetail | null>(null);
 const prd = signal<PRDResponse | null>(null);
 const currentKey = signal<string>('');
 const reachByFP = signal<Record<string, boolean>>({});
+const liveStateByFP = signal<Record<string, DaemonStateEvent | null>>({});
 
-async function load(fp: string, runId: string) {
+async function load(fp: string, runId: string, force = false) {
   const key = `${fp}/${runId}`;
-  if (currentKey.value === key && detail.value) return;
+  if (!force && currentKey.value === key && detail.value) return;
   currentKey.value = key;
-  loading.value = true;
+  if (!force) {
+    // Initial load — show the loading state. Background refreshes keep
+    // the previous detail rendered so the UI does not flicker.
+    loading.value = true;
+    detail.value = null;
+    prd.value = null;
+  }
   error.value = '';
-  detail.value = null;
-  prd.value = null;
   try {
     const [d, p] = await Promise.all([
       apiGet<RunDetail>(`/api/repos/${fp}/runs/${runId}`),
@@ -74,8 +85,31 @@ export function RunSummary({ fp, runId }: { fp: string; runId: string }) {
       const ok = await probeReach(fp);
       if (!cancelled) reachByFP.value = { ...reachByFP.value, [fp]: ok };
     })();
+
+    // Subscribe to the daemon's SSE stream. Every state event refreshes the
+    // manifest in the background so new iterations/stories appear without a
+    // reload. The stream auto-closes when the user leaves the page.
+    let refreshTimer: number | null = null;
+    const live = openLive(fp);
+    const offEvent = live.onEvent((e) => {
+      if (e.kind !== 'state') return;
+      reachByFP.value = { ...reachByFP.value, [fp]: true };
+      liveStateByFP.value = { ...liveStateByFP.value, [fp]: e.data };
+      // Coalesce bursts of events into one fetch at most every 800ms —
+      // the daemon can emit several state events per second during heavy
+      // work and re-fetching the manifest that often is wasteful.
+      if (refreshTimer != null) return;
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        void load(fp, runId, true);
+      }, 800) as unknown as number;
+    });
+
     return () => {
       cancelled = true;
+      offEvent();
+      live.close();
+      if (refreshTimer != null) clearTimeout(refreshTimer);
     };
   }, [fp, runId]);
 
@@ -340,6 +374,10 @@ export function RunSummary({ fp, runId }: { fp: string; runId: string }) {
             runStatus={effectiveStatus}
           />
         </Section>
+
+        {/* Live activity — stacked transcript panels for each active worker.
+            Mirrors the TUI's live pane; updates stream via ?follow=true. */}
+        {isLive && <LiveActivity fp={fp} runId={runId} />}
       </div>
 
       {isLive && (
@@ -723,5 +761,117 @@ function CopyButton({ text, label }: { text: string; label: string }) {
     >
       {copied.value ? '✓ copied' : label}
     </button>
+  );
+}
+
+function LiveActivity({ fp, runId }: { fp: string; runId: string }) {
+  const state = liveStateByFP.value[fp];
+  const workers: WorkerStatus[] = state
+    ? Object.values(state.workers ?? {}).filter(
+        (w) => w.story_id && w.role,
+      )
+    : [];
+  return (
+    <Section
+      title="Live activity"
+      hint={
+        workers.length === 0
+          ? 'waiting for worker…'
+          : `${workers.length} active · streaming from daemon`
+      }
+    >
+      {workers.length === 0 ? (
+        <div
+          style={{
+            fontSize: 13,
+            color: 'var(--fg-faint)',
+            fontStyle: 'italic',
+            padding: '12px 14px',
+            border: '1px solid var(--border-soft)',
+            borderRadius: 8,
+            background: 'var(--bg-elev)',
+          }}
+        >
+          No worker is currently claiming a story.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {workers.map((w) => (
+            <LiveWorkerPanel
+              key={`${w.id}-${w.story_id}-${w.iteration}`}
+              fp={fp}
+              runId={runId}
+              worker={w}
+            />
+          ))}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function LiveWorkerPanel({
+  fp,
+  runId,
+  worker,
+}: {
+  fp: string;
+  runId: string;
+  worker: WorkerStatus;
+}) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--accent-border)',
+        borderRadius: 8,
+        overflow: 'hidden',
+        background: 'var(--bg-elev)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '8px 12px',
+          background: 'var(--accent-soft)',
+          borderBottom: '1px solid var(--accent-border)',
+          fontSize: 12,
+          color: 'var(--accent-ink)',
+        }}
+      >
+        <span class="dot ok live" />
+        <span class="mono" style={{ fontWeight: 600 }}>
+          worker #{worker.id}
+        </span>
+        <span style={{ color: 'var(--fg-ghost)' }}>·</span>
+        <span class="mono">{worker.story_id}</span>
+        {worker.story_title && (
+          <span
+            style={{
+              color: 'var(--fg-muted)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            {worker.story_title}
+          </span>
+        )}
+        <span style={{ color: 'var(--fg-ghost)', marginLeft: 'auto' }}>
+          {worker.role} · iter {worker.iteration}
+        </span>
+      </div>
+      <div style={{ padding: '12px 14px' }}>
+        <ChatStream
+          fp={fp}
+          runId={runId}
+          story={worker.story_id}
+          iter={String(worker.iteration)}
+          maxWidth={undefined}
+        />
+      </div>
+    </div>
   );
 }

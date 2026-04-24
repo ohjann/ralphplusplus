@@ -314,6 +314,15 @@ func (s *Server) streamTranscriptFollow(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// Fast-path: if the manifest is already terminal, the file won't grow
+	// again — close immediately instead of making clients wait out the idle
+	// deadline. Lets the frontend send ?follow=true unconditionally. Only
+	// inspect the manifest here (not the sock): an absent sock is a valid
+	// idle-tick heuristic but not a reason to close before a single tick.
+	if manifestIsTerminal(fp, res.runID) {
+		return
+	}
+
 	idle := time.NewTimer(followIdleDeadline)
 	defer idle.Stop()
 	resetIdle := func() {
@@ -362,13 +371,26 @@ func (s *Server) streamTranscriptFollow(w http.ResponseWriter, r *http.Request, 
 // A terminal manifest is authoritative: even if the socket is still around,
 // no more jsonl writes are coming.
 func (s *Server) followShouldClose(ctx context.Context, fp, runID string) bool {
-	if m, err := history.ReadManifest(fp, runID); err == nil {
-		switch m.Status {
-		case history.StatusComplete, history.StatusFailed, history.StatusInterrupted:
-			return true
-		}
+	if manifestIsTerminal(fp, runID) {
+		return true
 	}
 	if _, err := s.resolveSock(ctx, fp); err != nil {
+		return true
+	}
+	return false
+}
+
+// manifestIsTerminal checks only the on-disk manifest status. Used by the
+// follow fast-path where an absent daemon sock shouldn't cause a premature
+// close (a running daemon that hasn't yet bound its sock is indistinguishable
+// from a dead one at that level).
+func manifestIsTerminal(fp, runID string) bool {
+	m, err := history.ReadManifest(fp, runID)
+	if err != nil {
+		return false
+	}
+	switch m.Status {
+	case history.StatusComplete, history.StatusFailed, history.StatusInterrupted:
 		return true
 	}
 	return false

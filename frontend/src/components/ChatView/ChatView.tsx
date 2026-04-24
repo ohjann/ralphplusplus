@@ -18,9 +18,12 @@ async function load(fp: string, runId: string, story: string, iter: string) {
   loadingKey.value = key;
   turnsByKey.value = { ...turnsByKey.value, [key]: [] };
   errorByKey.value = { ...errorByKey.value, [key]: '' };
+  // follow=true replays existing turns then tails the jsonl for live writes.
+  // The backend closes immediately when the manifest is terminal, so this is
+  // safe for archived iterations too.
   const url =
     `/api/repos/${fp}/runs/${runId}/transcript/` +
-    `${encodeURIComponent(story)}/${encodeURIComponent(iter)}`;
+    `${encodeURIComponent(story)}/${encodeURIComponent(iter)}?follow=true`;
   try {
     const seen = new Map<number, true>();
     for await (const t of streamNdjson<TurnT>(url, {
@@ -42,6 +45,76 @@ async function load(fp: string, runId: string, story: string, iter: string) {
   }
 }
 
+// ChatStream renders the turns for a single iteration and (by default) tails
+// the transcript jsonl for live updates. Shared between the full-page
+// IterRoute and the embedded live panel on the Run page.
+export function ChatStream({
+  fp,
+  runId,
+  story,
+  iter,
+  maxWidth,
+}: {
+  fp: string;
+  runId: string;
+  story: string;
+  iter: string;
+  maxWidth?: number;
+}) {
+  const key = storageKey(fp, runId, story, iter);
+  const turns = computed(() => turnsByKey.value[key] ?? []);
+  const err = computed(() => errorByKey.value[key] ?? '');
+  const pairs = computed(() => pairToolResults(turns.value));
+
+  useEffect(() => {
+    void load(fp, runId, story, iter);
+  }, [fp, runId, story, iter]);
+
+  return (
+    <>
+      {err.value && (
+        <div
+          style={{
+            padding: '10px 12px',
+            marginBottom: 14,
+            borderRadius: 6,
+            background: 'var(--err-soft)',
+            border: '1px solid var(--err)',
+            color: 'var(--err)',
+            fontSize: 13,
+          }}
+        >
+          {err.value}
+        </div>
+      )}
+      {turns.value.length === 0 && !err.value && (
+        <div
+          style={{
+            fontSize: 13,
+            color: 'var(--fg-faint)',
+            fontStyle: 'italic',
+          }}
+        >
+          Waiting for turns…
+        </div>
+      )}
+
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+          maxWidth: maxWidth ?? 820,
+        }}
+      >
+        {turns.value.map((t) => (
+          <Turn key={t.index} turn={t} toolResults={pairs.value} />
+        ))}
+      </div>
+    </>
+  );
+}
+
 export function ChatView({
   fp,
   runId,
@@ -55,16 +128,9 @@ export function ChatView({
 }) {
   const key = storageKey(fp, runId, story, iter);
   const turns = computed(() => turnsByKey.value[key] ?? []);
-  const err = computed(() => errorByKey.value[key] ?? '');
-  const pairs = computed(() => pairToolResults(turns.value));
-
-  useEffect(() => {
-    void load(fp, runId, story, iter);
-  }, [fp, runId, story, iter]);
 
   return (
     <div style={{ padding: '22px 28px 80px', minHeight: '100%' }}>
-      {/* Breadcrumb */}
       <div
         style={{
           display: 'flex',
@@ -110,45 +176,7 @@ export function ChatView({
         Streaming NDJSON · {turns.value.length} turns
       </div>
 
-      {err.value && (
-        <div
-          style={{
-            padding: '10px 12px',
-            marginBottom: 14,
-            borderRadius: 6,
-            background: 'var(--err-soft)',
-            border: '1px solid var(--err)',
-            color: 'var(--err)',
-            fontSize: 13,
-          }}
-        >
-          {err.value}
-        </div>
-      )}
-      {turns.value.length === 0 && !err.value && (
-        <div
-          style={{
-            fontSize: 13,
-            color: 'var(--fg-faint)',
-            fontStyle: 'italic',
-          }}
-        >
-          Loading transcript…
-        </div>
-      )}
-
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-          maxWidth: 820,
-        }}
-      >
-        {turns.value.map((t) => (
-          <Turn key={t.index} turn={t} toolResults={pairs.value} />
-        ))}
-      </div>
+      <ChatStream fp={fp} runId={runId} story={story} iter={iter} />
     </div>
   );
 }
